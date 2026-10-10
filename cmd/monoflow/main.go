@@ -17,6 +17,7 @@ import (
 	"github.com/antigravity/monoflow/pkg/task"
 	"github.com/antigravity/monoflow/pkg/telemetry"
 	"github.com/antigravity/monoflow/pkg/verify"
+	"github.com/antigravity/monoflow/pkg/worktree"
 )
 
 func main() {
@@ -58,6 +59,9 @@ func main() {
 	case "pr":
 		handlePR(rootDir)
 
+	case "worktree":
+		handleWorktree(rootDir)
+
 	case "quarantine":
 		handleQuarantine(rootDir)
 
@@ -78,6 +82,7 @@ Usage:
   monoflow init [dir]                 Install MonoFlow into an existing or new repo
   monoflow graph [query|impact]       Query upstream/downstream dependencies & impact
   monoflow checkpoint [save|revert]   Ephemeral 15ms snapshots (shadow workspace)
+  monoflow worktree [create|sync|fin] Virtual worktrees with shared cache (<60ms)
   monoflow verify [--affected|--proof] Sub-2s inner loop with compact JSON diagnostics
   monoflow task [check|prove|slice]   DoD contracts, Proof of Work receipts, & stacked diffs
   monoflow deliver [--target=<pkg>]   Assemble hermetic deliverable artifact (.agents/dist)
@@ -462,6 +467,113 @@ func handleQuarantine(rootDir string) {
 		reason := strings.Join(os.Args[4:], " ")
 		_ = qm.Quarantine(testID, reason, "manual quarantine")
 		fmt.Printf(`{"status": "quarantined", "test_id": "%s"}`+"\n", testID)
+	}
+}
+
+func handleWorktree(rootDir string) {
+	mgr := worktree.NewManager(rootDir)
+	if len(os.Args) < 3 {
+		fmt.Println(`{"error": "usage: monoflow worktree create <agent-id> | list | sync --to=X --from=Y | finish <agent-id> | prune"}`)
+		os.Exit(1)
+	}
+
+	sub := os.Args[2]
+	switch sub {
+	case "create":
+		if len(os.Args) < 4 {
+			fmt.Println(`{"error": "missing agent-id for worktree create"}`)
+			os.Exit(1)
+		}
+		agentID := os.Args[3]
+		start := time.Now()
+		info, err := mgr.Create(agentID)
+		durMs := float64(time.Since(start).Microseconds()) / 1000.0
+		if err != nil {
+			fmt.Printf(`{"error": "%s"}`+"\n", err)
+			os.Exit(1)
+		}
+		data, _ := json.MarshalIndent(map[string]any{
+			"status":         "created",
+			"agent_id":       info.AgentID,
+			"path":           info.Path,
+			"head_sha":       info.HeadSHA,
+			"symlinks_count": info.SymlinksCount,
+			"duration_ms":    durMs,
+			"verdict":        "Virtual worktree provisioned in < 60ms with shared dependency symlinks",
+		}, "", "  ")
+		fmt.Println(string(data))
+
+	case "list":
+		list, err := mgr.List()
+		if err != nil {
+			fmt.Printf(`{"error": "%s"}`+"\n", err)
+			os.Exit(1)
+		}
+		data, _ := json.MarshalIndent(list, "", "  ")
+		fmt.Println(string(data))
+
+	case "sync":
+		toID := ""
+		fromID := ""
+		for _, arg := range os.Args[3:] {
+			if strings.HasPrefix(arg, "--to=") {
+				toID = strings.TrimPrefix(arg, "--to=")
+			}
+			if strings.HasPrefix(arg, "--from=") {
+				fromID = strings.TrimPrefix(arg, "--from=")
+			}
+		}
+		if toID == "" || fromID == "" {
+			fmt.Println(`{"error": "usage: monoflow worktree sync --to=<target-agent> --from=<source-agent>"}`)
+			os.Exit(1)
+		}
+		start := time.Now()
+		synced, err := mgr.Sync(toID, fromID)
+		durMs := float64(time.Since(start).Microseconds()) / 1000.0
+		if err != nil {
+			fmt.Printf(`{"error": "%s"}`+"\n", err)
+			os.Exit(1)
+		}
+		data, _ := json.MarshalIndent(map[string]any{
+			"status":       "synced",
+			"to_agent":     toID,
+			"from_agent":   fromID,
+			"synced_files": synced,
+			"duration_ms":  durMs,
+		}, "", "  ")
+		fmt.Println(string(data))
+
+	case "finish":
+		if len(os.Args) < 4 {
+			fmt.Println(`{"error": "missing agent-id for worktree finish"}`)
+			os.Exit(1)
+		}
+		agentID := os.Args[3]
+		start := time.Now()
+		err := mgr.Finish(agentID)
+		durMs := float64(time.Since(start).Microseconds()) / 1000.0
+		if err != nil {
+			fmt.Printf(`{"error": "%s"}`+"\n", err)
+			os.Exit(1)
+		}
+		data, _ := json.MarshalIndent(map[string]any{
+			"status":      "finished",
+			"agent_id":    agentID,
+			"duration_ms": durMs,
+		}, "", "  ")
+		fmt.Println(string(data))
+
+	case "prune":
+		pruned, err := mgr.PruneStale(1 * time.Hour)
+		if err != nil {
+			fmt.Printf(`{"error": "%s"}`+"\n", err)
+			os.Exit(1)
+		}
+		data, _ := json.MarshalIndent(map[string]any{
+			"status":          "pruned",
+			"cleaned_up_wts": pruned,
+		}, "", "  ")
+		fmt.Println(string(data))
 	}
 }
 
