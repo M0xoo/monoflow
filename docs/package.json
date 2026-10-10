@@ -1,0 +1,12 @@
+{
+  "name": "@monoflow/docs",
+  "version": "1.0.0",
+  "description": "MonoFlow systems engineering documentation and landing portal",
+  "private": true,
+  "scripts": {
+    "test": "node test.js",
+    "lint": "node -c app.js && node test.js",
+    "build": "node test.js"
+  },
+  "keywords": ["monoflow", "monorepo", "agents", "ci"]
+}

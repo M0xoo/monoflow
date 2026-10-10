@@ -1,0 +1,17 @@
+{
+  "task_id": "task-001",
+  "title": "Example Feature",
+  "description": "Implement feature in target package without affecting contracts",
+  "acceptance_criteria": [
+    "Affected unit tests pass",
+    "No typecheck errors in downstream packages"
+  ],
+  "allowed_paths": [
+    "services/**",
+    "packages/**"
+  ],
+  "read_only_paths": [
+    "contracts/**"
+  ],
+  "context_files": []
+}

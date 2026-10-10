@@ -20,6 +20,8 @@ coverage.html
 .agents/circuit_breaker.json
 .agents/proofs/
 .agents/changesets/
+.agents/outer_loop/
+.agents/events/
 
 # OS and Editor metadata
 .DS_Store

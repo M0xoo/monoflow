@@ -88,6 +88,32 @@ func LoadOrDiscover(rootDir string) (*DependencyGraph, error) {
 	return g, nil
 }
 
+// SaveConfig serializes the graph into .agents/monoflow.config.json format.
+func (g *DependencyGraph) SaveConfig(configPath string) error {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
+	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+		return err
+	}
+
+	pkgs := make([]PackageNode, 0, len(g.packages))
+	for _, p := range g.packages {
+		pkgs = append(pkgs, *p)
+	}
+
+	cfg := Config{
+		Version:  "1.0",
+		Packages: pkgs,
+	}
+
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(configPath, data, 0644)
+}
+
 // AddPackage adds a package to the graph.
 func (g *DependencyGraph) AddPackage(pkg *PackageNode) {
 	g.mu.Lock()
@@ -233,6 +259,14 @@ func (g *DependencyGraph) MapFileToPackage(relFilePath string) *PackageNode {
 
 	for _, pkg := range g.packages {
 		pkgPath := strings.ReplaceAll(pkg.Path, "\\", "/")
+		pkgPath = strings.TrimPrefix(pkgPath, "/")
+		if pkgPath == "." || pkgPath == "" {
+			if longestPrefix < 0 {
+				longestPrefix = 0
+				bestMatch = pkg
+			}
+			continue
+		}
 		if clean == pkgPath || strings.HasPrefix(clean, pkgPath+"/") {
 			if len(pkgPath) > longestPrefix {
 				longestPrefix = len(pkgPath)

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -83,6 +84,9 @@ func main() {
 	case "quarantine":
 		handleQuarantine(rootDir)
 
+	case "outer":
+		handleOuter(rootDir)
+
 	case "version":
 		fmt.Println("MonoFlow v1.0.0 (Agent-Native Monorepo & Ultra-Fast CI Engine)")
 
@@ -102,6 +106,7 @@ Usage:
   monoflow checkpoint [save|revert]   Ephemeral 15ms snapshots (shadow workspace)
   monoflow worktree [create|sync|gc]  Virtual worktrees with CoW isolation & AST merge (<60ms)
   monoflow verify [--affected|--proof] Sub-2s inner loop with compact JSON diagnostics
+  monoflow outer [start|status|wait]  Async outer loop: transitive matrix & remote promotion barrier
   monoflow review [risk|audit|throttle] Machine risk scoring, anti-hallucination & backpressure
   monoflow queue [spec|verify]        Speculative local merge queue with flaky quarantine
   monoflow ci [check]                 Two-tier CI gate: Tier 1 fast-path (<30s) vs Tier 2 full
@@ -815,6 +820,105 @@ func handleGuard(rootDir string) {
 		"verdict":         "All guard checks passed",
 	}, "", "  ")
 	fmt.Println(string(data))
+}
+
+func handleOuter(rootDir string) {
+	om := verify.NewOuterLoopManager(rootDir)
+	if len(os.Args) < 3 {
+		fmt.Println(`{"error": "usage: monoflow outer start [opts] | status <id> | wait <id> | list"}`)
+		os.Exit(1)
+	}
+
+	sub := os.Args[2]
+	switch sub {
+	case "start":
+		opts := verify.OuterLoopOptions{
+			AutoPush:   false,
+			AutoRevert: false,
+			Async:      false,
+		}
+		for _, arg := range os.Args[3:] {
+			if strings.HasPrefix(arg, "--commit=") {
+				opts.CommitSHA = strings.TrimPrefix(arg, "--commit=")
+			} else if strings.HasPrefix(arg, "--branch=") {
+				opts.Branch = strings.TrimPrefix(arg, "--branch=")
+			} else if strings.HasPrefix(arg, "--remote=") {
+				opts.Remote = strings.TrimPrefix(arg, "--remote=")
+			} else if strings.HasPrefix(arg, "--remote-branch=") {
+				opts.RemoteBranch = strings.TrimPrefix(arg, "--remote-branch=")
+			} else if arg == "--push" || arg == "--auto-push" {
+				opts.AutoPush = true
+			} else if arg == "--revert" || arg == "--auto-revert" {
+				opts.AutoRevert = true
+			} else if arg == "--async" {
+				opts.Async = true
+			}
+		}
+
+		job, err := om.StartJob(opts)
+		if err != nil && job == nil {
+			fmt.Printf(`{"status": "failed", "error": "%s"}`+"\n", err)
+			os.Exit(1)
+		}
+		data, _ := json.MarshalIndent(job, "", "  ")
+		fmt.Println(string(data))
+		if job.Status == verify.JobRegressed {
+			os.Exit(1)
+		}
+
+	case "status":
+		if len(os.Args) < 4 {
+			fmt.Println(`{"error": "missing job-id for outer status"}`)
+			os.Exit(1)
+		}
+		jobID := os.Args[3]
+		job, err := om.GetJob(jobID)
+		if err != nil {
+			fmt.Printf(`{"error": "%s"}`+"\n", err)
+			os.Exit(1)
+		}
+		data, _ := json.MarshalIndent(job, "", "  ")
+		fmt.Println(string(data))
+
+	case "wait":
+		if len(os.Args) < 4 {
+			fmt.Println(`{"error": "missing job-id for outer wait"}`)
+			os.Exit(1)
+		}
+		jobID := os.Args[3]
+		timeout := 60 * time.Second
+		for _, arg := range os.Args[4:] {
+			if strings.HasPrefix(arg, "--timeout=") {
+				secStr := strings.TrimPrefix(arg, "--timeout=")
+				if s, err := strconv.Atoi(strings.TrimSuffix(secStr, "s")); err == nil {
+					timeout = time.Duration(s) * time.Second
+				}
+			}
+		}
+		job, err := om.WaitJob(jobID, timeout)
+		if err != nil {
+			fmt.Printf(`{"error": "%s"}`+"\n", err)
+			os.Exit(1)
+		}
+		data, _ := json.MarshalIndent(job, "", "  ")
+		fmt.Println(string(data))
+		if job.Status == verify.JobRegressed {
+			os.Exit(1)
+		}
+
+	case "list":
+		jobs, err := om.ListJobs()
+		if err != nil {
+			fmt.Printf(`{"error": "%s"}`+"\n", err)
+			os.Exit(1)
+		}
+		data, _ := json.MarshalIndent(jobs, "", "  ")
+		fmt.Println(string(data))
+
+	default:
+		fmt.Printf(`{"error": "unknown outer subcommand: %s"}`+"\n", sub)
+		os.Exit(1)
+	}
 }
 
 func getGitChangedFiles(rootDir string) []string {

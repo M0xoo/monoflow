@@ -1,0 +1,26 @@
+{
+  "version": "1.0",
+  "monorepo_type": "polyglot",
+  "packages": [
+    {
+      "name": "monoflow",
+      "path": ".",
+      "language": "go",
+      "dependencies": [],
+      "test_cmd": "go test -v ./pkg/...",
+      "typecheck_cmd": "go vet ./pkg/... ./cmd/...",
+      "lint_cmd": "go vet ./pkg/..."
+    },
+    {
+      "name": "docs",
+      "path": "docs",
+      "language": "javascript",
+      "dependencies": [
+        "monoflow"
+      ],
+      "test_cmd": "node test.js",
+      "typecheck_cmd": "node -c app.js",
+      "lint_cmd": "node test.js"
+    }
+  ]
+}
