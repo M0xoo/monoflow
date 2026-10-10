@@ -21,6 +21,10 @@ const (
 	EventSpeculativePass  EventType = "SPECULATIVE_MERGE_PASS"
 	EventSpeculativeFail  EventType = "SPECULATIVE_MERGE_FAIL"
 	EventCircuitTripped   EventType = "CIRCUIT_BREAKER_TRIPPED"
+	EventPRCreated        EventType = "PR_CREATED"
+	EventPRMerged         EventType = "PR_MERGED"
+	EventPRReviewed       EventType = "PR_REVIEWED"
+	EventPRTested         EventType = "PR_TESTED"
 )
 
 // Event represents a machine-readable asynchronous event dispatched to agents.
