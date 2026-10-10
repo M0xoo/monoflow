@@ -1,0 +1,61 @@
+name: MonoFlow CI & Package Cache
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  verify:
+    name: MonoFlow Verify & Package Cache
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 1. Restore MonoFlow Content-Addressable Cache (Packages & Verification)
+      - name: Restore MonoFlow Cache
+        uses: actions/cache@v4
+        with:
+          path: .agents/cache
+          key: monoflow-cache-${{ runner.os }}-${{ hashFiles('**/package.json', 'go.sum', 'Cargo.lock', 'pyproject.toml') }}-${{ github.sha }}
+          restore-keys: |
+            monoflow-cache-${{ runner.os }}-${{ hashFiles('**/package.json', 'go.sum', 'Cargo.lock', 'pyproject.toml') }}-
+            monoflow-cache-${{ runner.os }}-
+
+      # 2. Setup MonoFlow CLI
+      - name: Ensure MonoFlow Binary
+        run: |
+          if [ -f "./bin/monoflow" ]; then
+            chmod +x ./bin/monoflow
+          elif [ -f "./.agents/bin/monoflow" ]; then
+            mkdir -p bin && cp ./.agents/bin/monoflow bin/monoflow
+            chmod +x ./bin/monoflow
+          else
+            go build -ldflags="-s -w" -o bin/monoflow ./cmd/monoflow || curl -fsSL https://get.monoflow.dev/install.sh | bash
+          fi
+
+      # 3. Two-Tier Fast-Path CI Gate (< 30s)
+      - name: Tier-1 Fast-Path Check
+        run: ./bin/monoflow ci check --head=${{ github.sha }} || true
+
+      # 4. Sub-2s Inner Loop Affected Verification (Hits cache on unchanged code)
+      - name: Verify Affected Packages
+        run: ./bin/monoflow verify --affected
+
+      # 5. Build Hermetic Deliverables
+      - name: Build Package Deliverables
+        run: ./bin/monoflow deliver
+
+      # 6. Upload Workflow Artifacts for Downstream Jobs or Local Pull
+      - name: Upload Deliverable Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: monoflow-deliverables-${{ github.sha }}
+          path: |
+            .agents/dist
+            .agents/proofs
+          retention-days: 14
