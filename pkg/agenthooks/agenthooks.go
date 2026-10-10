@@ -136,20 +136,70 @@ func ClaudeSettingsHook() map[string]any {
 	}
 }
 
+// ClaudeEventHooks are the Claude Code hooks that deliver MonoFlow events to the agent
+// without it running a command: new events are injected as context at session start, on
+// every prompt and after every tool call; the Stop hook waits for in-flight outer-loop/CI
+// results and blocks the stop when something needs the agent's action.
+func ClaudeEventHooks() map[string]map[string]any {
+	bin := `"$CLAUDE_PROJECT_DIR/.agents/bin/monoflow"`
+	entry := func(matcher, cmd string, timeout int) map[string]any {
+		h := map[string]any{"type": "command", "command": cmd}
+		if timeout > 0 {
+			h["timeout"] = timeout
+		}
+		e := map[string]any{"hooks": []any{h}}
+		if matcher != "" {
+			e["matcher"] = matcher
+		}
+		return e
+	}
+	return map[string]map[string]any{
+		"SessionStart":     entry("", bin+" hook deliver --event=SessionStart", 0),
+		"UserPromptSubmit": entry("", bin+" hook deliver --event=UserPromptSubmit", 0),
+		"PostToolUse":      entry("*", bin+" hook deliver --event=PostToolUse", 0),
+		"Stop":             entry("", bin+" hook stop", 1200),
+	}
+}
+
 // OpencodePlugin is the opencode plugin installed by `monoflow init` (.opencode/plugin/monoflow.js).
-const OpencodePlugin = `// Installed by monoflow init: redirects raw build/test/git commands to MonoFlow.
-import { execFileSync } from "node:child_process";
+const OpencodePlugin = `// Installed by monoflow init (managed: re-running init updates it).
+// - redirects raw build/test/git commands to MonoFlow (tool.execute.before)
+// - delivers MonoFlow events (CI, outer loop, releases) into tool output (tool.execute.after)
+// - when the session goes idle, waits for in-flight outer-loop/CI results and prompts the
+//   session with anything that needs action, so the agent resumes without running a command
+import { execFile, execFileSync } from "node:child_process";
 import { join } from "node:path";
 
-export const MonoflowGuard = async ({ directory }) => ({
-  "tool.execute.before": async (input, output) => {
-    if (input.tool !== "bash") return;
-    const command = output.args?.command ?? "";
-    try {
-      execFileSync(join(directory, ".agents", "bin", "monoflow"), ["hook", "check"], { input: command, stdio: ["pipe", "pipe", "pipe"] });
-    } catch (e) {
-      if (e.status === 2) throw new Error(String(e.stdout || e.message).trim());
-    }
-  },
-});
+export const MonoflowGuard = async ({ client, directory }) => {
+  const bin = join(directory, ".agents", "bin", "monoflow");
+  let idleWatch = null;
+  return {
+    "tool.execute.before": async (input, output) => {
+      if (input.tool !== "bash") return;
+      const command = output.args?.command ?? "";
+      try {
+        execFileSync(bin, ["hook", "check"], { input: command, stdio: ["pipe", "pipe", "pipe"] });
+      } catch (e) {
+        if (e.status === 2) throw new Error(String(e.stdout || e.message).trim());
+      }
+    },
+    "tool.execute.after": async (input, output) => {
+      try {
+        const text = execFileSync(bin, ["hook", "deliver", "--format=text"], { cwd: directory, encoding: "utf8", input: "" });
+        if (text.trim()) output.output = (output.output ?? "") + "\n\n" + text;
+      } catch {}
+    },
+    event: async ({ event }) => {
+      if (event.type !== "session.idle" || idleWatch) return;
+      const sessionID = event.properties?.sessionID;
+      idleWatch = execFile(bin, ["hook", "stop", "--format=text"], { cwd: directory, encoding: "utf8" }, async (err, stdout) => {
+        idleWatch = null;
+        if (stdout && stdout.trim() && sessionID) {
+          await client.session.prompt({ path: { id: sessionID }, body: { parts: [{ type: "text", text: stdout }] } });
+        }
+      });
+      idleWatch.stdin?.end(); // hook stop reads (optional) JSON on stdin: close it
+    },
+  };
+};
 `

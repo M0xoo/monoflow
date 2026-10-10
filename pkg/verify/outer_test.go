@@ -125,7 +125,7 @@ func TestOuterLoopRegressionBlocksRemote(t *testing.T) {
 
 	om := NewOuterLoopManager(repoDir)
 	job, err := om.StartJob(OuterLoopOptions{
-		AutoPush:   true,  // AutoPush enabled, but MUST be blocked!
+		AutoPush:   true, // AutoPush enabled, but MUST be blocked!
 		AutoRevert: false,
 		Async:      false,
 	})

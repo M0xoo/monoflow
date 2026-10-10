@@ -258,15 +258,26 @@ func InstallAgentHooks(repoRoot string) error {
 	if hooks == nil {
 		hooks = map[string]any{}
 	}
-	pre, _ := hooks["PreToolUse"].([]any)
-	installed := false
-	for _, h := range pre {
-		if b, _ := json.Marshal(h); strings.Contains(string(b), "hook pretooluse") {
-			installed = true
+	changed := false
+	add := func(event, marker string, entry map[string]any) {
+		list, _ := hooks[event].([]any)
+		for _, h := range list {
+			if b, _ := json.Marshal(h); strings.Contains(string(b), marker) {
+				return
+			}
 		}
+		hooks[event] = append(list, entry)
+		changed = true
 	}
-	if !installed {
-		hooks["PreToolUse"] = append(pre, agenthooks.ClaudeSettingsHook())
+	add("PreToolUse", "hook pretooluse", agenthooks.ClaudeSettingsHook())
+	for event, entry := range agenthooks.ClaudeEventHooks() {
+		marker := "hook deliver"
+		if event == "Stop" {
+			marker = "hook stop"
+		}
+		add(event, marker, entry)
+	}
+	if changed {
 		settings["hooks"] = hooks
 		data, _ := json.MarshalIndent(settings, "", "  ")
 		_ = os.MkdirAll(filepath.Dir(settingsPath), 0755)
@@ -276,7 +287,8 @@ func InstallAgentHooks(repoRoot string) error {
 	}
 
 	pluginPath := filepath.Join(repoRoot, ".opencode", "plugin", "monoflow.js")
-	if _, err := os.Stat(pluginPath); os.IsNotExist(err) {
+	// Managed file: (re)write it unless the user replaced it with their own.
+	if existing, err := os.ReadFile(pluginPath); err != nil || strings.Contains(string(existing), "Installed by monoflow init") {
 		_ = os.MkdirAll(filepath.Dir(pluginPath), 0755)
 		return os.WriteFile(pluginPath, []byte(agenthooks.OpencodePlugin), 0644)
 	}

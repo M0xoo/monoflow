@@ -32,32 +32,32 @@ const (
 
 // OuterJob represents an outer-loop verification job validating heavy transitive integration.
 type OuterJob struct {
-	ID                  string          `json:"id"`
-	CommitSHA           string          `json:"commit_sha"`
-	Branch              string          `json:"branch"`
-	Remote              string          `json:"remote"`
-	RemoteBranch        string          `json:"remote_branch"`
-	Status              OuterJobStatus  `json:"status"`
-	AutoPush            bool            `json:"auto_push"`
-	AutoRevert          bool            `json:"auto_revert"`
-	StartedAt           time.Time       `json:"started_at"`
-	CompletedAt         time.Time       `json:"completed_at,omitempty"`
-	DurationMs          float64         `json:"duration_ms"`
-	DirectPackages      []string        `json:"direct_packages"`
-	TransitivePackages  []string        `json:"transitive_packages"`
-	TotalPackagesTested int             `json:"total_packages_tested"`
-	PassedPackages      int             `json:"passed_packages"`
-	FailedPackages      int             `json:"failed_packages"`
-	TargetResults       []TargetResult  `json:"target_results"`
-	IncludeE2E          bool            `json:"include_e2e,omitempty"`
-	E2ECheck            *E2EResult      `json:"e2e_check,omitempty"`
-	ReceiptPath         string          `json:"receipt_path,omitempty"`
-	ReceiptSignature    string          `json:"receipt_signature,omitempty"`
-	Promoted            bool            `json:"promoted"`
-	PromoteError        string          `json:"promote_error,omitempty"`
-	RollbackTriggered   bool            `json:"rollback_triggered"`
-	AlertPath           string          `json:"alert_path,omitempty"`
-	ErrorSummary        string          `json:"error_summary,omitempty"`
+	ID                  string         `json:"id"`
+	CommitSHA           string         `json:"commit_sha"`
+	Branch              string         `json:"branch"`
+	Remote              string         `json:"remote"`
+	RemoteBranch        string         `json:"remote_branch"`
+	Status              OuterJobStatus `json:"status"`
+	AutoPush            bool           `json:"auto_push"`
+	AutoRevert          bool           `json:"auto_revert"`
+	StartedAt           time.Time      `json:"started_at"`
+	CompletedAt         time.Time      `json:"completed_at,omitempty"`
+	DurationMs          float64        `json:"duration_ms"`
+	DirectPackages      []string       `json:"direct_packages"`
+	TransitivePackages  []string       `json:"transitive_packages"`
+	TotalPackagesTested int            `json:"total_packages_tested"`
+	PassedPackages      int            `json:"passed_packages"`
+	FailedPackages      int            `json:"failed_packages"`
+	TargetResults       []TargetResult `json:"target_results"`
+	IncludeE2E          bool           `json:"include_e2e,omitempty"`
+	E2ECheck            *E2EResult     `json:"e2e_check,omitempty"`
+	ReceiptPath         string         `json:"receipt_path,omitempty"`
+	ReceiptSignature    string         `json:"receipt_signature,omitempty"`
+	Promoted            bool           `json:"promoted"`
+	PromoteError        string         `json:"promote_error,omitempty"`
+	RollbackTriggered   bool           `json:"rollback_triggered"`
+	AlertPath           string         `json:"alert_path,omitempty"`
+	ErrorSummary        string         `json:"error_summary,omitempty"`
 }
 
 // E2EResult represents the outcome of an end-to-end multi-agent scenario test.
@@ -174,11 +174,13 @@ func (om *OuterLoopManager) StartJob(opts OuterLoopOptions) (*OuterJob, error) {
 	}
 
 	if opts.Async {
-		// Dispatch in detached background goroutine with isolated memory copy
 		jobCopy := *job
-		go func(id string) {
-			_ = om.ExecuteJobByID(id)
-		}(job.ID)
+		// The CLI exits right after replying, which would kill a goroutine: run the job in a
+		// detached `monoflow outer exec --job=<id>` process. (In tests, where the running
+		// binary is not monoflow, fall back to a goroutine.)
+		if err := spawnOuterProcess(om.RootDir, job.ID); err != nil {
+			go func(id string) { _ = om.ExecuteJobByID(id) }(job.ID)
+		}
 		return &jobCopy, nil
 	}
 
@@ -209,8 +211,21 @@ func (om *OuterLoopManager) executeJobInternal(job *OuterJob) error {
 	job.Status = JobRunning
 	_ = om.saveJob(job)
 
+	// 0. Verify the exact commit (not the working tree) in a clean checkout that reuses
+	// this worktree's sparse projection and dependency directories.
+	workDir, cleanup, cerr := om.checkoutCommit(job)
+	if cerr != nil {
+		job.Status = JobRegressed
+		job.ErrorSummary = "cannot check out " + job.CommitSHA + ": " + cerr.Error()
+		job.CompletedAt = time.Now().UTC()
+		_ = om.saveJob(job)
+		_, _ = om.emitRegressionAlert(job, "")
+		return cerr
+	}
+	defer cleanup()
+
 	// 1. Load workspace dependency graph
-	g, err := graph.LoadOrDiscover(om.RootDir)
+	g, err := graph.LoadOrDiscover(workDir)
 	if err != nil {
 		job.Status = JobRegressed
 		job.ErrorSummary = fmt.Sprintf("failed to load graph: %v", err)
@@ -220,11 +235,11 @@ func (om *OuterLoopManager) executeJobInternal(job *OuterJob) error {
 		return err
 	}
 
-	// 2. Identify changed files for this commit
-	changedFiles, err := om.getCommitChangedFiles(job.CommitSHA)
-	if err != nil || len(changedFiles) == 0 {
-		// Fallback to git diff against parent or HEAD
-		changedFiles = om.getWorkingTreeChangedFiles()
+	// 2. Changed files of the branch at this commit, relative to the base it will merge
+	// into (what remote CI's --affected --base selects), falling back to the commit itself.
+	changedFiles := om.branchChangedFiles(job.CommitSHA)
+	if len(changedFiles) == 0 {
+		changedFiles, _ = om.getCommitChangedFiles(job.CommitSHA)
 	}
 
 	// 3. Compute directly affected and transitive downstream packages
@@ -257,31 +272,15 @@ func (om *OuterLoopManager) executeJobInternal(job *OuterJob) error {
 		packagesToVerify = affected.DirectlyChanged
 	}
 
-	runner := NewRunner(om.RootDir)
+	// Same checks and cache keys as the inner loop: content already verified there is a
+	// global-cache hit, so only what differs in the committed state is re-run.
+	runner := NewRunner(workDir)
 	runner.SetGraph(g)
-	results := make([]TargetResult, len(packagesToVerify))
-	var wg sync.WaitGroup
-
-	for i, pkgName := range packagesToVerify {
-		wg.Add(1)
-		go func(idx int, name string) {
-			defer wg.Done()
-			pkg, exists := g.GetPackage(name)
-			if !exists {
-				results[idx] = TargetResult{
-					Target: name,
-					Status: "passed",
-				}
-				return
-			}
-			// Outer loop runs heavy Stage: "outer"
-			results[idx] = runner.VerifyTarget(pkg, VerifyOptions{
-				Stage: "outer",
-			})
-		}(i, pkgName)
+	suite := runner.VerifyAffected(g, changedFiles, VerifyOptions{})
+	results := suite.Results
+	if len(results) == 0 && len(packagesToVerify) > 0 {
+		results = make([]TargetResult, 0)
 	}
-
-	wg.Wait()
 
 	job.CompletedAt = time.Now().UTC()
 	job.DurationMs = float64(time.Since(start).Microseconds()) / 1000.0
@@ -303,16 +302,16 @@ func (om *OuterLoopManager) executeJobInternal(job *OuterJob) error {
 		}
 	}
 
-	// 4b. Execute E2E Multi-Agent Scenario if requested
+	// 4b. CI parity: the repository's own CI command (ci_cmd), run on the clean checkout.
 	if job.IncludeE2E {
 		e2eRunner := om.E2ERunner
 		if e2eRunner == nil {
 			e2eRunner = DefaultE2ERunner
 		}
 		if e2eRunner == nil {
-			e2eRunner = om.runFallbackE2E
+			e2eRunner = om.runRepoCI
 		}
-		e2eRes, e2eErr := e2eRunner(om.RootDir)
+		e2eRes, e2eErr := e2eRunner(workDir)
 		job.E2ECheck = e2eRes
 		if e2eErr != nil || (e2eRes != nil && e2eRes.Status != "passed" && e2eRes.Status != "success") {
 			failedCount++
@@ -364,6 +363,14 @@ func (om *OuterLoopManager) executeJobInternal(job *OuterJob) error {
 
 	// SUCCESS: ALL INTEGRATION & DOWNSTREAM TESTS PASSED
 	job.Status = JobPassed
+	// `monoflow push` may have queued a push while this job was running.
+	// (read the record directly: StartJob may hold om.mu while running synchronously)
+	if data, err := os.ReadFile(filepath.Join(om.jobsDir, job.ID+".json")); err == nil {
+		var latest OuterJob
+		if json.Unmarshal(data, &latest) == nil && latest.AutoPush {
+			job.AutoPush, job.Remote, job.RemoteBranch = true, latest.Remote, latest.RemoteBranch
+		}
+	}
 
 	// Generate and sign cryptographic Tier-2 proof receipt
 	receiptPath, sig, err := om.generateTier2Receipt(job, g)
@@ -379,8 +386,11 @@ func (om *OuterLoopManager) executeJobInternal(job *OuterJob) error {
 		} else {
 			job.Promoted = true
 			job.Status = JobPromoted
+			// Remote CI now runs on the pushed commit: watch it like `monoflow push` does.
+			_, _ = events.NewCIWatcher(om.RootDir).StartWatch(events.WatchOptions{CommitSHA: job.CommitSHA, Branch: job.RemoteBranch, Remote: job.Remote, Async: true})
 		}
 	}
+	om.emitPassed(job)
 
 	_ = om.saveJob(job)
 	return nil
@@ -388,8 +398,11 @@ func (om *OuterLoopManager) executeJobInternal(job *OuterJob) error {
 
 // promoteToRemote safely pushes the proven commit to the remote repository.
 func (om *OuterLoopManager) promoteToRemote(job *OuterJob) error {
+	if job.RemoteBranch == "main" || job.RemoteBranch == "master" || job.RemoteBranch == "HEAD" {
+		return fmt.Errorf("refusing to push to protected/unnamed branch %q; open a PR instead", job.RemoteBranch)
+	}
 	refspec := fmt.Sprintf("%s:refs/heads/%s", job.CommitSHA, job.RemoteBranch)
-	_, err := om.runGit("push", job.Remote, refspec)
+	_, err := om.runGit("push", "-u", job.Remote, refspec)
 	if err != nil {
 		return fmt.Errorf("failed to promote commit to remote %s: %w", job.Remote, err)
 	}
@@ -576,7 +589,7 @@ func (om *OuterLoopManager) WaitJob(jobID string, timeout time.Duration) (*Outer
 		if job.Status != JobQueued && job.Status != JobRunning {
 			return job, nil
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(500 * time.Millisecond)
 	}
 	return nil, fmt.Errorf("timed out waiting for outer job %s", jobID)
 }
@@ -659,7 +672,6 @@ func (om *OuterLoopManager) runFallbackE2E(rootDir string) (*E2EResult, error) {
 	}, nil
 }
 
-
 func (om *OuterLoopManager) runGit(args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = om.RootDir
@@ -675,4 +687,164 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// LatestForCommit returns the most recent outer-loop job for a commit (nil if none).
+func (om *OuterLoopManager) LatestForCommit(sha string) *OuterJob {
+	jobs, err := om.ListJobs()
+	if err != nil {
+		return nil
+	}
+	var best *OuterJob
+	for _, j := range jobs {
+		if j.CommitSHA == sha && (best == nil || j.StartedAt.After(best.StartedAt)) {
+			best = j
+		}
+	}
+	return best
+}
+
+// QueuePush marks a job so it pushes when (and only if) it turns green.
+func (om *OuterLoopManager) QueuePush(job *OuterJob, remote, branch string) error {
+	om.mu.Lock()
+	defer om.mu.Unlock()
+	job.AutoPush = true
+	job.Remote = remote
+	job.RemoteBranch = branch
+	return om.saveJob(job)
+}
+
+// checkoutCommit creates a detached checkout of the job's commit, sparse like the current
+// worktree when it is sparse, with dependency directories linked from the worktree.
+func (om *OuterLoopManager) checkoutCommit(job *OuterJob) (string, func(), error) {
+	dir := filepath.Join(om.RootDir, ".agents", "outer_loop", "checkouts", job.ID)
+	_ = os.RemoveAll(dir)
+	if _, err := om.runGit("worktree", "add", "--detach", "--no-checkout", dir, job.CommitSHA); err != nil {
+		return "", func() {}, err
+	}
+	cleanup := func() {
+		_, _ = om.runGit("worktree", "remove", "--force", dir)
+		_ = os.RemoveAll(dir)
+	}
+	if patterns, err := om.runGit("sparse-checkout", "list"); err == nil && strings.TrimSpace(patterns) != "" {
+		set := exec.Command("git", append([]string{"sparse-checkout", "set"}, strings.Fields(patterns)...)...)
+		set.Dir = dir
+		_ = set.Run()
+	}
+	co := exec.Command("git", "checkout", "--quiet", "--detach", job.CommitSHA)
+	co.Dir = dir
+	if out, err := co.CombinedOutput(); err != nil {
+		cleanup()
+		return "", func() {}, fmt.Errorf("%v (%s)", err, strings.TrimSpace(string(out)))
+	}
+	// MonoFlow metadata (package config) is not code: use the worktree's copy when the
+	// commit does not carry one.
+	for _, f := range []string{".agents/monoflow.config.json", ".agents/task.json"} {
+		if _, err := os.Stat(filepath.Join(dir, f)); os.IsNotExist(err) {
+			if data, err := os.ReadFile(filepath.Join(om.RootDir, f)); err == nil {
+				_ = os.MkdirAll(filepath.Dir(filepath.Join(dir, f)), 0755)
+				_ = os.WriteFile(filepath.Join(dir, f), data, 0644)
+			}
+		}
+	}
+	for _, d := range []string{"node_modules", ".venv", "target", ".pnpm-store"} {
+		if _, err := os.Stat(filepath.Join(om.RootDir, d)); err == nil {
+			_ = os.Symlink(filepath.Join(om.RootDir, d), filepath.Join(dir, d))
+		}
+	}
+	return dir, cleanup, nil
+}
+
+// branchChangedFiles lists files changed since the merge-base with the base branch.
+func (om *OuterLoopManager) branchChangedFiles(sha string) []string {
+	for _, base := range []string{"origin/main", "main", "origin/master", "master"} {
+		mb, err := om.runGit("merge-base", base, sha)
+		if err != nil {
+			continue
+		}
+		out, err := om.runGit("diff", "--name-only", strings.TrimSpace(mb), sha)
+		if err != nil {
+			return nil
+		}
+		var files []string
+		for _, f := range strings.Split(strings.TrimSpace(out), "\n") {
+			if f != "" {
+				files = append(files, f)
+			}
+		}
+		return files
+	}
+	return nil
+}
+
+// runRepoCI runs the repository's own CI command (ci_cmd in .agents/monoflow.config.json)
+// so the outer loop catches what remote CI would, before anything is pushed.
+func (om *OuterLoopManager) runRepoCI(dir string) (*E2EResult, error) {
+	data, err := os.ReadFile(filepath.Join(dir, ".agents", "monoflow.config.json"))
+	var cfg struct {
+		CICmd string `json:"ci_cmd"`
+	}
+	if err == nil {
+		_ = json.Unmarshal(data, &cfg)
+	}
+	if cfg.CICmd == "" {
+		return &E2EResult{Status: "passed", Details: map[string]any{"ci_cmd": "not configured: affected-package checks only"}}, nil
+	}
+	start := time.Now()
+	cmd := exec.Command("sh", "-c", cfg.CICmd)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "MONOFLOW_INTERNAL=1")
+	out, err := cmd.CombinedOutput()
+	res := &E2EResult{Status: "passed", DurationMs: float64(time.Since(start).Milliseconds()), Details: map[string]any{"ci_cmd": cfg.CICmd}}
+	if err != nil {
+		res.Status = "failed"
+		res.Error = "ci_cmd failed: " + CompactFailure(StripANSI(string(out)))
+		return res, fmt.Errorf("%s", res.Error)
+	}
+	return res, nil
+}
+
+func (om *OuterLoopManager) emitPassed(job *OuterJob) {
+	summary := fmt.Sprintf("Outer loop green for %s (%d packages", job.CommitSHA[:min(8, len(job.CommitSHA))], job.TotalPackagesTested)
+	if job.E2ECheck != nil {
+		if c, ok := job.E2ECheck.Details["ci_cmd"]; ok {
+			summary += fmt.Sprintf(", ci_cmd: %v", c)
+		}
+	}
+	summary += ")"
+	if job.Promoted {
+		summary += fmt.Sprintf("; pushed to %s/%s, remote CI watched", job.Remote, job.RemoteBranch)
+	} else if job.PromoteError != "" {
+		summary += "; push failed: " + job.PromoteError
+	}
+	_ = events.NewEventManager(om.RootDir).Emit(&events.Event{
+		Type:      events.EventOuterPassed,
+		CommitSHA: job.CommitSHA,
+		Branch:    job.Branch,
+		Summary:   summary,
+		Payload:   map[string]any{"job_id": job.ID, "pushed": job.Promoted, "push_error": job.PromoteError},
+	})
+}
+
+// spawnOuterProcess runs `monoflow outer exec --job=<id>` detached from the CLI process.
+func spawnOuterProcess(root, jobID string) error {
+	exe, err := os.Executable()
+	if err != nil || !strings.HasPrefix(filepath.Base(exe), "monoflow") {
+		return fmt.Errorf("not running as monoflow")
+	}
+	logDir := filepath.Join(root, ".agents", "outer_loop", "logs")
+	_ = os.MkdirAll(logDir, 0755)
+	logFile, err := os.OpenFile(filepath.Join(logDir, jobID+".log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return err
+	}
+	defer logFile.Close()
+	cmd := exec.Command(exe, "outer", "exec", "--job="+jobID)
+	cmd.Dir = root
+	cmd.Stdout, cmd.Stderr = logFile, logFile
+	cmd.SysProcAttr = detachedProcAttr()
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	return cmd.Process.Release()
 }

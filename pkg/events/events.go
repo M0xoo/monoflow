@@ -1,6 +1,7 @@
 package events
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -28,6 +29,7 @@ const (
 	EventPRTested           EventType = "PR_TESTED"
 	EventPRConflict         EventType = "PR_CONFLICT"
 	EventCISkipped          EventType = "CI_SKIPPED"
+	EventOuterPassed        EventType = "OUTER_LOOP_PASSED"
 	EventDependencyReleased EventType = "DEPENDENCY_RELEASED"
 )
 
@@ -72,7 +74,11 @@ func (em *EventManager) Emit(evt *Event) error {
 		if len(shortSHA) > 8 {
 			shortSHA = shortSHA[:8]
 		}
-		evt.ID = fmt.Sprintf("evt_%s_%s_%d", strings.ToLower(string(evt.Type)), shortSHA, time.Now().UnixNano()/int64(time.Millisecond))
+		// Nanoseconds + random suffix: several events of one type (e.g. a release notifying
+		// every consumer) are emitted within the same millisecond and must not overwrite.
+		var rnd [4]byte
+		_, _ = rand.Read(rnd[:])
+		evt.ID = fmt.Sprintf("evt_%s_%s_%d_%x", strings.ToLower(string(evt.Type)), shortSHA, time.Now().UnixNano(), rnd)
 	}
 
 	if evt.CreatedAt.IsZero() {
