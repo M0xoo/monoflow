@@ -631,6 +631,9 @@ func (m *Manager) GetStats() Stats {
 	var verCount int
 
 	_ = filepath.Walk(m.LocalDir, func(path string, info os.FileInfo, err error) error {
+		if err == nil && info.IsDir() && info.Name() == "baselines" {
+			return filepath.SkipDir // baseline checkouts are not cache entries
+		}
 		if err == nil && !info.IsDir() {
 			totalBytes += info.Size()
 			if strings.HasSuffix(path, ".tar.gz") {

@@ -86,6 +86,7 @@ func (r *Runner) baselineDir(baseRef string) string {
 		return dir
 	}
 	_ = os.MkdirAll(filepath.Dir(dir), 0755)
+	pruneBaselines(r.RootDir, filepath.Dir(dir), 2)
 	if out, err := exec.Command("git", "-C", r.RootDir, "worktree", "add", "--detach", dir, mb).CombinedOutput(); err != nil {
 		_ = out
 		return ""
@@ -160,4 +161,33 @@ func errorsInBaseline(errs []DiagnosticError, base string) bool {
 		}
 	}
 	return true
+}
+
+// pruneBaselines keeps only the most recently used baseline checkouts.
+func pruneBaselines(root, dir string, keep int) {
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) < keep {
+		return
+	}
+	type item struct {
+		path string
+		mod  int64
+	}
+	var items []item
+	for _, e := range entries {
+		if info, err := e.Info(); err == nil && e.IsDir() {
+			items = append(items, item{filepath.Join(dir, e.Name()), info.ModTime().UnixNano()})
+		}
+	}
+	for len(items) >= keep {
+		oldest := 0
+		for i := range items {
+			if items[i].mod < items[oldest].mod {
+				oldest = i
+			}
+		}
+		_ = exec.Command("git", "-C", root, "worktree", "remove", "--force", items[oldest].path).Run()
+		_ = os.RemoveAll(items[oldest].path)
+		items = append(items[:oldest], items[oldest+1:]...)
+	}
 }
