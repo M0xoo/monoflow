@@ -29,6 +29,22 @@ remote CI stays green. Run it as ` + "`" + `.agents/bin/monoflow` + "`" + ` (als
    commit range, flakiness) instead of reading CI APIs. On CI_FAILED: reproduce with ` + "`" + `monoflow verify --affected` + "`" + `, fix, commit, ` + "`" + `monoflow push` + "`" + `.
 9. ` + "`" + `monoflow worktree list` + "`" + ` shows every agent's branch, PR and CI state. ` + "`" + `monoflow worktree finish <agent-id>` + "`" + ` when merged.
 
+## When you need more
+| situation | command |
+|---|---|
+| red remote CI, flaky or recurring failures | ` + "`" + `monoflow ci health [--check=<name> --logs]` + "`" + ` |
+| outer-loop status / wait for it | ` + "`" + `monoflow outer list | status <id> | wait <id>` + "`" + ` |
+| a test is flaky (not your change) | ` + "`" + `monoflow quarantine add <test-id>` + "`" + ` |
+| self-review before a PR (risk, undisclosed critical files) | ` + "`" + `monoflow review risk | review audit` + "`" + ` |
+| several PRs touching the same packages | ` + "`" + `monoflow queue spec | queue verify (speculative merge queue)` + "`" + ` |
+| combine another agent's work into yours | ` + "`" + `monoflow worktree sync --to=<you> --from=<other> (AST merge)` + "`" + ` |
+| need more / fewer packages in your worktree | ` + "`" + `monoflow subset add|remove <pkg> / worktree focus` + "`" + ` |
+| build a deliverable artifact of a package | ` + "`" + `monoflow deliver --target=<pkg>` + "`" + ` |
+| test a PR or check it out locally | ` + "`" + `monoflow pr test <id> | pr local <id> --worktree | pr status <id>` + "`" + ` |
+| split a large change for review | ` + "`" + `monoflow task slice; prove the task: task prove` + "`" + ` |
+| scan for secrets / weakened tests | ` + "`" + `monoflow guard check` + "`" + ` |
+| cache size and hit ratio | ` + "`" + `monoflow cache status` + "`" + ` |
+
 ## Instead of → use
 | raw | MonoFlow |
 |-----|----------|

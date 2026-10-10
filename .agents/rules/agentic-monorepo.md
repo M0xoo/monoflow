@@ -11,11 +11,11 @@ Follow these strict rules to keep execution fast, prevent context blowup, and av
 ## 2. Ephemeral Checkpoints — Never Dirty Git History
 * Standard `git commit` is strictly prohibited for experimental trial-and-error edits.
 * Before attempting a refactor or non-trivial edit, run:
-  `.agents/bin/monoflow checkpoint save "hypothesis description"` (takes ~15ms).
+  `.agents/bin/monoflow checkpoint save "hypothesis description"` (fast, outside git history).
 * If an edit fails verification, instantly rollback state with:
-  `.agents/bin/monoflow checkpoint revert` (takes ~20ms).
+  `.agents/bin/monoflow checkpoint revert`.
 
-## 3. Sub-2s Inner Loop — Affected Checks Only
+## 3. Inner Loop — Affected Checks Only
 * **NEVER** run the entire repository's test suite or global Docker builds during code generation.
 * Run: `.agents/bin/monoflow verify --affected`
 * Output is emitted in compact JSON (`file`, `line`, `col`, `code`, `message`) without ANSI color codes or terminal noise.
@@ -32,7 +32,7 @@ Follow these strict rules to keep execution fast, prevent context blowup, and av
 ## 6. Zero Raw Git Commands — Use MonoFlow Exclusively
 * **NEVER** run raw `git commit`, `git push`, `git pull`, or `git checkout`.
 * Use MonoFlow commands:
-  - Commit: `monoflow commit -m "..."` (sub-50ms verified commit)
+  - Commit: `monoflow commit -m "..."` (guarded commit; starts the outer loop)
   - Push: `monoflow push` (enforces protected branch shield and pre-push race detector)
   - Sync: `monoflow sync` (sub-second fast-forward / rebase respecting sparse subsets)
   - Subsetting: `monoflow subset set|add|remove|update`
