@@ -15,7 +15,9 @@ coverage.html
 .agents/worktrees/
 .agents/traces/
 .agents/dist/
+.agents/queue/
 .agents/checkpoints.json
+.agents/circuit_breaker.json
 .agents/proofs/
 .agents/changesets/
 

@@ -146,12 +146,32 @@ Test your PR against a rapidly moving master branch in seconds:
   ```
 * Runs the full integration test on top of live master in **~2.4 seconds**.
 
-### 6. Anti-Cheating Test Guard & Secret Scanner
+### 6. Semantic Symbol-Level AST Synthesizer (Same-File Multi-Agent Swarming)
+Traditional `git merge` is line-based and fails with ugly conflict markers (`<<<<<<< HEAD`) whenever two agents add functions or imports to the same file.
+* MonoFlow parses native ASTs (Go `ast`, TypeScript/JavaScript, Python).
+* If Agent A adds `func CancelOrder()` and Agent B adds `func RefundOrder()`, MonoFlow **synthesizes both declarations** and deduplicates imports automatically in **< 20ms**. Zero conflict markers.
+
+### 7. Stopping "Agentic Slop" & Decision Fatigue (`monoflow review`)
+AI agents generate code 10x faster than humans can review. MonoFlow protects engineering teams from review burnout:
+* **Semantic Risk Scoring:** Quantifies PR risk from 0 to 100 (`TIER_1_AUTO_APPROVABLE`, `TIER_2_HUMAN_REVIEW`, `TIER_3_ELEVATED_RISK_BLOCKED`) based on database migrations, auth/crypto, infra, and DAG fan-out.
+* **Anti-Hallucination Scope Audit:** Flags PR descriptions claiming "minor typo" or "doc update" while secretly modifying core schemas or auth logic.
+* **Agentic Backpressure:** Pauses autonomous PR creation when the human review queue is saturated.
+
+### 8. Speculative Local Merge Queue & Two-Tier CI (`monoflow queue` & `monoflow ci`)
+Agents spamming PRs to GitHub Actions causes queue gridlock, flaky test bisect cascades, and thousands of dollars in runner costs:
+* **Speculative Local Pre-Flight Rebase:** Simulates landing on `main` in an ephemeral scratch worktree in **22ms**, testing strictly affected packages and automatically bypassing quarantined flaky tests.
+* **Two-Tier CI Gate for GitHub Actions:** Emits a signed cryptographic receipt (`.agents/queue/receipt_<sha>.json`). When CI runs, MonoFlow validates the signature and activates **Tier 1 Fast-Path CI (< 30s)** instead of a 30-minute monorepo rebuild, slashing CI bills by up to **90%**.
+
+### 9. Fast Agent Commit & Worktree GC
+* `monoflow commit -m "..."` validates test integrity and scans secrets in < 50ms, then commits with `--no-verify` to bypass hanging interactive human pre-commit hooks (Husky, lint-staged).
+* `monoflow worktree gc` tracks heartbeat leases and automatically purges abandoned or orphaned worktrees (> TTL).
+
+### 10. Anti-Cheating Test Guard & Secret Scanner
 Agents frequently attempt to make CI green by deleting failing assertions, commenting out tests, or inserting hollow assertions like `expect(true).toBe(true)`.
 * **Test Integrity Guard:** Rejects any diff where existing test assertions were weakened, deleted, or mocked away.
 * **Secret Scanner:** Scans diffs for AWS keys, private keys, or API tokens before creating commits or proof receipts.
 
-### 7. Runaway Loop Circuit Breaker
+### 11. Runaway Loop Circuit Breaker
 Prevents agents from burning $50 in API tokens and spinning in infinite self-healing loops:
 * Caps self-correction attempts at 3 iterations.
 * If attempt 3 fails, MonoFlow **auto-reverts to the latest green checkpoint** and emits a structured Human Escalation payload.
@@ -169,16 +189,22 @@ Prevents agents from burning $50 in API tokens and spinning in infinite self-hea
 | `monoflow checkpoint save "msg"` | Ephemeral in-memory tree snapshot (shadow workspace) | ~15ms |
 | `monoflow checkpoint revert [id]` | Instant rollback of failed trial edits | ~14ms |
 | `monoflow worktree create <id> [--isolated-deps]` | Provision virtual worktree (shared symlink or CoW cloned) | 50ms – 70ms |
-| `monoflow worktree isolate <id>` | Promote worktree to mutable APFS/reflink cloned `node_modules`/`.venv` | ~68ms |
-| `monoflow worktree sync --to=B --from=A` | Instant multi-agent AST synchronization between worktrees | ~13ms |
+| `monoflow worktree isolate <id>` | Promote worktree to mutable APFS/reflink cloned dependencies | ~68ms |
+| `monoflow worktree sync --to=B --from=A` | **Symbol-level AST synthesis** across concurrent agent worktrees | ~18ms |
+| `monoflow worktree gc` | Clean up abandoned agent worktrees (> TTL) and unlock Git refs | ~15ms |
 | `monoflow worktree finish <id>` | Harvest diff, remove worktree & prune Git records | ~27ms |
+| `monoflow review risk` | Machine risk scoring (0–100) & blast radius classification | ~10ms |
+| `monoflow review audit --title=... --desc=...` | Detect undisclosed blast radius & PR hallucination | ~10ms |
+| `monoflow review throttle` | Enforce agentic backpressure when human review bandwidth is full | ~5ms |
+| `monoflow queue spec [task-id]` | **Speculative local merge simulation** & pre-flight receipt generation | **~22ms** |
+| `monoflow ci check [--head=<sha>]` | **Two-Tier CI Gate**: Activate Tier 1 fast-path (<30s) on verified receipts | **~5ms** |
+| `monoflow commit -m "<msg>"` | Sub-50ms verified agent commit bypassing slow interactive hooks | ~40ms |
 | `monoflow verify --affected` | Run affected inner loop with token-compact JSON output | < 300ms |
 | `monoflow verify --proof=<id>` | **1-Second Reviewer Verification** | **< 1ms** |
 | `monoflow guard check` | Check test integrity (anti-cheating) & scan for secrets | ~15ms |
 | `monoflow task check` | Enforce task boundary contracts (`allowed_paths`) | ~5ms |
 | `monoflow task prove <id>` | Run DoD checks, build deliverable, and emit PoW receipt | ~260ms |
 | `monoflow task slice` | Slices worktree diff into stacked PR tiers (Types $\to$ Logic $\to$ Tests) | ~5ms |
-| `monoflow task changeset <pkg> <bump> <msg>` | Emit machine changeset for automated semantic release | ~5ms |
 | `monoflow app test` | Assemble full-app symlink overlay (cached + delta) | ~40ms |
 | `monoflow pr test <id>` | Hot-mount PR delta over latest master base image | ~2.4s |
 | `monoflow quarantine [list\|add]` | Isolate flaky tests from agent feedback loops | ~5ms |

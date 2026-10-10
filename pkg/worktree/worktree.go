@@ -1,6 +1,7 @@
 package worktree
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/antigravity/monoflow/pkg/merge"
 )
 
 // WorktreeInfo records metadata for an active virtual worktree.
@@ -17,6 +20,7 @@ type WorktreeInfo struct {
 	AgentID         string    `json:"agent_id"`
 	Path            string    `json:"path"`
 	CreatedAt       time.Time `json:"created_at"`
+	LastHeartbeat   time.Time `json:"last_heartbeat"`
 	HeadSHA         string    `json:"head_sha"`
 	SymlinksCount   int       `json:"symlinks_count"`
 	Isolated        bool      `json:"isolated"`
@@ -161,6 +165,7 @@ func (m *Manager) CreateWithOpts(agentID string, opts CreateOptions) (*WorktreeI
 		AgentID:         agentID,
 		Path:            wtPath,
 		CreatedAt:       time.Now().UTC(),
+		LastHeartbeat:   time.Now().UTC(),
 		HeadSHA:         headSHA,
 		SymlinksCount:   symlinkCount,
 		Isolated:        opts.IsolatedDeps,
@@ -288,7 +293,7 @@ func (m *Manager) List() ([]WorktreeInfo, error) {
 	return res, nil
 }
 
-// Sync merges changes from another agent's worktree into the current worktree.
+// Sync merges changes from another agent's worktree into the current worktree using AST synthesis when files collide.
 func (m *Manager) Sync(currentAgentID, fromAgentID string) ([]string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -302,6 +307,10 @@ func (m *Manager) Sync(currentAgentID, fromAgentID string) ([]string, error) {
 	if !fileExists(destDir) {
 		return nil, fmt.Errorf("destination worktree for agent '%s' not found", currentAgentID)
 	}
+
+	// Update heartbeats
+	_ = m.touchInternal(currentAgentID)
+	_ = m.touchInternal(fromAgentID)
 
 	// Find modified files in srcDir
 	cmd := exec.Command("git", "status", "--porcelain")
@@ -321,17 +330,75 @@ func (m *Manager) Sync(currentAgentID, fromAgentID string) ([]string, error) {
 			srcFile := filepath.Join(srcDir, relPath)
 			destFile := filepath.Join(destDir, relPath)
 
-			if fileExists(srcFile) {
-				_ = os.MkdirAll(filepath.Dir(destFile), 0755)
-				if data, err := os.ReadFile(srcFile); err == nil {
-					_ = os.WriteFile(destFile, data, 0644)
-					syncedFiles = append(syncedFiles, relPath)
+			if !fileExists(srcFile) {
+				continue
+			}
+
+			_ = os.MkdirAll(filepath.Dir(destFile), 0755)
+
+			theirsBytes, errTheirs := os.ReadFile(srcFile)
+			if errTheirs != nil {
+				continue
+			}
+
+			if !fileExists(destFile) {
+				// File does not exist in destination, simple copy
+				_ = os.WriteFile(destFile, theirsBytes, 0644)
+				syncedFiles = append(syncedFiles, relPath)
+				continue
+			}
+
+			// Destination file exists: check if locally modified in destDir
+			oursBytes, errOurs := os.ReadFile(destFile)
+			if errOurs != nil {
+				_ = os.WriteFile(destFile, theirsBytes, 0644)
+				syncedFiles = append(syncedFiles, relPath)
+				continue
+			}
+
+			cmdBase := exec.Command("git", "show", "HEAD:"+relPath)
+			cmdBase.Dir = destDir
+			baseBytes, _ := cmdBase.Output()
+
+			if bytes.Equal(oursBytes, baseBytes) {
+				// Not modified in destination, safe update
+				_ = os.WriteFile(destFile, theirsBytes, 0644)
+				syncedFiles = append(syncedFiles, relPath)
+			} else {
+				// Both worktrees modified the same file! Run semantic AST synthesis
+				mergeRes, errMerge := merge.Merge3Way(relPath, baseBytes, oursBytes, theirsBytes)
+				if errMerge == nil && !mergeRes.HasConflict {
+					_ = os.WriteFile(destFile, mergeRes.MergedContent, 0644)
+					syncedFiles = append(syncedFiles, relPath+" (synthesized AST)")
+				} else {
+					// In case of conflict, retain local file safely without writing conflict markers
+					syncedFiles = append(syncedFiles, relPath+" (collision: preserved local)")
 				}
 			}
 		}
 	}
 
 	return syncedFiles, nil
+}
+
+// Touch updates the heartbeat timestamp for an active worktree.
+func (m *Manager) Touch(agentID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.touchInternal(agentID)
+}
+
+func (m *Manager) touchInternal(agentID string) error {
+	reg, err := m.loadRegistry()
+	if err != nil {
+		return err
+	}
+	if info, ok := reg[agentID]; ok {
+		info.LastHeartbeat = time.Now().UTC()
+		reg[agentID] = info
+		return m.saveRegistry(reg)
+	}
+	return nil
 }
 
 // Finish tears down the virtual worktree and prunes git records in ~20ms.
@@ -354,7 +421,7 @@ func (m *Manager) Finish(agentID string) error {
 	return nil
 }
 
-// PruneStale cleans up worktrees that are older than maxAge.
+// PruneStale cleans up worktrees that are older than maxAge or orphaned.
 func (m *Manager) PruneStale(maxAge time.Duration) ([]string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -364,7 +431,11 @@ func (m *Manager) PruneStale(maxAge time.Duration) ([]string, error) {
 	now := time.Now().UTC()
 
 	for id, info := range reg {
-		if now.Sub(info.CreatedAt) > maxAge {
+		lastSeen := info.LastHeartbeat
+		if lastSeen.IsZero() {
+			lastSeen = info.CreatedAt
+		}
+		if now.Sub(lastSeen) > maxAge {
 			wtPath := filepath.Join(m.worktreesDir, id)
 			_, _ = m.runGit("worktree", "remove", "--force", wtPath)
 			_ = os.RemoveAll(wtPath)
@@ -373,10 +444,28 @@ func (m *Manager) PruneStale(maxAge time.Duration) ([]string, error) {
 		}
 	}
 
+	// Also clean up any orphaned directory in worktreesDir not tracked in registry
+	entries, _ := os.ReadDir(m.worktreesDir)
+	for _, e := range entries {
+		if e.IsDir() && e.Name() != "registry.json" {
+			if _, exists := reg[e.Name()]; !exists {
+				orphanPath := filepath.Join(m.worktreesDir, e.Name())
+				_, _ = m.runGit("worktree", "remove", "--force", orphanPath)
+				_ = os.RemoveAll(orphanPath)
+				pruned = append(pruned, e.Name()+" (orphan)")
+			}
+		}
+	}
+
 	_, _ = m.runGit("worktree", "prune")
 	_ = m.saveRegistry(reg)
 
 	return pruned, nil
+}
+
+// GC is an alias for PruneStale.
+func (m *Manager) GC(maxAge time.Duration) ([]string, error) {
+	return m.PruneStale(maxAge)
 }
 
 func (m *Manager) loadRegistry() (map[string]WorktreeInfo, error) {

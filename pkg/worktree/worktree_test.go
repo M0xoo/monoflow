@@ -4,7 +4,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 func setupTestRepo(t *testing.T) string {
@@ -168,5 +170,76 @@ func TestWorktreeIsolateDeps(t *testing.T) {
 	fiShared, _ := os.Lstat(sharedNM)
 	if fiShared.Mode()&os.ModeSymlink != 0 {
 		t.Errorf("expected promoted node_modules to be a real directory, not symlink")
+	}
+}
+
+func TestWorktreeConcurrentSameFileASTMerge(t *testing.T) {
+	repoDir := setupTestRepo(t)
+	defer os.RemoveAll(repoDir)
+
+	mgr := NewManager(repoDir)
+
+	// Agent 1
+	info1, err := mgr.Create("agent-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Agent 2
+	info2, err := mgr.Create("agent-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Agent 1 adds alphaFn to index.ts
+	f1 := filepath.Join(info1.Path, "index.ts")
+	_ = os.WriteFile(f1, []byte("console.log('root');\n\nexport function alphaFn() { return 1; }\n"), 0644)
+
+	// Agent 2 adds betaFn to index.ts
+	f2 := filepath.Join(info2.Path, "index.ts")
+	_ = os.WriteFile(f2, []byte("console.log('root');\n\nexport function betaFn() { return 2; }\n"), 0644)
+
+	// Sync from agent-1 into agent-2
+	synced, err := mgr.Sync("agent-2", "agent-1")
+	if err != nil {
+		t.Fatalf("unexpected sync error: %v", err)
+	}
+	if len(synced) == 0 {
+		t.Fatalf("expected synced files, got none")
+	}
+
+	content2, _ := os.ReadFile(f2)
+	str2 := string(content2)
+
+	if !strings.Contains(str2, "alphaFn") || !strings.Contains(str2, "betaFn") {
+		t.Fatalf("expected both alphaFn and betaFn synthesized, got:\n%s", str2)
+	}
+}
+
+func TestWorktreeHeartbeatAndGC(t *testing.T) {
+	repoDir := setupTestRepo(t)
+	defer os.RemoveAll(repoDir)
+
+	mgr := NewManager(repoDir)
+
+	_, err := mgr.Create("stale-agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_ = mgr.Touch("stale-agent")
+
+	// Prune with -1 duration to simulate expired lease
+	pruned, err := mgr.PruneStale(-1 * time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pruned) == 0 {
+		t.Fatalf("expected stale worktree to be pruned")
+	}
+
+	list, _ := mgr.List()
+	if len(list) != 0 {
+		t.Fatalf("expected 0 active worktrees after GC, got %d", len(list))
 	}
 }

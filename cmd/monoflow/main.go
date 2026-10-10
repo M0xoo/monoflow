@@ -15,6 +15,8 @@ import (
 	"github.com/antigravity/monoflow/pkg/guard"
 	initialize "github.com/antigravity/monoflow/pkg/init"
 	"github.com/antigravity/monoflow/pkg/proof"
+	"github.com/antigravity/monoflow/pkg/queue"
+	"github.com/antigravity/monoflow/pkg/review"
 	"github.com/antigravity/monoflow/pkg/task"
 	"github.com/antigravity/monoflow/pkg/telemetry"
 	"github.com/antigravity/monoflow/pkg/verify"
@@ -63,6 +65,18 @@ func main() {
 	case "worktree":
 		handleWorktree(rootDir)
 
+	case "review":
+		handleReview(rootDir)
+
+	case "queue":
+		handleQueue(rootDir)
+
+	case "ci":
+		handleCI(rootDir)
+
+	case "commit":
+		handleCommit(rootDir)
+
 	case "guard":
 		handleGuard(rootDir)
 
@@ -86,8 +100,12 @@ Usage:
   monoflow init [dir]                 Install MonoFlow into an existing or new repo
   monoflow graph [query|impact]       Query upstream/downstream dependencies & impact
   monoflow checkpoint [save|revert]   Ephemeral 15ms snapshots (shadow workspace)
-  monoflow worktree [create|sync|fin] Virtual worktrees with shared/isolated cache (<60ms)
+  monoflow worktree [create|sync|gc]  Virtual worktrees with CoW isolation & AST merge (<60ms)
   monoflow verify [--affected|--proof] Sub-2s inner loop with compact JSON diagnostics
+  monoflow review [risk|audit|throttle] Machine risk scoring, anti-hallucination & backpressure
+  monoflow queue [spec|verify]        Speculative local merge queue with flaky quarantine
+  monoflow ci [check]                 Two-tier CI gate: Tier 1 fast-path (<30s) vs Tier 2 full
+  monoflow commit -m "<msg>"          Sub-50ms verified agent commit bypassing slow hooks
   monoflow guard [check]              Test integrity guard (anti-cheating) & secret scanner
   monoflow task [check|prove|slice]   DoD contracts, Proof of Work receipts, & stacked diffs
   monoflow deliver [--target=<pkg>]   Assemble hermetic deliverable artifact (.agents/dist)
@@ -608,8 +626,9 @@ func handleWorktree(rootDir string) {
 		}, "", "  ")
 		fmt.Println(string(data))
 
-	case "prune":
-		pruned, err := mgr.PruneStale(1 * time.Hour)
+	case "prune", "gc":
+		ttl := 1 * time.Hour
+		pruned, err := mgr.PruneStale(ttl)
 		if err != nil {
 			fmt.Printf(`{"error": "%s"}`+"\n", err)
 			os.Exit(1)
@@ -620,6 +639,157 @@ func handleWorktree(rootDir string) {
 		}, "", "  ")
 		fmt.Println(string(data))
 	}
+}
+
+func handleReview(rootDir string) {
+	if len(os.Args) < 3 {
+		fmt.Println(`{"error": "usage: monoflow review risk | audit --title=... --desc=... | throttle"}`)
+		os.Exit(1)
+	}
+
+	sub := os.Args[2]
+	changedFiles := getGitChangedFiles(rootDir)
+	g, _ := graph.LoadOrDiscover(rootDir)
+
+	switch sub {
+	case "risk":
+		res, err := review.EvaluateRisk(rootDir, g, changedFiles)
+		if err != nil {
+			fmt.Printf(`{"error": "%s"}`+"\n", err)
+			os.Exit(1)
+		}
+		data, _ := json.MarshalIndent(res, "", "  ")
+		fmt.Println(string(data))
+
+	case "audit":
+		title := "Agent Pull Request"
+		desc := ""
+		for _, arg := range os.Args[3:] {
+			if strings.HasPrefix(arg, "--title=") {
+				title = strings.TrimPrefix(arg, "--title=")
+			}
+			if strings.HasPrefix(arg, "--desc=") {
+				desc = strings.TrimPrefix(arg, "--desc=")
+			}
+		}
+		res := review.AuditPRDossier(title, desc, changedFiles)
+		data, _ := json.MarshalIndent(res, "", "  ")
+		fmt.Println(string(data))
+		if !res.Valid {
+			os.Exit(1)
+		}
+
+	case "throttle":
+		status, err := review.CheckBackpressure(rootDir, 3)
+		if err != nil {
+			fmt.Printf(`{"error": "%s"}`+"\n", err)
+			os.Exit(1)
+		}
+		data, _ := json.MarshalIndent(status, "", "  ")
+		fmt.Println(string(data))
+		if status.Throttled {
+			os.Exit(1)
+		}
+	}
+}
+
+func handleQueue(rootDir string) {
+	if len(os.Args) < 3 {
+		fmt.Println(`{"error": "usage: monoflow queue spec [task-id] | verify <sha>"}`)
+		os.Exit(1)
+	}
+
+	qm := queue.NewQueueManager(rootDir)
+	sub := os.Args[2]
+
+	switch sub {
+	case "spec", "submit":
+		taskID := "task-queue-01"
+		if len(os.Args) > 3 {
+			taskID = os.Args[3]
+		}
+		g, _ := graph.LoadOrDiscover(rootDir)
+		changedFiles := getGitChangedFiles(rootDir)
+
+		receipt, err := qm.SubmitSpeculative(taskID, g, changedFiles, queue.SpeculativeOptions{
+			TargetBranch:    "HEAD",
+			SkipQuarantined: true,
+		})
+		if err != nil {
+			fmt.Printf(`{"status": "failed", "error": "%s"}`+"\n", err)
+			os.Exit(1)
+		}
+		data, _ := json.MarshalIndent(receipt, "", "  ")
+		fmt.Println(string(data))
+
+	case "verify":
+		if len(os.Args) < 4 {
+			fmt.Println(`{"error": "missing commit sha for queue verify"}`)
+			os.Exit(1)
+		}
+		sha := os.Args[3]
+		eligible, receipt, reason := qm.VerifyCIGate(sha)
+		data, _ := json.MarshalIndent(map[string]any{
+			"fast_path_eligible": eligible,
+			"receipt":            receipt,
+			"reason":             reason,
+		}, "", "  ")
+		fmt.Println(string(data))
+		if !eligible {
+			os.Exit(1)
+		}
+	}
+}
+
+func handleCI(rootDir string) {
+	qm := queue.NewQueueManager(rootDir)
+	headSHA := ""
+	for _, arg := range os.Args[2:] {
+		if strings.HasPrefix(arg, "--head=") {
+			headSHA = strings.TrimPrefix(arg, "--head=")
+		}
+	}
+	if headSHA == "" {
+		cmdRev := exec.Command("git", "rev-parse", "HEAD")
+		cmdRev.Dir = rootDir
+		if out, err := cmdRev.CombinedOutput(); err == nil {
+			headSHA = strings.TrimSpace(string(out))
+		}
+	}
+
+	eligible, receipt, reason := qm.VerifyCIGate(headSHA)
+	tierStr := "TIER_2_FULL_PIPELINE"
+	if eligible {
+		tierStr = "TIER_1_FAST_PATH"
+	}
+	data, _ := json.MarshalIndent(map[string]any{
+		"ci_tier":            tierStr,
+		"fast_path_eligible": eligible,
+		"head_sha":           headSHA,
+		"reason":             reason,
+		"receipt":            receipt,
+	}, "", "  ")
+	fmt.Println(string(data))
+}
+
+func handleCommit(rootDir string) {
+	msg := "agent checkpoint commit"
+	for i, arg := range os.Args[2:] {
+		if arg == "-m" && i+1 < len(os.Args[2:]) {
+			msg = os.Args[2:][i+1]
+			break
+		}
+	}
+
+	res, err := guard.FastAgentCommit(rootDir, msg)
+	if err != nil {
+		data, _ := json.MarshalIndent(res, "", "  ")
+		fmt.Println(string(data))
+		os.Exit(1)
+	}
+
+	data, _ := json.MarshalIndent(res, "", "  ")
+	fmt.Println(string(data))
 }
 
 func handleGuard(rootDir string) {

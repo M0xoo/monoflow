@@ -104,3 +104,30 @@ func TestScanSecrets(t *testing.T) {
 		t.Errorf("unexpected violation type: %s", violations[0].Type)
 	}
 }
+
+func TestFastAgentCommit(t *testing.T) {
+	repoDir := setupTestGitRepoForGuard(t)
+	defer os.RemoveAll(repoDir)
+
+	// Valid edit
+	validFile := filepath.Join(repoDir, "util.ts")
+	_ = os.WriteFile(validFile, []byte("export const add = (a: number, b: number) => a + b;\n"), 0644)
+
+	res, err := FastAgentCommit(repoDir, "feat: add utility")
+	if err != nil {
+		t.Fatalf("FastAgentCommit failed on valid edit: %v", err)
+	}
+	if res.Status != "committed" || res.CommitSHA == "" {
+		t.Fatalf("expected committed status, got: %+v", res)
+	}
+
+	// Invalid edit (weakened test)
+	testFile := filepath.Join(repoDir, "tax.test.ts")
+	_ = os.WriteFile(testFile, []byte("test('tax', () => { expect(true).toBe(true); });\n"), 0644)
+
+	_, err = FastAgentCommit(repoDir, "test: weakened test")
+	if err == nil {
+		t.Fatalf("expected FastAgentCommit to be blocked on weakened test, but it succeeded")
+	}
+}
+
