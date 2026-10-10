@@ -155,7 +155,7 @@ Usage:
   monoflow cache [status|clean|serve] Local & remote package cache metrics, hit ratio & built-in HTTP daemon
   monoflow scenario [run] [--json]    Real end-to-end multi-agent enterprise monorepo simulation
   monoflow app test                   Delta compilation + symlink overlay (< 5s full-app)
-  monoflow pr [create|list|view|review|test|local|merge] Full agent-native PR suite with affected packages
+  monoflow pr [create|list|view|status|review|test|local|merge] Full agent-native PR suite with affected packages
   monoflow quarantine [list|add]      Manage flaky test quarantine
   monoflow version [list|bump|apply|check] SemVer package versioning, changesets & cascade`)
 }
@@ -621,6 +621,7 @@ func handlePR(rootDir string) {
   monoflow pr create [--title="..."] [--body="..."] [--base=main] [--draft] [--stack] [--no-push]
   monoflow pr list [--state=open|closed|merged|all] [--limit=N]
   monoflow pr view <id>
+  monoflow pr status [id] [--json]
   monoflow pr review <id> [--approve] [--comment="..."] [--reject]
   monoflow pr test <id> [--against-master] [--base=main]
   monoflow pr local <id> [--worktree=<id>] [--deps=contracts|source|none]
@@ -700,6 +701,34 @@ func handlePR(rootDir string) {
 		}
 		data, _ := json.MarshalIndent(meta, "", "  ")
 		fmt.Println(string(data))
+
+	case "status":
+		prID := ""
+		asJSON := false
+		for _, arg := range os.Args[3:] {
+			if arg == "--json" {
+				asJSON = true
+			} else if !strings.HasPrefix(arg, "-") && prID == "" {
+				prID = arg
+			}
+		}
+
+		res, err := mgr.Status(prID)
+		if err != nil {
+			if asJSON {
+				fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
+			} else {
+				fmt.Printf("❌ Failed to get PR status: %v\n", err)
+			}
+			os.Exit(1)
+		}
+
+		if asJSON {
+			data, _ := json.MarshalIndent(res, "", "  ")
+			fmt.Println(string(data))
+		} else {
+			fmt.Println(res.FormatView())
+		}
 
 	case "review":
 		if len(os.Args) < 4 {
@@ -812,7 +841,7 @@ func handlePR(rootDir string) {
 		opts := pr.TestOptions{BaseBranch: "main"}
 		res, err := mgr.Test(sub, opts)
 		if err != nil {
-			fmt.Printf(`{"error": "unknown pr subcommand '%s'; usage: monoflow pr [create|list|view|review|test|local|merge]"}`+"\n", sub)
+			fmt.Printf(`{"error": "unknown pr subcommand '%s'; usage: monoflow pr [create|list|view|status|review|test|local|merge]"}`+"\n", sub)
 			os.Exit(1)
 		}
 		data, _ := json.MarshalIndent(res, "", "  ")

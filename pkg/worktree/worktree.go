@@ -112,6 +112,8 @@ func (m *Manager) CreateWithOpts(agentID string, opts CreateOptions) (*WorktreeI
 		".pnpm-store",
 		"target",
 		".agents/cache",
+		".agents/prs",
+		".agents/proofs",
 		"go.work",
 		".venv",
 	}

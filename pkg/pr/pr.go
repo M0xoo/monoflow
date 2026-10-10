@@ -163,12 +163,32 @@ type PRManager struct {
 
 // NewManager creates an instance of PRManager.
 func NewManager(rootDir string) *PRManager {
-	dir := filepath.Join(rootDir, ".agents", "prs")
-	_ = os.MkdirAll(dir, 0755)
+	dir := resolvePRDir(rootDir)
 	return &PRManager{
 		RootDir: rootDir,
 		prsDir:  dir,
 	}
+}
+
+func resolvePRDir(rootDir string) string {
+	dir := filepath.Join(rootDir, ".agents", "prs")
+	if entries, err := os.ReadDir(dir); err == nil && len(entries) > 0 {
+		return dir
+	}
+	cmd := exec.Command("git", "rev-parse", "--git-common-dir")
+	cmd.Dir = rootDir
+	if out, err := cmd.CombinedOutput(); err == nil {
+		commonDir := strings.TrimSpace(string(out))
+		if commonDir != "" {
+			mainRoot := filepath.Dir(commonDir)
+			candidate := filepath.Join(mainRoot, ".agents", "prs")
+			if entries, err := os.ReadDir(candidate); err == nil && len(entries) > 0 {
+				return candidate
+			}
+		}
+	}
+	_ = os.MkdirAll(dir, 0755)
+	return dir
 }
 
 // Create generates a complete PR with machine risk score, proof of work, and GitHub integration.
