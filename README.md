@@ -151,6 +151,7 @@ AI agents develop and propose changes via pull requests with automated machine r
   monoflow pr local 42 --worktree=agent-review-42 --deps=contracts
   ```
 * **Hot-Mount PR Delta Testing (`monoflow pr test <id>`)**: Verifies the PR against the base branch using delta-overlay compilation in **~2.4 seconds**.
+* **Unified GitHub / MonoFlow PR Bridging (`monoflow pr status [id]`)**: Displays both the local machine proof receipt (DoD checks, execution duration, git tree SHA) and the remote GitHub URL in a single view, eliminating any confusion between local vs. remote PR states.
 * **Machine Review & Sign-Off (`monoflow pr review <id>`)**: Audits claims against git diffs and auto-approves Tier 1 changesets.
 * **Speculative Merge (`monoflow pr merge <id>`)**: Safely promotes PRs through MonoFlow's speculative local merge queue.
 
@@ -278,6 +279,7 @@ Validate your agent team protocols and CI performance locally:
 | `monoflow pr create` | Create PR with machine risk score, proof receipt, and affected manifest | ~350ms |
 | `monoflow pr list` | List active PRs with risk tiers and CI status | ~25ms |
 | `monoflow pr view <id>` | View PR metadata, risk breakdown, and DoD checks | ~15ms |
+| `monoflow pr status [id]` | **Single bridged view of local proof receipt & remote GitHub URL** | **~20ms** |
 | `monoflow pr local <id>` | **Project workspace / worktree to PR's affected packages** | **< 100ms** |
 | `monoflow pr test <id>` | Hot-mount PR delta over latest master base image | ~2.4s |
 | `monoflow pr review <id>` | Machine review and sign-off on PR | ~30ms |
