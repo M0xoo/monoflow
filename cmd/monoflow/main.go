@@ -258,6 +258,7 @@ var commandDetails = map[string]string{
 	"task":   `  task check | task slice | task prove [task-id] | task changeset`,
 	"sync": `  sync                                On an agent/feature branch: rebase onto origin/<base> (aborts cleanly on conflict)
                                       On the base branch: fast-forward from the remote
+  sync --merge                        Merge the base instead (resolve conflicts once, then 'monoflow commit')
   sync [remote] [branch] [--rebase] [--autostash]   Explicit remote/branch`,
 	"branch": `  branch                              List branches
   branch <name> [-c|--create]         Switch to (or create) a branch`,
@@ -1771,11 +1772,14 @@ func handleSync(rootDir string) {
 	branch := ""
 	rebase := false
 	autostash := false
+	mergeMode := false
 
 	var positional []string
 	for _, arg := range os.Args[2:] {
 		if arg == "--rebase" {
 			rebase = true
+		} else if arg == "--merge" {
+			mergeMode = true
 		} else if arg == "--autostash" {
 			autostash = true
 		} else if strings.HasPrefix(arg, "--remote=") {
@@ -1809,7 +1813,7 @@ func handleSync(rootDir string) {
 			base = "master"
 		}
 		branch = base
-		if current != base {
+		if current != base && !mergeMode {
 			rebase = true
 			autostash = true
 		}
@@ -1827,7 +1831,10 @@ func handleSync(rootDir string) {
 	// 2. Fast-forward or Rebase
 	var mergeArgs []string
 	strategy := "fast-forward"
-	if rebase {
+	if mergeMode {
+		strategy = "merge"
+		mergeArgs = []string{"merge", "--no-edit", "FETCH_HEAD"}
+	} else if rebase {
 		strategy = "rebase"
 		mergeArgs = []string{"rebase"}
 		if autostash {
@@ -1842,12 +1849,20 @@ func handleSync(rootDir string) {
 	cmdMerge.Dir = rootDir
 	if out, err := cmdMerge.CombinedOutput(); err != nil {
 		res := map[string]any{"status": "sync_failed", "step": strategy, "error": err.Error(), "output": verify.CompactFailure(string(out))}
+		conf, _ := exec.Command("git", "-C", rootDir, "diff", "--name-only", "--diff-filter=U").Output()
+		res["conflicting_files"] = strings.Fields(string(conf))
+		if mergeMode && len(res["conflicting_files"].([]string)) > 0 {
+			// Conflicts are resolved once, in place: the markers stay for the agent.
+			res["status"] = "conflicts"
+			res["hint"] = "Resolve the <<<<<<< markers in conflicting_files (keep both sides' intent), run 'monoflow verify --affected', then 'monoflow commit -m \"merge " + branch + "\"' to finish the merge."
+			data, _ := json.MarshalIndent(res, "", "  ")
+			fmt.Println(string(data))
+			os.Exit(1)
+		}
 		if rebase {
 			// Never leave the worktree mid-rebase: report the conflicts and restore the branch.
-			conf, _ := exec.Command("git", "-C", rootDir, "diff", "--name-only", "--diff-filter=U").Output()
 			_ = exec.Command("git", "-C", rootDir, "rebase", "--abort").Run()
-			res["conflicting_files"] = strings.Fields(string(conf))
-			res["hint"] = fmt.Sprintf("Your branch conflicts with %s/%s. Branch left unchanged. Update the conflicting files to fit the latest %s (see 'git diff %s...FETCH_HEAD -- <file>'), commit, and run 'monoflow sync' again.", remote, branch, branch, current)
+			res["hint"] = fmt.Sprintf("Your branch conflicts with %s/%s; branch left unchanged. Run 'monoflow sync --merge' to merge %s once and resolve the conflicts in place (a rebase would replay every commit).", remote, branch, branch)
 		} else {
 			res["hint"] = "Branches have diverged; run 'monoflow sync' from your agent branch (rebases onto the base) or pass --rebase."
 		}
