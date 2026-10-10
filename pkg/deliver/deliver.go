@@ -67,7 +67,11 @@ func BuildDeliverableWithOptions(rootDir string, pkg *graph.PackageNode, opts Bu
 	}
 
 	cacheMgr := cache.NewManager(rootDir, cache.DefaultConfig(rootDir))
-	cacheKey, _ := cacheMgr.ComputePackageKey(pkg, nil, buildCmd, "build")
+	var upstream map[string]string
+	if g, err := graph.LoadOrDiscover(rootDir); err == nil {
+		upstream = cacheMgr.UpstreamKeys(g, pkg)
+	}
+	cacheKey, _ := cacheMgr.ComputePackageKey(pkg, upstream, buildCmd, "build")
 
 	// 1. Check local/remote cache
 	if !opts.NoCache && cacheKey != "" {

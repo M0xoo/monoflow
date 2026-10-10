@@ -99,7 +99,7 @@ func (r *Runner) VerifyTarget(pkg *graph.PackageNode, opt VerifyOptions) TargetR
 	if pkg.Language == graph.LangGo && len(pkg.PinnedDependencies) > 0 {
 		if _, err := os.Stat(filepath.Join(r.RootDir, "go.work")); err == nil {
 			for i, c := range cmds {
-				cmds[i] = "GOWORK=off " + c
+				cmds[i] = "export GOWORK=off; " + c
 			}
 		}
 	}
@@ -125,7 +125,7 @@ func (r *Runner) VerifyTarget(pkg *graph.PackageNode, opt VerifyOptions) TargetR
 	var cacheKey string
 	if r.cacheMgr != nil {
 		modeTag := opt.Stage + ":" + opt.Mode
-		cacheKey, _ = r.cacheMgr.ComputePackageKey(pkg, nil, cmdStr, modeTag)
+		cacheKey, _ = r.cacheMgr.ComputePackageKey(pkg, r.upstreamKeys(pkg), cmdStr, modeTag)
 		if !opt.NoCache && cacheKey != "" {
 			if rec, hit := r.cacheMgr.GetVerification(cacheKey); hit && rec.Status == "passed" {
 				res.Status = "passed"
@@ -249,22 +249,7 @@ func (r *Runner) upstreamKeys(pkg *graph.PackageNode) map[string]string {
 	if r.graph == nil || r.cacheMgr == nil {
 		return nil
 	}
-	keys := map[string]string{}
-	visited := map[string]bool{pkg.Name: true}
-	queue := r.graph.GetUpstream(pkg.Name)
-	for len(queue) > 0 {
-		name := queue[0]
-		queue = queue[1:]
-		if visited[name] {
-			continue
-		}
-		visited[name] = true
-		if dep, ok := r.graph.GetPackage(name); ok {
-			keys[name], _ = r.cacheMgr.ComputePackageKey(dep, nil, "", "source")
-		}
-		queue = append(queue, r.graph.GetUpstream(name)...)
-	}
-	return keys
+	return r.cacheMgr.UpstreamKeys(r.graph, pkg)
 }
 
 // VerifyAffected runs verification in parallel for all affected packages.

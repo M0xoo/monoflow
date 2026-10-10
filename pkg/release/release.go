@@ -207,6 +207,9 @@ func Repoint(root string, g *graph.DependencyGraph, consumer, dep, version strin
 	cdir := filepath.Join(root, c.Path)
 	switch c.Language {
 	case graph.LangGo:
+		// Go merges the replace directives of all go.work members, so a module that pins a
+		// release cannot stay in the workspace (it builds standalone, GOWORK=off).
+		setGoWorkMember(root, c.Path, version == "")
 		return repointGo(cdir, root, d, rel, version)
 	case graph.LangJavaScript, graph.LangTypeScript:
 		return repointNPM(cdir, root, d.Name, rel, version)
@@ -315,4 +318,36 @@ func repointPython(cdir, depName, rel string) (string, error) {
 func readFile(p string) string {
 	b, _ := os.ReadFile(p)
 	return string(b)
+}
+
+// setGoWorkMember adds or removes a module directory from go.work's use list.
+func setGoWorkMember(root, modPath string, member bool) {
+	gw := filepath.Join(root, "go.work")
+	data, err := os.ReadFile(gw)
+	if err != nil {
+		return
+	}
+	entry := "./" + strings.TrimPrefix(filepath.ToSlash(modPath), "./")
+	lines := strings.Split(string(data), "\n")
+	var out []string
+	present := false
+	for _, l := range lines {
+		t := strings.Trim(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(l), "use ")), `"`)
+		if t == entry || t == strings.TrimPrefix(entry, "./") {
+			present = true
+			if !member {
+				continue
+			}
+		}
+		out = append(out, l)
+	}
+	if member && !present {
+		for i, l := range out {
+			if strings.TrimSpace(l) == "use (" {
+				out = append(out[:i+1], append([]string{"\t" + entry}, out[i+1:]...)...)
+				break
+			}
+		}
+	}
+	_ = os.WriteFile(gw, []byte(strings.Join(out, "\n")), 0644)
 }

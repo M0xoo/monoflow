@@ -200,6 +200,29 @@ func (m *Manager) SetHTTPClient(client *http.Client) {
 	m.httpClient = client
 }
 
+// UpstreamKeys returns source hashes of pkg's transitive live (source) dependencies, for
+// use as ComputePackageKey's upstreamKeys: a changed dependency must invalidate the
+// dependent's cached verification and build artifact. Pinned dependencies need no entry:
+// the pinned version is part of the consumer's own (hashed) manifest.
+func (m *Manager) UpstreamKeys(g *graph.DependencyGraph, pkg *graph.PackageNode) map[string]string {
+	keys := map[string]string{}
+	visited := map[string]bool{pkg.Name: true}
+	queue := g.GetUpstream(pkg.Name)
+	for len(queue) > 0 {
+		name := queue[0]
+		queue = queue[1:]
+		if visited[name] {
+			continue
+		}
+		visited[name] = true
+		if dep, ok := g.GetPackage(name); ok {
+			keys[name], _ = m.ComputePackageKey(dep, nil, "", "source")
+		}
+		queue = append(queue, g.GetUpstream(name)...)
+	}
+	return keys
+}
+
 // ComputePackageKey calculates the deterministic cryptographic fingerprint of a package's inputs:
 // 1. Recursive hash of all package source files (ignoring non-source/transient directories)
 // 2. Package manifest / configuration (name, language, version)
