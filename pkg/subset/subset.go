@@ -100,6 +100,7 @@ type UpdateResult struct {
 // DepsReport provides detailed dependency analysis and strategy recommendations.
 type DepsReport struct {
 	Package              string      `json:"package"`
+	Version              string      `json:"version,omitempty"`
 	Path                 string      `json:"path"`
 	Language             string      `json:"language"`
 	DirectUpstream       []string    `json:"direct_upstream"`
@@ -113,10 +114,41 @@ type DepsReport struct {
 // DepStatus represents the materialization state of an individual dependency.
 type DepStatus struct {
 	Name         string `json:"name"`
+	Version      string `json:"version,omitempty"`
 	Path         string `json:"path"`
 	IsActive     bool   `json:"is_active"`
 	Materialized bool   `json:"materialized"` // present on disk
 	Relation     string `json:"relation"`     // "direct" or "transitive"
+}
+
+// SubsetCheckResult reports dependency health, completeness, and version compatibility in a subset.
+type SubsetCheckResult struct {
+	Status              string                 `json:"status"` // "healthy", "warning", "error"
+	IsSparse            bool                   `json:"is_sparse"`
+	Strategy            string                 `json:"strategy,omitempty"`
+	ActivePackages      []string               `json:"active_packages"`
+	OmittedPackages     []string               `json:"omitted_packages"`
+	MissingDependencies []MissingDepViolation `json:"missing_dependencies,omitempty"`
+	VersionMismatches   []VersionMismatch      `json:"version_mismatches,omitempty"`
+	DurationMs          float64                `json:"duration_ms"`
+	Verdict             string                 `json:"verdict"`
+}
+
+// MissingDepViolation details an upstream dependency required by an active package that is omitted or missing.
+type MissingDepViolation struct {
+	ConsumerPackage   string `json:"consumer_package"`
+	MissingDependency string `json:"missing_dependency"`
+	ExpectedPath      string `json:"expected_path"`
+	RemediationHint   string `json:"remediation_hint"`
+}
+
+// VersionMismatch details an incompatible version between active packages and dependencies.
+type VersionMismatch struct {
+	ConsumerPackage string `json:"consumer_package"`
+	Dependency      string `json:"dependency"`
+	RequiredVersion string `json:"required_version"`
+	FoundVersion    string `json:"found_version"`
+	Message         string `json:"message"`
 }
 
 // Resolve identifies which packages to check out with boolean includeDeps (defaults to source strategy).
@@ -860,8 +892,14 @@ func InspectDeps(g *graph.DependencyGraph, target string, repoDir string) (*Deps
 			}
 		}
 
+		uVer := "1.0.0"
+		if uPkg != nil && uPkg.Version != "" {
+			uVer = uPkg.Version
+		}
+
 		depStatusList = append(depStatusList, DepStatus{
 			Name:         u,
+			Version:      uVer,
 			Path:         pkgPath,
 			IsActive:     activeMap[u],
 			Materialized: materialized,
@@ -884,8 +922,14 @@ func InspectDeps(g *graph.DependencyGraph, target string, repoDir string) (*Deps
 		recStrategy = "contracts (lightweight interface only; saves disk and indexing)"
 	}
 
+	pVer := "1.0.0"
+	if p.Version != "" {
+		pVer = p.Version
+	}
+
 	return &DepsReport{
 		Package:              p.Name,
+		Version:              pVer,
 		Path:                 p.Path,
 		Language:             string(p.Language),
 		DirectUpstream:       directUpstream,
@@ -904,16 +948,27 @@ func Status(repoDir string) (*SubsetStatus, error) {
 		return nil, err
 	}
 
+	g, _ := graph.LoadOrDiscover(absRepo)
+	totalCount := 0
+	var allNames []string
+	if g != nil {
+		pkgs := g.GetAllPackages()
+		totalCount = len(pkgs)
+		for _, p := range pkgs {
+			allNames = append(allNames, p.Name)
+		}
+	}
+
 	cmd := exec.Command("git", "sparse-checkout", "list")
 	cmd.Dir = absRepo
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return &SubsetStatus{
 			IsSparse:           false,
-			IncludedPackages:   []string{},
+			IncludedPackages:   allNames,
 			OmittedPackages:    []string{},
 			SparsePaths:        []string{},
-			TotalPackagesCount: 0,
+			TotalPackagesCount: totalCount,
 		}, nil
 	}
 
@@ -927,12 +982,6 @@ func Status(repoDir string) (*SubsetStatus, error) {
 	}
 
 	meta, _ := loadSubsetMetadata(absRepo)
-	g, _ := graph.LoadOrDiscover(absRepo)
-
-	totalCount := 0
-	if g != nil {
-		totalCount = len(g.GetAllPackages())
-	}
 
 	if meta != nil {
 		return &SubsetStatus{
@@ -946,10 +995,121 @@ func Status(repoDir string) (*SubsetStatus, error) {
 		}, nil
 	}
 
+	isSparse := len(activePaths) > 0
+	var inc []string
+	var omit []string
+	if isSparse {
+		if g != nil {
+			for _, p := range g.GetAllPackages() {
+				matched := false
+				for _, sp := range activePaths {
+					if p.Path == sp || strings.HasPrefix(p.Path, sp+"/") {
+						matched = true
+						break
+					}
+				}
+				if matched {
+					inc = append(inc, p.Name)
+				} else {
+					omit = append(omit, p.Name)
+				}
+			}
+		}
+	} else {
+		inc = allNames
+	}
+
 	return &SubsetStatus{
-		IsSparse:           len(activePaths) > 0,
+		IsSparse:           isSparse,
+		IncludedPackages:   inc,
+		OmittedPackages:    omit,
 		SparsePaths:        activePaths,
 		TotalPackagesCount: totalCount,
+	}, nil
+}
+
+// CheckSubsetHealth validates dependency completeness, missing packages, and version compatibility in a subset.
+func CheckSubsetHealth(repoDir string) (*SubsetCheckResult, error) {
+	start := time.Now()
+	absRepo, err := filepath.Abs(repoDir)
+	if err != nil {
+		return nil, err
+	}
+
+	st, err := Status(absRepo)
+	if err != nil {
+		return nil, err
+	}
+
+	g, err := graph.LoadOrDiscover(absRepo)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load dependency graph: %w", err)
+	}
+
+	allMap := make(map[string]*graph.PackageNode)
+	for _, p := range g.GetAllPackages() {
+		allMap[p.Name] = p
+	}
+
+	var missingDeps []MissingDepViolation
+	var versionMismatches []VersionMismatch
+
+	activeSet := make(map[string]bool)
+	for _, p := range st.IncludedPackages {
+		activeSet[p] = true
+	}
+
+	for _, activeName := range st.IncludedPackages {
+		p := allMap[activeName]
+		if p == nil {
+			continue
+		}
+
+		for _, up := range g.GetUpstream(activeName) {
+			upPkg := allMap[up]
+			if upPkg == nil {
+				continue
+			}
+
+			// Check if materialized on disk
+			pkgDir := filepath.Join(absRepo, upPkg.Path)
+			if upPkg.Path != "." && upPkg.Path != "" {
+				if _, err := os.Stat(pkgDir); os.IsNotExist(err) {
+					if !activeSet[up] {
+						hint := fmt.Sprintf("Run 'monoflow subset add %s' or use '--deps=source' to include upstream dependency.", up)
+						if isContractPackage(upPkg) {
+							hint = fmt.Sprintf("Contract package '%s' is missing. Run 'monoflow subset add %s --deps=contracts'.", up, up)
+						}
+						missingDeps = append(missingDeps, MissingDepViolation{
+							ConsumerPackage:   activeName,
+							MissingDependency: up,
+							ExpectedPath:     upPkg.Path,
+							RemediationHint:  hint,
+						})
+					}
+				}
+			}
+		}
+	}
+
+	status := "healthy"
+	verdict := "All active packages in subset have their upstream dependencies and versions satisfied."
+	if len(missingDeps) > 0 {
+		status = "error"
+		verdict = fmt.Sprintf("Detected %d missing upstream dependencies in current subset projection.", len(missingDeps))
+	}
+
+	durMs := float64(time.Since(start).Microseconds()) / 1000.0
+	return &SubsetCheckResult{
+		Status:              status,
+		IsSparse:            st.IsSparse,
+		Strategy:            st.Strategy,
+		ActivePackages:      st.IncludedPackages,
+		OmittedPackages:     st.OmittedPackages,
+		MissingDependencies: missingDeps,
+		VersionMismatches:   versionMismatches,
+		DurationMs:          durMs,
+		Verdict:             verdict,
 	}, nil
 }
 

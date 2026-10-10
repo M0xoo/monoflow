@@ -24,6 +24,7 @@ import (
 	"github.com/antigravity/monoflow/pkg/task"
 	"github.com/antigravity/monoflow/pkg/telemetry"
 	"github.com/antigravity/monoflow/pkg/verify"
+	"github.com/antigravity/monoflow/pkg/version"
 	"github.com/antigravity/monoflow/pkg/worktree"
 )
 
@@ -109,7 +110,7 @@ func main() {
 		handleEvents(rootDir)
 
 	case "version":
-		fmt.Println("MonoFlow v1.0.0 (Agent-Native Monorepo & Ultra-Fast CI Engine)")
+		handleVersion(rootDir)
 
 	default:
 		fmt.Printf("Unknown command: %s\n\n", cmd)
@@ -124,7 +125,7 @@ func printUsage() {
 Usage:
   monoflow init [dir]                 Install MonoFlow into an existing or new repo
   monoflow clone <url> [dest] --packages=<p1,p2> Clone subset of monorepo packages (< 1s partial clone)
-  monoflow subset [set|list|reset]    Manage package subset projection in current workspace
+  monoflow subset [set|add|remove|update|deps|check|status|reset] Manage package subset projection & dependency health
   monoflow graph [query|impact]       Query upstream/downstream dependencies & impact
   monoflow checkpoint [save|revert]   Ephemeral 15ms snapshots (shadow workspace)
   monoflow worktree [create|sync|gc]  Virtual worktrees with CoW isolation & AST merge (<60ms)
@@ -143,7 +144,8 @@ Usage:
   monoflow deliver [--target=<pkg>]   Assemble hermetic deliverable artifact (.agents/dist)
   monoflow app test                   Delta compilation + symlink overlay (< 5s full-app)
   monoflow pr [create|list|view|review|test|local|merge] Full agent-native PR suite with affected packages
-  monoflow quarantine [list|add]      Manage flaky test quarantine`)
+  monoflow quarantine [list|add]      Manage flaky test quarantine
+  monoflow version [list|bump|apply|check] SemVer package versioning, changesets & cascade`)
 }
 
 func findRepoRoot() (string, error) {
@@ -1838,6 +1840,18 @@ func handleSubset(rootDir string) {
 		data, _ := json.MarshalIndent(st, "", "  ")
 		fmt.Println(string(data))
 
+	case "check", "health":
+		res, err := subset.CheckSubsetHealth(rootDir)
+		if err != nil {
+			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
+			os.Exit(1)
+		}
+		data, _ := json.MarshalIndent(res, "", "  ")
+		fmt.Println(string(data))
+		if res.Status == "error" {
+			os.Exit(1)
+		}
+
 	case "reset":
 		err := subset.Reset(rootDir)
 		if err != nil {
@@ -1847,7 +1861,76 @@ func handleSubset(rootDir string) {
 		fmt.Println(`{"status": "reset", "message": "Sparse checkout disabled. Full monorepo restored."}`)
 
 	default:
-		fmt.Printf(`{"error": "unknown subset subcommand '%s' (use set | add | remove | update | deps | list | reset)"}`+"\n", sub)
+		fmt.Printf(`{"error": "unknown subset subcommand '%s' (use set | add | remove | update | deps | check | list | reset)"}`+"\n", sub)
 		os.Exit(1)
+	}
+}
+
+func handleVersion(rootDir string) {
+	sub := "list"
+	if len(os.Args) > 2 {
+		sub = os.Args[2]
+	}
+
+	switch sub {
+	case "list", "all":
+		rep, err := version.ListPackageVersions(rootDir)
+		if err != nil {
+			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
+			os.Exit(1)
+		}
+		data, _ := json.MarshalIndent(rep, "", "  ")
+		fmt.Println(string(data))
+
+	case "bump":
+		if len(os.Args) < 5 {
+			fmt.Println(`{"error": "usage: monoflow version bump <pkg> <patch|minor|major> [--cascade]"}`)
+			os.Exit(1)
+		}
+		pkgName := os.Args[3]
+		bumpType := os.Args[4]
+		cascade := false
+		for _, arg := range os.Args[5:] {
+			if arg == "--cascade" {
+				cascade = true
+			}
+		}
+		res, err := version.BumpPackageVersion(rootDir, pkgName, bumpType, cascade)
+		if err != nil {
+			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
+			os.Exit(1)
+		}
+		data, _ := json.MarshalIndent(res, "", "  ")
+		fmt.Println(string(data))
+
+	case "apply":
+		res, err := version.ApplyChangesets(rootDir)
+		if err != nil {
+			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
+			os.Exit(1)
+		}
+		data, _ := json.MarshalIndent(res, "", "  ")
+		fmt.Println(string(data))
+
+	case "check", "verify":
+		rep, err := version.CheckVersionConsistency(rootDir)
+		if err != nil {
+			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
+			os.Exit(1)
+		}
+		data, _ := json.MarshalIndent(rep, "", "  ")
+		fmt.Println(string(data))
+		if rep.Status == "error" {
+			os.Exit(1)
+		}
+
+	default:
+		rep, err := version.ListPackageVersions(rootDir)
+		if err != nil {
+			fmt.Printf(`{"version": %q, "error": %q}`+"\n", version.EngineVersion, err.Error())
+			return
+		}
+		data, _ := json.MarshalIndent(rep, "", "  ")
+		fmt.Println(string(data))
 	}
 }

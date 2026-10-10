@@ -6,6 +6,7 @@
       "name": "monoflow",
       "path": ".",
       "language": "go",
+      "version": "1.0.0",
       "dependencies": [],
       "test_cmd": "go test -v ./pkg/...",
       "typecheck_cmd": "go vet ./pkg/... ./cmd/...",
@@ -15,6 +16,7 @@
       "name": "docs",
       "path": "docs",
       "language": "javascript",
+      "version": "1.0.0",
       "dependencies": [
         "monoflow"
       ],
