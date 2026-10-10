@@ -972,6 +972,7 @@ func handlePush(rootDir string) {
 	remote := "origin"
 	branch := ""
 	noWatch := false
+	var positional []string
 
 	for _, arg := range os.Args[2:] {
 		if arg == "--no-watch" {
@@ -980,11 +981,16 @@ func handlePush(rootDir string) {
 			remote = strings.TrimPrefix(arg, "--remote=")
 		} else if strings.HasPrefix(arg, "--branch=") {
 			branch = strings.TrimPrefix(arg, "--branch=")
-		} else if remote == "origin" && !strings.HasPrefix(arg, "-") {
-			remote = arg
-		} else if branch == "" && !strings.HasPrefix(arg, "-") {
-			branch = arg
+		} else if !strings.HasPrefix(arg, "-") {
+			positional = append(positional, arg)
 		}
+	}
+
+	if len(positional) > 0 {
+		remote = positional[0]
+	}
+	if len(positional) > 1 {
+		branch = positional[1]
 	}
 
 	if branch == "" {
