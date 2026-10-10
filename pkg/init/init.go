@@ -134,33 +134,9 @@ func InitRepo(targetDir string, binarySrcPath string) (*InitResult, error) {
 		_ = os.WriteFile(gitignorePath, []byte(ignoreBlock), 0644)
 	}
 
-	// 10. Install Git Shield Hooks into .git/hooks/
-	gitDir = filepath.Join(absTarget, ".git")
-	if info, err := os.Stat(gitDir); err == nil && info.IsDir() {
-		hooksDir := filepath.Join(gitDir, "hooks")
-		_ = os.MkdirAll(hooksDir, 0755)
-
-		prePushHook := `#!/bin/sh
-# MonoFlow Shield: Intercept direct git push
-if [ "$MONOFLOW_INTERNAL" != "1" ]; then
-    echo "🛑 MONOFLOW SHIELD: Direct 'git push' is disabled in this monorepo!" >&2
-    echo "👉 Please use: ./bin/monoflow push" >&2
-    echo "   (Guarantees Protected Branch Shield, pre-push race detection, and async CI watcher)" >&2
-    exit 1
-fi
-`
-		_ = os.WriteFile(filepath.Join(hooksDir, "pre-push"), []byte(prePushHook), 0755)
-
-		preCommitHook := `#!/bin/sh
-# MonoFlow Shield: Intercept direct git commit
-if [ "$MONOFLOW_INTERNAL" != "1" ]; then
-    echo "🛑 MONOFLOW SHIELD: Direct 'git commit' is disabled in this monorepo!" >&2
-    echo "👉 Please use: ./bin/monoflow commit -m \"...\"" >&2
-    echo "   (Guarantees sub-50ms test integrity checks and secret scanning)" >&2
-    exit 1
-fi
-`
-		_ = os.WriteFile(filepath.Join(hooksDir, "pre-commit"), []byte(preCommitHook), 0755)
+	// 10. Install Git Shield Hooks into the repository's effective hooks directory
+	if _, err := InstallShieldHooks(absTarget); err != nil {
+		return nil, fmt.Errorf("failed to install git shield hooks: %w", err)
 	}
 
 	// 11. Install Git Interception Shim into .agents/bin/git
@@ -189,4 +165,76 @@ esac
 		DiscoveredPkgs: pkgNames,
 		ConfigPath:     configPath,
 	}, nil
+}
+
+// shieldMarker identifies hook scripts written by MonoFlow.
+const shieldMarker = "MonoFlow Shield"
+
+const prePushHook = `#!/bin/sh
+# MonoFlow Shield: Intercept direct git push
+if [ "$MONOFLOW_INTERNAL" != "1" ]; then
+    echo "🛑 MONOFLOW SHIELD: Direct 'git push' is disabled in this monorepo!" >&2
+    echo "👉 Please use: ./bin/monoflow push" >&2
+    echo "   (Guarantees Protected Branch Shield, pre-push race detection, and async CI watcher)" >&2
+    exit 1
+fi
+`
+
+const preCommitHook = `#!/bin/sh
+# MonoFlow Shield: Intercept direct git commit
+if [ "$MONOFLOW_INTERNAL" != "1" ]; then
+    echo "🛑 MONOFLOW SHIELD: Direct 'git commit' is disabled in this monorepo!" >&2
+    echo "👉 Please use: ./bin/monoflow commit -m \"...\"" >&2
+    echo "   (Guarantees sub-50ms test integrity checks and secret scanning)" >&2
+    exit 1
+fi
+`
+
+// HooksDir resolves the hooks directory git actually uses for dir. This honours
+// core.hooksPath and linked worktrees (where .git is a file, not a directory).
+func HooksDir(dir string) (string, error) {
+	cmd := exec.Command("git", "rev-parse", "--git-path", "hooks")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("not a git repository: %s", dir)
+	}
+	hooks := strings.TrimSpace(string(out))
+	if !filepath.IsAbs(hooks) {
+		hooks = filepath.Join(dir, hooks)
+	}
+	return hooks, nil
+}
+
+// InstallShieldHooks writes the MonoFlow pre-commit and pre-push shield hooks into the
+// effective hooks directory of dir and returns that directory.
+func InstallShieldHooks(dir string) (string, error) {
+	hooksDir, err := HooksDir(dir)
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(hooksDir, 0755); err != nil {
+		return "", err
+	}
+	for name, body := range map[string]string{"pre-push": prePushHook, "pre-commit": preCommitHook} {
+		if err := os.WriteFile(filepath.Join(hooksDir, name), []byte(body), 0755); err != nil {
+			return "", err
+		}
+	}
+	return hooksDir, nil
+}
+
+// HasShieldHooks reports whether git operations in dir are guarded by the MonoFlow shield.
+func HasShieldHooks(dir string) bool {
+	hooksDir, err := HooksDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, name := range []string{"pre-commit", "pre-push"} {
+		data, err := os.ReadFile(filepath.Join(hooksDir, name))
+		if err != nil || !strings.Contains(string(data), shieldMarker) {
+			return false
+		}
+	}
+	return true
 }

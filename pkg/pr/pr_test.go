@@ -1,11 +1,14 @@
 package pr
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
 
+	"github.com/antigravity/monoflow/pkg/proof"
+	"github.com/antigravity/monoflow/pkg/review"
 	"github.com/antigravity/monoflow/pkg/subset"
 )
 
@@ -173,5 +176,69 @@ func TestPRLifecycle(t *testing.T) {
 	}
 	if updatedView.State != StateMerged {
 		t.Fatalf("Expected state MERGED, got %s", updatedView.State)
+	}
+}
+
+func TestPRCreateBlockedByGate(t *testing.T) {
+	repo := setupTestGitRepo(t)
+	mgr := NewManager(repo)
+
+	runGit := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v failed: %v (%s)", args, err, string(out))
+		}
+	}
+
+	// Task contract only allows edits in packages/api, but the change lands in packages/core.
+	_ = os.MkdirAll(filepath.Join(repo, ".agents"), 0755)
+	_ = os.WriteFile(filepath.Join(repo, ".agents", "task.json"), []byte(`{"task_id": "", "allowed_paths": ["packages/api/**"]}`), 0644)
+	runGit("checkout", "-b", "feat/out-of-scope")
+	_ = os.WriteFile(filepath.Join(repo, "packages", "core", "billing.js"), []byte(`module.exports = { bill: () => 100 };`), 0644)
+	runGit("add", "packages")
+	runGit("commit", "-m", "feat: out of scope change")
+
+	_, err := mgr.Create(CreateOptions{
+		Title:      "feat(core): add billing module",
+		HeadBranch: "feat/out-of-scope",
+		BaseBranch: "main",
+	})
+	var gateErr *GateError
+	if !errors.As(err, &gateErr) {
+		t.Fatalf("expected PR creation to be blocked by gate, got err=%v", err)
+	}
+	if gateErr.ProofStatus != "FAILED" || len(gateErr.FailedChecks) == 0 || gateErr.FailedChecks[0].ID != "DoD-Boundary" {
+		t.Fatalf("expected failed DoD-Boundary check, got %+v", gateErr)
+	}
+	if list, _ := mgr.List(ListOptions{State: "all"}); len(list) != 0 {
+		t.Fatalf("expected no PR to be recorded when gate blocks, got %d", len(list))
+	}
+
+	// Drafts bypass the gate so work-in-progress can still be shared explicitly.
+	draft, err := mgr.Create(CreateOptions{
+		Title:      "feat(core): add billing module",
+		HeadBranch: "feat/out-of-scope",
+		BaseBranch: "main",
+		Draft:      true,
+	})
+	if err != nil {
+		t.Fatalf("expected draft PR creation to bypass gate, got %v", err)
+	}
+	if draft.State != StateDraft || draft.Proof.Status != "FAILED" {
+		t.Fatalf("expected DRAFT PR carrying FAILED proof, got state=%s proof=%s", draft.State, draft.Proof.Status)
+	}
+}
+
+func TestCheckPRGate(t *testing.T) {
+	ok := &proof.ProofReceipt{Status: "VERIFIED"}
+	if err := checkPRGate(ok, &review.AuditResult{Valid: true}); err != nil {
+		t.Fatalf("expected verified proof + valid audit to pass, got %v", err)
+	}
+	if err := checkPRGate(ok, &review.AuditResult{Valid: false}); err == nil {
+		t.Fatalf("expected invalid audit to block")
+	}
+	if err := checkPRGate(nil, nil); err == nil {
+		t.Fatalf("expected missing proof to block")
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	initialize "github.com/antigravity/monoflow/pkg/init"
 	"github.com/antigravity/monoflow/pkg/merge"
 	"github.com/antigravity/monoflow/pkg/subset"
 )
@@ -32,6 +33,8 @@ type WorktreeInfo struct {
 	OmittedPackages []string  `json:"omitted_packages,omitempty"`
 	IsSparse        bool      `json:"is_sparse,omitempty"`
 	Strategy        string    `json:"strategy,omitempty"`
+	MonoflowBin     string    `json:"monoflow_bin,omitempty"`
+	ShieldHooks     bool      `json:"shield_hooks"`
 }
 
 // CreateOptions configures worktree creation.
@@ -118,6 +121,12 @@ func (m *Manager) CreateWithOpts(agentID string, opts CreateOptions) (*WorktreeI
 		".venv",
 	}
 
+	// The package cache is content-addressed, so it is always shared with the root repo:
+	// agents get cache hits for every untouched dependency. Deliverables in .agents/dist
+	// stay per-worktree (restored from that cache) so concurrent agents never overwrite
+	// each other's builds of a package they are both modifying.
+	_ = os.MkdirAll(filepath.Join(m.RootDir, ".agents", "cache"), 0755)
+
 	symlinkCount := 0
 	isolationMethod := ""
 
@@ -171,6 +180,15 @@ func (m *Manager) CreateWithOpts(agentID string, opts CreateOptions) (*WorktreeI
 		_ = os.Chmod(filepath.Join(agentsDest, "bin", "monoflow"), 0755)
 	}
 
+	// Path symmetry: ./bin/monoflow must work inside the worktree exactly as at the root.
+	monoflowBin := m.linkMonoflowBinary(wtPath)
+
+	// Git Shield inheritance: if the root repo is shielded, the worktree must be too.
+	if initialize.HasShieldHooks(m.RootDir) && !initialize.HasShieldHooks(wtPath) {
+		_, _ = initialize.InstallShieldHooks(wtPath)
+	}
+	shielded := initialize.HasShieldHooks(wtPath)
+
 	var includedPkgs []string
 	var omittedPkgs []string
 	isSparse := false
@@ -216,6 +234,8 @@ func (m *Manager) CreateWithOpts(agentID string, opts CreateOptions) (*WorktreeI
 		OmittedPackages: omittedPkgs,
 		IsSparse:        isSparse,
 		Strategy:        string(strategy),
+		MonoflowBin:     monoflowBin,
+		ShieldHooks:     shielded,
 	}
 
 	registry, _ := m.loadRegistry()
@@ -223,6 +243,62 @@ func (m *Manager) CreateWithOpts(agentID string, opts CreateOptions) (*WorktreeI
 	_ = m.saveRegistry(registry)
 
 	return &info, nil
+}
+
+// resolveMonoflowBinary finds the monoflow binary the root repo uses.
+func (m *Manager) resolveMonoflowBinary() string {
+	for _, candidate := range []string{
+		filepath.Join(m.RootDir, "bin", "monoflow"),
+		filepath.Join(m.RootDir, ".agents", "bin", "monoflow"),
+	} {
+		if fi, err := os.Stat(candidate); err == nil && !fi.IsDir() {
+			if abs, err := filepath.Abs(candidate); err == nil {
+				return abs
+			}
+		}
+	}
+	if exe, err := os.Executable(); err == nil && filepath.Base(exe) == "monoflow" {
+		return exe
+	}
+	return ""
+}
+
+// linkMonoflowBinary provisions <worktree>/bin/monoflow as a symlink to the root binary
+// (unless the repo tracks its own bin/monoflow) and keeps it out of git status.
+func (m *Manager) linkMonoflowBinary(wtPath string) string {
+	dest := filepath.Join(wtPath, "bin", "monoflow")
+	if _, err := os.Lstat(dest); err == nil {
+		return dest
+	}
+	src := m.resolveMonoflowBinary()
+	if src == "" {
+		return ""
+	}
+	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
+		return ""
+	}
+	if err := os.Symlink(src, dest); err != nil {
+		return ""
+	}
+
+	check := exec.Command("git", "check-ignore", "-q", "bin/monoflow")
+	check.Dir = wtPath
+	if check.Run() != nil {
+		pathCmd := exec.Command("git", "rev-parse", "--git-path", "info/exclude")
+		pathCmd.Dir = wtPath
+		if out, err := pathCmd.Output(); err == nil {
+			excludePath := strings.TrimSpace(string(out))
+			if !filepath.IsAbs(excludePath) {
+				excludePath = filepath.Join(wtPath, excludePath)
+			}
+			_ = os.MkdirAll(filepath.Dir(excludePath), 0755)
+			if f, err := os.OpenFile(excludePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
+				_, _ = f.WriteString("\n# MonoFlow worktree binary link\n/bin/monoflow\n")
+				_ = f.Close()
+			}
+		}
+	}
+	return dest
 }
 
 // Isolate promotes an existing worktree to have its own mutable, Copy-on-Write cloned node_modules / venv.

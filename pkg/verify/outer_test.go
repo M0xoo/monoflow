@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/antigravity/monoflow/pkg/checkpoint"
+	"github.com/antigravity/monoflow/pkg/events"
 	"github.com/antigravity/monoflow/pkg/graph"
 )
 
@@ -194,5 +196,61 @@ func TestOuterLoopAsyncExecution(t *testing.T) {
 
 	if finishedJob.Status != JobPassed {
 		t.Fatalf("expected finished status 'passed', got '%s'", finishedJob.Status)
+	}
+}
+
+func TestOuterLoopRegressionEmitsEventAndAutoReverts(t *testing.T) {
+	repoDir := setupTestGitRepo(t)
+	defer os.RemoveAll(repoDir)
+
+	pkgDir := filepath.Join(repoDir, "pkg", "broken")
+	_ = os.MkdirAll(pkgDir, 0755)
+	_ = os.WriteFile(filepath.Join(pkgDir, "broken.go"), []byte("package broken\n"), 0644)
+
+	g := graph.New(repoDir)
+	g.AddPackage(&graph.PackageNode{Name: "pkg/broken", Path: "pkg/broken", TestCmd: "exit 1"})
+	_ = g.SaveConfig(filepath.Join(repoDir, ".agents", "monoflow.config.json"))
+
+	for _, args := range [][]string{{"add", "pkg/broken"}, {"commit", "-m", "feat: broken module"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repoDir
+		_ = cmd.Run()
+	}
+
+	// A green checkpoint the auto-revert can fall back to.
+	if _, err := checkpoint.NewManager(repoDir).Save("last green"); err != nil {
+		t.Fatalf("failed to save checkpoint: %v", err)
+	}
+
+	om := NewOuterLoopManager(repoDir)
+	job, err := om.StartJob(OuterLoopOptions{AutoRevert: true})
+	if err == nil {
+		t.Fatalf("expected regression error, got nil")
+	}
+	if job.Status != JobRolledBack || !job.RollbackTriggered {
+		t.Fatalf("expected job rolled back, got status=%s rollback=%v", job.Status, job.RollbackTriggered)
+	}
+
+	unread, err := events.NewEventManager(repoDir).List(true)
+	if err != nil {
+		t.Fatalf("failed to list events: %v", err)
+	}
+	var evt *events.Event
+	for _, e := range unread {
+		if e.Type == events.EventOuterRegression {
+			evt = e
+		}
+	}
+	if evt == nil {
+		t.Fatalf("expected OUTER_LOOP_REGRESSION event on the bus, got %d unread events", len(unread))
+	}
+	if !evt.RequiresAction || !strings.Contains(evt.SuggestedTask, "pkg/broken") {
+		t.Errorf("expected actionable suggested_task naming pkg/broken, got %q", evt.SuggestedTask)
+	}
+	if evt.Payload["rollback_triggered"] != true {
+		t.Errorf("expected payload rollback_triggered=true, got %v", evt.Payload["rollback_triggered"])
+	}
+	if job.AlertPath != filepath.Join(repoDir, ".agents", "events", evt.ID+".json") {
+		t.Errorf("expected AlertPath to point at the emitted event, got %s", job.AlertPath)
 	}
 }

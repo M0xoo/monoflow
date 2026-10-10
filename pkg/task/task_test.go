@@ -50,3 +50,37 @@ func TestSliceStackedDiff(t *testing.T) {
 		t.Errorf("expected 1 test file, got %d: %v", len(slice.TestsAndConsumers), slice.TestsAndConsumers)
 	}
 }
+
+func TestCheckBoundariesIgnoresInternalArtifacts(t *testing.T) {
+	bundle := &TaskBundle{
+		AllowedPaths:  []string{"services/**", "packages/**"},
+		ReadOnlyPaths: []string{"contracts/**"},
+	}
+
+	internal := []string{
+		".agents/circuit_breaker.json",
+		".agents/checkpoints.json",
+		".agents/events/evt_1.json",
+		".agents/dist/core/manifest.json",
+		".agents/cache/index.json",
+		".gitignore",
+		".git/index",
+	}
+	res := CheckBoundaries(bundle, append(internal, "services/billing/tax.ts"))
+	if !res.Valid {
+		t.Fatalf("expected internal MonoFlow artifacts to be ignored, got violations: %v", res.Violations)
+	}
+
+	// The task contract itself is never internal.
+	res = CheckBoundaries(bundle, []string{".agents/task.json"})
+	if res.Valid {
+		t.Fatalf("expected .agents/task.json modification to be flagged")
+	}
+
+	// Explicit read-only declarations still win over the internal exemption.
+	strict := &TaskBundle{AllowedPaths: []string{"services/**"}, ReadOnlyPaths: []string{".gitignore"}}
+	res = CheckBoundaries(strict, []string{".gitignore"})
+	if res.Valid {
+		t.Fatalf("expected read-only .gitignore modification to be flagged")
+	}
+}

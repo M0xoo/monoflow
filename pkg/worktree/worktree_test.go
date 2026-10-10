@@ -7,6 +7,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/antigravity/monoflow/pkg/cache"
+	initialize "github.com/antigravity/monoflow/pkg/init"
 )
 
 func setupTestRepo(t *testing.T) string {
@@ -354,3 +357,60 @@ func TestWorktreeSparsePackageSubset(t *testing.T) {
 	}
 }
 
+
+func TestWorktreeCreateProvisionsBinShieldAndSharedCache(t *testing.T) {
+	repoDir := setupTestRepo(t)
+	defer os.RemoveAll(repoDir)
+
+	// Root repo carries a monoflow binary and is shielded.
+	_ = os.MkdirAll(filepath.Join(repoDir, "bin"), 0755)
+	rootBin := filepath.Join(repoDir, "bin", "monoflow")
+	_ = os.WriteFile(rootBin, []byte("#!/bin/sh\necho monoflow\n"), 0755)
+	if _, err := initialize.InstallShieldHooks(repoDir); err != nil {
+		t.Fatalf("failed to install shield hooks: %v", err)
+	}
+
+	mgr := NewManager(repoDir)
+	info, err := mgr.Create("agent-beta")
+	if err != nil {
+		t.Fatalf("failed to create worktree: %v", err)
+	}
+
+	// 1. ./bin/monoflow resolves to the root binary and is not reported as a change.
+	wtBin := filepath.Join(info.Path, "bin", "monoflow")
+	target, err := os.Readlink(wtBin)
+	if err != nil || target != rootBin {
+		t.Fatalf("expected %s -> %s, got %q (err=%v)", wtBin, rootBin, target, err)
+	}
+	if info.MonoflowBin != wtBin {
+		t.Errorf("expected MonoflowBin %s, got %s", wtBin, info.MonoflowBin)
+	}
+	status := exec.Command("git", "status", "--porcelain", "--", "bin")
+	status.Dir = info.Path
+	if out, _ := status.CombinedOutput(); strings.TrimSpace(string(out)) != "" {
+		t.Errorf("expected bin/monoflow to be git-ignored in worktree, got status: %s", out)
+	}
+
+	// 2. Raw git commit inside the worktree is blocked by the inherited shield.
+	if !info.ShieldHooks {
+		t.Errorf("expected worktree to report shield hooks active")
+	}
+	_ = os.WriteFile(filepath.Join(info.Path, "index.ts"), []byte("console.log('beta');\n"), 0644)
+	commit := exec.Command("git", "commit", "-am", "raw commit")
+	commit.Dir = info.Path
+	commit.Env = append(os.Environ(), "MONOFLOW_INTERNAL=0")
+	if out, err := commit.CombinedOutput(); err == nil || !strings.Contains(string(out), "MONOFLOW SHIELD") {
+		t.Fatalf("expected raw git commit in worktree to be blocked by shield, err=%v out=%s", err, out)
+	}
+
+	// 3. Package cache is shared with the root repo.
+	cacheLink := filepath.Join(info.Path, ".agents", "cache")
+	if target, err := os.Readlink(cacheLink); err != nil || target != filepath.Join(repoDir, ".agents", "cache") {
+		t.Fatalf("expected worktree cache linked to root cache, got %q (err=%v)", target, err)
+	}
+	gotDir, _ := filepath.EvalSymlinks(filepath.Dir(cache.SharedCacheDir(info.Path)))
+	wantDir, _ := filepath.EvalSymlinks(filepath.Join(repoDir, ".agents"))
+	if gotDir != wantDir {
+		t.Fatalf("expected SharedCacheDir in a worktree to resolve to the root cache, got %s want %s", gotDir, wantDir)
+	}
+}

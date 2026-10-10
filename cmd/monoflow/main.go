@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -39,6 +41,18 @@ func main() {
 	}
 
 	cmd := os.Args[1]
+	if isHelpArg(cmd) {
+		if len(os.Args) > 2 {
+			printCommandUsage(os.Args[2])
+		} else {
+			printUsage()
+		}
+		os.Exit(0)
+	}
+	if len(os.Args) > 2 && isHelpArg(os.Args[2]) && printCommandUsage(cmd) {
+		os.Exit(0)
+	}
+
 	rootDir, err := findRepoRoot()
 	if err != nil && cmd != "init" && cmd != "clone" {
 		rootDir = "."
@@ -130,7 +144,11 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Println(`MonoFlow — The Agent-Native Monorepo & Ultra-Fast CI Engine
+	usageText(os.Stdout)
+}
+
+func usageText(w io.Writer) {
+	fmt.Fprintln(w, `MonoFlow — The Agent-Native Monorepo & Ultra-Fast CI Engine
 
 Usage:
   monoflow init [dir]                 Install MonoFlow into an existing or new repo
@@ -157,7 +175,33 @@ Usage:
   monoflow app test                   Delta compilation + symlink overlay (< 5s full-app)
   monoflow pr [create|list|view|status|review|test|local|merge] Full agent-native PR suite with affected packages
   monoflow quarantine [list|add]      Manage flaky test quarantine
-  monoflow version [list|bump|apply|check] SemVer package versioning, changesets & cascade`)
+  monoflow version [list|bump|apply|check] SemVer package versioning, changesets & cascade
+  monoflow help [command]             Show this help (also --help, -h)`)
+}
+
+func isHelpArg(arg string) bool {
+	return arg == "--help" || arg == "-h" || arg == "help"
+}
+
+// printCommandUsage prints the usage lines for a single top-level command and reports
+// whether the command is known. Unknown commands fall back to the full usage text.
+func printCommandUsage(cmd string) bool {
+	var buf strings.Builder
+	usageText(&buf)
+	var lines []string
+	for _, line := range strings.Split(buf.String(), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && fields[0] == "monoflow" && fields[1] == cmd {
+			lines = append(lines, line)
+		}
+	}
+	if len(lines) == 0 {
+		printUsage()
+		return false
+	}
+	fmt.Println("Usage:")
+	fmt.Println(strings.Join(lines, "\n"))
+	return true
 }
 
 func findRepoRoot() (string, error) {
@@ -660,7 +704,19 @@ func handlePR(rootDir string) {
 
 		res, err := mgr.Create(opts)
 		if err != nil {
-			fmt.Printf(`{"status": "error", "error": "%s"}`+"\n", err)
+			var gateErr *pr.GateError
+			if errors.As(err, &gateErr) {
+				data, _ := json.MarshalIndent(map[string]any{
+					"status":        "blocked",
+					"error":         err.Error(),
+					"proof_status":  gateErr.ProofStatus,
+					"failed_checks": gateErr.FailedChecks,
+					"audit":         gateErr.Audit,
+				}, "", "  ")
+				fmt.Println(string(data))
+				os.Exit(1)
+			}
+			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
 			os.Exit(1)
 		}
 		data, _ := json.MarshalIndent(res, "", "  ")
