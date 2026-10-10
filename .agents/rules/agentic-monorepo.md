@@ -48,8 +48,8 @@ Follow these strict rules to keep execution fast, prevent context blowup, and av
 ## 8. Zero CI Polling & Reactive Asynchronous Wakeup
 * **STRICT PROHIBITION**: NEVER poll `gh pr checks`, `gh run watch`, or schedule artificial polling loops / timer wakeups while waiting for CI.
 * MonoFlow operates on a **fire-and-forget** reactive notification model:
-  - After `monoflow push` or `monoflow pr create`, dispatch the suggested background watcher (`monoflow events watch <commit_sha>`) or query `.agents/events/` in < 5ms via `monoflow events unread`.
-  - **Immediately end your turn** or proceed with other independent work.
-  - The runtime messaging system will automatically resume your execution with a high-priority notification when remote CI passes or fails.
+  - `monoflow push` / `monoflow pr create` start a detached watcher that writes CI_PASSED / CI_FAILED / CI_SKIPPED to the local inbox (`.agents/events/`).
+  - To be woken by the result, run `monoflow events wait <sha>` (printed as `ci_wait_command`) as a **background task** (Claude Code: Bash with `run_in_background`) and end your turn: it exits when the result lands (0 = passed/skipped, 1 = failed, with logs), which wakes you.
+  - Harnesses without background tasks: end your turn and run `monoflow events unread` when resumed. Nothing resumes you on its own.
 
 
