@@ -138,14 +138,20 @@ When you modify 2 packages in a 50-package monorepo:
 * Reuses 48 pre-built cached artifacts from local/remote cache.
 * Grafts them into an active symlink overlay (`.agents/dist/full-app`) in **< 50ms**.
 
-### 5. Moving Master PR Testing
-Test your PR against a rapidly moving master branch in seconds:
-* MonoFlow pulls the pre-warmed **Master Base Container Image**.
-* Hot-mounts your PR's compiled delta packages directly over the container:
+### 5. Agent-Native PR Lifecycle Suite (`monoflow pr`)
+AI agents develop and propose changes via pull requests with automated machine risk scoring, DoD receipts, and local affected-package projection:
+* **Create PR (`monoflow pr create`)**: Automatically packages Git diffs with machine risk badges (`Tier 1 Auto-Approvable`, `Tier 2 Human Review`, `Tier 3 Blocked`), DoD Proof of Work certificates, and affected package manifests. Supports `--stack` for 3-tier stacked PR slicing.
+* **Local PR Affected Packages (`monoflow pr local <id>`)**: Projects the workspace or provisions an isolated virtual worktree containing **only the PR's affected packages** and interface contracts in < 100ms:
   ```bash
-  monoflow pr test 42 --against-master
+  # Project active workspace to only packages affected by PR #42
+  monoflow pr local 42 --deps=contracts
+
+  # Or spawn an isolated virtual worktree focused on PR #42
+  monoflow pr local 42 --worktree=agent-review-42 --deps=contracts
   ```
-* Runs the full integration test on top of live master in **~2.4 seconds**.
+* **Hot-Mount PR Delta Testing (`monoflow pr test <id>`)**: Verifies the PR against the base branch using delta-overlay compilation in **~2.4 seconds**.
+* **Machine Review & Sign-Off (`monoflow pr review <id>`)**: Audits claims against git diffs and auto-approves Tier 1 changesets.
+* **Speculative Merge (`monoflow pr merge <id>`)**: Safely promotes PRs through MonoFlow's speculative local merge queue.
 
 ### 6. Semantic Symbol-Level AST Synthesizer (Same-File Multi-Agent Swarming)
 Traditional `git merge` is line-based and fails with ugly conflict markers (`<<<<<<< HEAD`) whenever two agents add functions or imports to the same file.
@@ -226,7 +232,13 @@ Large enterprise monorepos with 50+ packages consume tens of gigabytes of disk a
 | `monoflow task prove <id>` | Run DoD checks, build deliverable, and emit PoW receipt | ~260ms |
 | `monoflow task slice` | Slices worktree diff into stacked PR tiers (Types $\to$ Logic $\to$ Tests) | ~5ms |
 | `monoflow app test` | Assemble full-app symlink overlay (cached + delta) | ~40ms |
+| `monoflow pr create` | Create PR with machine risk score, proof receipt, and affected manifest | ~350ms |
+| `monoflow pr list` | List active PRs with risk tiers and CI status | ~25ms |
+| `monoflow pr view <id>` | View PR metadata, risk breakdown, and DoD checks | ~15ms |
+| `monoflow pr local <id>` | **Project workspace / worktree to PR's affected packages** | **< 100ms** |
 | `monoflow pr test <id>` | Hot-mount PR delta over latest master base image | ~2.4s |
+| `monoflow pr review <id>` | Machine review and sign-off on PR | ~30ms |
+| `monoflow pr merge <id>` | Speculatively queue or squash merge PR | ~60ms |
 | `monoflow quarantine [list\|add]` | Isolate flaky tests from agent feedback loops | ~5ms |
 
 ---

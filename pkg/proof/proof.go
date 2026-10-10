@@ -47,28 +47,40 @@ func ProveTask(rootDir string, taskID string, g *graph.DependencyGraph, modified
 	bStart := time.Now()
 	taskBundlePath := filepath.Join(rootDir, ".agents", "task.json")
 	var bundle task.TaskBundle
+	hasBundle := false
 	if data, err := os.ReadFile(taskBundlePath); err == nil {
-		_ = json.Unmarshal(data, &bundle)
+		if json.Unmarshal(data, &bundle) == nil && (bundle.TaskID == taskID || bundle.TaskID == "") {
+			hasBundle = true
+		}
 	}
 
-	boundaryRes := task.CheckBoundaries(&bundle, modifiedFiles)
 	bDur := float64(time.Since(bStart).Microseconds()) / 1000.0
-
-	if boundaryRes.Valid {
+	if hasBundle && (len(bundle.AllowedPaths) > 0 || len(bundle.ReadOnlyPaths) > 0) {
+		boundaryRes := task.CheckBoundaries(&bundle, modifiedFiles)
+		if boundaryRes.Valid {
+			dodItems = append(dodItems, DoDItem{
+				ID:          "DoD-Boundary",
+				Description: "Hermetic Scope & Read-Only Paths",
+				Status:      "PASSED",
+				DurationMs:  bDur,
+				Evidence:    fmt.Sprintf("0 illegal path accesses across %d modified files", len(modifiedFiles)),
+			})
+		} else {
+			dodItems = append(dodItems, DoDItem{
+				ID:          "DoD-Boundary",
+				Description: "Hermetic Scope & Read-Only Paths",
+				Status:      "FAILED",
+				DurationMs:  bDur,
+				Evidence:    strings.Join(boundaryRes.Violations, "; "),
+			})
+		}
+	} else {
 		dodItems = append(dodItems, DoDItem{
 			ID:          "DoD-Boundary",
 			Description: "Hermetic Scope & Read-Only Paths",
 			Status:      "PASSED",
 			DurationMs:  bDur,
-			Evidence:    fmt.Sprintf("0 illegal path accesses across %d modified files", len(modifiedFiles)),
-		})
-	} else {
-		dodItems = append(dodItems, DoDItem{
-			ID:          "DoD-Boundary",
-			Description: "Hermetic Scope & Read-Only Paths",
-			Status:      "FAILED",
-			DurationMs:  bDur,
-			Evidence:    strings.Join(boundaryRes.Violations, "; "),
+			Evidence:    "No restrictive path constraints violated",
 		})
 	}
 

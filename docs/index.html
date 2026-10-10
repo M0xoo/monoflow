@@ -1807,6 +1807,21 @@ input[type="range"]::-webkit-slider-thumb {
               <td><code>--no-watch</code>, <code>--branch &lt;b&gt;</code></td>
             </tr>
             <tr>
+              <td><code>monoflow pr create</code></td>
+              <td>Creates PR with machine risk scoring, PoW receipt, and affected manifest</td>
+              <td><code>--title</code>, <code>--base</code>, <code>--stack</code>, <code>--draft</code></td>
+            </tr>
+            <tr>
+              <td><code>monoflow pr local &lt;id&gt;</code></td>
+              <td>Projects workspace or worktree to <strong>only</strong> the PR's affected packages</td>
+              <td><code>--worktree=&lt;id&gt;</code>, <code>--deps=contracts|source|none</code></td>
+            </tr>
+            <tr>
+              <td><code>monoflow pr [list|view|review|test|merge]</code></td>
+              <td>Full agent-native PR suite: view, machine sign-off, hot-mount testing &amp; queue merge</td>
+              <td><code>--approve</code>, <code>--strategy</code>, <code>--queue</code></td>
+            </tr>
+            <tr>
               <td><code>monoflow events unread</code></td>
               <td>Asynchronous agent event inbox (check in &lt; 5ms without polling)</td>
               <td><code>--ack &lt;id&gt;</code>, <code>--clear</code></td>

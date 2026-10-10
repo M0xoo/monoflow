@@ -152,11 +152,12 @@ func (om *OuterLoopManager) StartJob(opts OuterLoopOptions) (*OuterJob, error) {
 	}
 
 	if opts.Async {
-		// Dispatch in detached background goroutine
-		go func(j *OuterJob) {
-			_ = om.ExecuteJob(j)
-		}(job)
-		return job, nil
+		// Dispatch in detached background goroutine with isolated memory copy
+		jobCopy := *job
+		go func(id string) {
+			_ = om.ExecuteJobByID(id)
+		}(job.ID)
+		return &jobCopy, nil
 	}
 
 	// Synchronous execution
@@ -167,10 +168,17 @@ func (om *OuterLoopManager) StartJob(opts OuterLoopOptions) (*OuterJob, error) {
 	return job, nil
 }
 
+// ExecuteJobByID loads the job record by ID and executes it in isolation.
+func (om *OuterLoopManager) ExecuteJobByID(jobID string) error {
+	job, err := om.GetJob(jobID)
+	if err != nil {
+		return err
+	}
+	return om.executeJobInternal(job)
+}
+
 // ExecuteJob runs the full transitive outer-loop verification.
 func (om *OuterLoopManager) ExecuteJob(job *OuterJob) error {
-	om.mu.Lock()
-	defer om.mu.Unlock()
 	return om.executeJobInternal(job)
 }
 

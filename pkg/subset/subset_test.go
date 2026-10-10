@@ -25,7 +25,7 @@ func setupTestMonorepo(t *testing.T) string {
 		}
 	}
 
-	run("init")
+	run("init", "-b", "main")
 	run("config", "user.name", "MonoFlow Test")
 	run("config", "user.email", "test@monoflow.dev")
 
@@ -363,7 +363,7 @@ func TestUpdatePackageFromRemote(t *testing.T) {
 	_ = cmdCommit.Run()
 
 	// In cloneDest, update ONLY "contracts" from remote origin main
-	upRes, err := Update(cloneDest, []string{"contracts"}, originRepo, "main")
+	upRes, err := Update(cloneDest, []string{"contracts"}, "origin", "main")
 	if err != nil {
 		t.Fatalf("Update failed: %v", err)
 	}
