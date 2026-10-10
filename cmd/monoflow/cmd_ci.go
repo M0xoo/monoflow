@@ -332,27 +332,18 @@ func handleOuter(rootDir string) {
 		}
 
 	case "status":
-		if len(os.Args) < 4 {
-			fmt.Println(`{"error": "missing job-id for outer status"}`)
-			os.Exit(1)
-		}
-		jobID := os.Args[3]
+		jobID := outerJobArg(rootDir, om)
 		job, err := om.GetJob(jobID)
 		if err != nil {
 			fmt.Printf(`{"error": "%s"}`+"\n", err)
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(job, "", "  ")
-		fmt.Println(string(data))
+		printOuterJob(job)
 
 	case "wait":
-		if len(os.Args) < 4 {
-			fmt.Println(`{"error": "missing job-id for outer wait"}`)
-			os.Exit(1)
-		}
-		jobID := os.Args[3]
+		jobID := outerJobArg(rootDir, om)
 		timeout := 60 * time.Second
-		for _, arg := range os.Args[4:] {
+		for _, arg := range os.Args[3:] {
 			if strings.HasPrefix(arg, "--timeout=") {
 				secStr := strings.TrimPrefix(arg, "--timeout=")
 				if s, err := strconv.Atoi(strings.TrimSuffix(secStr, "s")); err == nil {
@@ -365,8 +356,7 @@ func handleOuter(rootDir string) {
 			fmt.Printf(`{"error": "%s"}`+"\n", err)
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(job, "", "  ")
-		fmt.Println(string(data))
+		printOuterJob(job)
 		if job.Status == verify.JobRegressed {
 			os.Exit(1)
 		}
@@ -429,4 +419,64 @@ func handleCIProofs(rootDir, sub string) {
 		fmt.Println(`{"error": "usage: monoflow ci proofs import|publish [--commit=<sha>] [--remote=<r>]"}`)
 		os.Exit(1)
 	}
+}
+
+// outerJobArg is the job id given on the command line, or the latest outer-loop job for HEAD:
+// agents rarely keep the id from 'monoflow commit' around.
+func outerJobArg(rootDir string, om *verify.OuterLoopManager) string {
+	if len(os.Args) > 3 && !strings.HasPrefix(os.Args[3], "-") {
+		return os.Args[3]
+	}
+	out, _ := exec.Command("git", "-C", rootDir, "rev-parse", "HEAD").Output()
+	if job := om.LatestForCommit(strings.TrimSpace(string(out))); job != nil {
+		return job.ID
+	}
+	fmt.Println(`{"error": "no outer-loop job for HEAD; 'monoflow commit' starts one (or pass a job id)"}`)
+	os.Exit(1)
+	return ""
+}
+
+// printOuterJob prints the outcome an agent acts on; --verbose prints the whole job record.
+func printOuterJob(job *verify.OuterJob) {
+	if hasFlag("--verbose") {
+		data, _ := json.MarshalIndent(job, "", "  ")
+		fmt.Println(string(data))
+		return
+	}
+	out := map[string]any{
+		"id":          job.ID,
+		"commit_sha":  job.CommitSHA,
+		"status":      job.Status,
+		"duration_ms": job.DurationMs,
+		"packages":    fmt.Sprintf("%d/%d passed", job.PassedPackages, job.TotalPackagesTested),
+	}
+	var failed []verify.TargetResult
+	for _, r := range job.TargetResults {
+		if r.Status != "passed" {
+			r.CacheKey, r.CachedFrom = "", ""
+			failed = append(failed, r)
+		}
+	}
+	if len(failed) > 0 {
+		out["failed"] = failed
+	}
+	if job.E2ECheck != nil && job.E2ECheck.Status != "passed" {
+		out["repo_ci"] = job.E2ECheck
+	}
+	for k, v := range map[string]string{"error_summary": job.ErrorSummary, "promote_error": job.PromoteError} {
+		if v != "" {
+			out[k] = v
+		}
+	}
+	data, _ := json.MarshalIndent(out, "", "  ")
+	fmt.Println(string(data))
+}
+
+func hasFlag(name string) bool {
+	for _, a := range os.Args[2:] {
+		if a == name {
+			return true
+		}
+	}
+	return false
 }

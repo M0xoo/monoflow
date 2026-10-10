@@ -15,7 +15,7 @@ import (
 func handlePR(rootDir string) {
 	if len(os.Args) < 3 {
 		fmt.Println(`MonoFlow Pull Request Commands:
-  monoflow pr create [--title="..."] [--body="..." | --body-file=<path>] [--base=main] [--draft] [--stack] [--no-push]
+  monoflow pr create [--title="..."] [--body="..." | --body-file=<path>] [--base=main] [--draft] [--stack] [--no-push] [--verbose]
   monoflow pr list [--state=open|closed|merged|all] [--limit=N]
   monoflow pr view <id>
   monoflow pr status [id] [--json]
@@ -35,6 +35,7 @@ func handlePR(rootDir string) {
 			BaseBranch: "main",
 			AutoPush:   true,
 		}
+		verbose := false
 		for _, arg := range os.Args[3:] {
 			if strings.HasPrefix(arg, "--title=") {
 				opts.Title = strings.TrimPrefix(arg, "--title=")
@@ -59,6 +60,8 @@ func handlePR(rootDir string) {
 				opts.Stack = true
 			} else if arg == "--no-push" {
 				opts.AutoPush = false
+			} else if arg == "--verbose" {
+				verbose = true
 			} else if strings.HasPrefix(arg, "-") {
 				// A silently ignored flag (e.g. --body-file before it existed) loses the agent's input.
 				fmt.Printf("{\"error\": %q}\n", "unknown flag for pr create: "+arg+" (see 'monoflow pr create --help')")
@@ -83,7 +86,11 @@ func handlePR(rootDir string) {
 			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(res, "", "  ")
+		var out any = res
+		if !verbose {
+			out = compactPR(res)
+		}
+		data, _ := json.MarshalIndent(out, "", "  ")
 		fmt.Println(string(data))
 
 	case "list":
@@ -267,4 +274,42 @@ func handlePR(rootDir string) {
 		data, _ := json.MarshalIndent(res, "", "  ")
 		fmt.Println(string(data))
 	}
+}
+
+// compactPR is what an agent needs after 'pr create': where the PR is, whether it was proven
+// and pushed, and how to wait for CI. The full dossier (~6 KB) is in the PR body and behind
+// --verbose; printing it cost every agent context for nothing.
+func compactPR(res *pr.PRMetadata) map[string]any {
+	out := map[string]any{
+		"id":                res.ID,
+		"state":             res.State,
+		"head_sha":          res.HeadSHA,
+		"affected_packages": res.AffectedPackages,
+		"pushed":            res.Pushed,
+	}
+	if res.GitHubURL != "" {
+		out["url"] = res.GitHubURL
+	}
+	if res.Proof != nil {
+		out["proof"] = res.Proof.Status
+		var failed []string
+		for _, c := range res.Proof.DoDChecks {
+			if c.Status != "PASSED" {
+				failed = append(failed, c.ID+": "+c.Evidence)
+			}
+		}
+		if len(failed) > 0 {
+			out["checks_not_passed"] = failed
+		}
+	}
+	if res.Risk != nil {
+		out["risk"] = res.Risk.Tier
+	}
+	if res.CIWaitCommand != "" {
+		out["ci_wait_command"] = res.CIWaitCommand
+	}
+	if res.RemotePR != nil {
+		out["remote_pr"] = res.RemotePR
+	}
+	return out
 }

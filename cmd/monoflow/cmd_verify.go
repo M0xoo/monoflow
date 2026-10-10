@@ -22,6 +22,7 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 	targetPkg := ""
 	verifyAll := false
 	verifyBase := ""
+	verboseOut := false
 
 	// Check flags
 	for _, arg := range os.Args[2:] {
@@ -48,6 +49,8 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 		} else if strings.HasPrefix(arg, "--base=") {
 			verifyBase = strings.TrimPrefix(arg, "--base=")
 			opts.BaseRef = verifyBase
+		} else if arg == "--verbose" {
+			verboseOut = true
 		} else if arg == "--strict" {
 			opts.Strict = true
 		}
@@ -152,6 +155,17 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 		}
 	}
 
+	if !verboseOut {
+		// Cache keys and the exact command lines are for debugging the cache, not for the
+		// agent's next step; --verbose keeps them.
+		for i := range res.Results {
+			r := &res.Results[i]
+			r.CacheKey, r.CachedFrom = "", ""
+			if r.Status == "passed" {
+				r.CommandRun = ""
+			}
+		}
+	}
 	data, _ := json.MarshalIndent(res, "", "  ")
 	fmt.Println(string(data))
 
