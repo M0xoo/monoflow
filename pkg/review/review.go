@@ -60,7 +60,7 @@ var (
 	securityPattern  = regexp.MustCompile(`(?i)(auth/|oauth/|jwt/|crypto/|security/|permissions?/|rbac/)`)
 	infraPattern     = regexp.MustCompile(`(?i)(\.github/workflows/|dockerfile|docker-compose|k8s/|terraform/|helm/)`)
 	secretPattern    = regexp.MustCompile(`(?i)(\.env|credentials|secret|vault)`)
-	docOnlyPattern   = regexp.MustCompile(`(?i)(\.md|\.txt|\.markdown|docs/)$`)
+	docOnlyPattern   = regexp.MustCompile(`(?i)(\.md|\.txt|\.markdown)$|^docs/`)
 	testPattern      = regexp.MustCompile(`(?i)(_test\.go|\.spec\.ts|\.test\.ts|\.test\.js|_test\.py|test_.*\.py)$`)
 )
 
