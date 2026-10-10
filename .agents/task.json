@@ -6,7 +6,12 @@
     "Affected unit tests pass",
     "No typecheck errors in downstream packages"
   ],
-  "allowed_paths": [],
-  "read_only_paths": [],
+  "allowed_paths": [
+    "services/**",
+    "packages/**"
+  ],
+  "read_only_paths": [
+    "contracts/**"
+  ],
   "context_files": []
 }

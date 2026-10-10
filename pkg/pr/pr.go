@@ -1085,6 +1085,7 @@ func (m *PRManager) Local(id string, opts LocalOptions) (*PRLocalResult, error) 
 }
 
 func (m *PRManager) getDiffFiles(base, head string) ([]string, error) {
+	base = m.freshestBase(base)
 	// Try base...head diff
 	cmd := exec.Command("git", "diff", "--name-only", base+"..."+head)
 	cmd.Dir = m.RootDir
@@ -1318,4 +1319,20 @@ func firstLine(s string) string {
 		return s[:i]
 	}
 	return s
+}
+
+// freshestBase prefers origin/<base> when the local <base> is stale (an ancestor of it):
+// otherwise a PR would include everything merged upstream since the last local pull.
+func (m *PRManager) freshestBase(base string) string {
+	remote := "origin/" + base
+	if exec.Command("git", "-C", m.RootDir, "rev-parse", "--verify", "--quiet", remote).Run() != nil {
+		return base
+	}
+	if exec.Command("git", "-C", m.RootDir, "rev-parse", "--verify", "--quiet", base).Run() != nil {
+		return remote
+	}
+	if exec.Command("git", "-C", m.RootDir, "merge-base", "--is-ancestor", base, remote).Run() == nil {
+		return remote
+	}
+	return base
 }
