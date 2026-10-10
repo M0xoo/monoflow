@@ -57,11 +57,16 @@ type goModInfo struct {
 }
 
 func parseGoMod(path string) (goModInfo, bool) {
-	info := goModInfo{Replaces: map[string]string{}}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return info, false
+		return goModInfo{Replaces: map[string]string{}}, false
 	}
+	return parseGoModContent(string(data))
+}
+
+func parseGoModContent(content string) (goModInfo, bool) {
+	info := goModInfo{Replaces: map[string]string{}}
+	data := []byte(content)
 	block := ""
 	for _, raw := range strings.Split(string(data), "\n") {
 		line := strings.TrimSpace(raw)

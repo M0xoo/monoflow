@@ -76,6 +76,7 @@ type Manager struct {
 
 // NewManager creates a worktree manager.
 func NewManager(rootDir string) *Manager {
+	rootDir = mainRepoRoot(rootDir)
 	wtDir := filepath.Join(rootDir, ".agents", "worktrees")
 	return &Manager{
 		RootDir:      rootDir,
@@ -1036,7 +1037,7 @@ func (m *Manager) fillLiveState(info *WorktreeInfo) {
 
 // sharedStateDirs are MonoFlow state directories every worktree shares with the root so
 // PRs, proofs, CI events and the package cache are visible from anywhere in the repo.
-var sharedStateDirs = []string{".agents/cache", ".agents/prs", ".agents/proofs", ".agents/events", ".agents/releases"}
+var sharedStateDirs = []string{".agents/cache", ".agents/prs", ".agents/proofs", ".agents/events"}
 
 // ensureSharedState makes each shared state dir in wtPath a symlink to the root's,
 // migrating anything already written to a private copy.
@@ -1073,4 +1074,24 @@ func isSharedDepLink(p string) bool {
 		}
 	}
 	return false
+}
+
+// mainRepoRoot resolves a linked worktree to the main repository root, where the worktree
+// registry lives (so `worktree list` works the same from inside any agent worktree).
+func mainRepoRoot(dir string) string {
+	out, err := exec.Command("git", "-C", dir, "rev-parse", "--path-format=absolute", "--git-common-dir").Output()
+	if err != nil {
+		return dir
+	}
+	common := strings.TrimSpace(string(out))
+	if filepath.Base(common) != ".git" {
+		return dir // bare or unusual layout: keep what we were given
+	}
+	main := filepath.Dir(common)
+	if real, err := filepath.EvalSymlinks(dir); err == nil {
+		if realMain, err := filepath.EvalSymlinks(main); err == nil && real == realMain {
+			return dir // already the main root: keep the caller's spelling of the path
+		}
+	}
+	return main
 }

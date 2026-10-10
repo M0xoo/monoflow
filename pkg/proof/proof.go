@@ -272,6 +272,9 @@ func versioningDoD(rootDir string, g *graph.DependencyGraph, modifiedFiles []str
 			problems = append(problems, fmt.Sprintf("%s -> %s: %s", e.Consumer, e.Dependency, e.Problem))
 		}
 	}
+	for _, f := range release.Tampered(rootDir, g) {
+		problems = append(problems, "vendored release snapshot modified: "+f+" (releases are immutable; release a new version instead)")
+	}
 	declared := pendingBumps(rootDir)
 	seen := map[string]bool{}
 	for _, f := range modifiedFiles {

@@ -1113,8 +1113,9 @@ func handleWorktree(rootDir string) {
 			"path":             info.Path,
 			"head_sha":         info.HeadSHA,
 			"symlinks_count":   info.SymlinksCount,
-			"isolated":         info.Isolated,
-			"isolation_method": info.IsolationMethod,
+			"isolation":        "own git worktree on branch " + info.Branch + " (packages projected via sparse checkout)",
+			"deps_isolated":    info.Isolated,
+			"deps_isolation":   info.IsolationMethod,
 			"is_sparse":        info.IsSparse,
 			"duration_ms":      durMs,
 			"verdict":          "Virtual worktree provisioned (< 60ms shared, or ~400ms CoW cloned)",
@@ -2056,7 +2057,9 @@ func handleEvents(rootDir string) {
 					// contain that consumer (or any worktree, if action is required).
 					if e.Type == events.EventDependencyReleased {
 						consumer, _ := e.Payload["consumer"].(string)
-						relevant = local == nil && e.RequiresAction || local[consumer]
+						mode, _ := e.Payload["mode"].(string)
+						// Notes for source consumers need no action: --all shows them.
+						relevant = mode != graph.EdgeSource && (local == nil && e.RequiresAction || local[consumer])
 					}
 				}
 				if relevant {
@@ -2814,6 +2817,9 @@ func handleReleases(rootDir, sub string) {
 		if err != nil {
 			fail(err)
 		}
+		if g2, err := graph.LoadOrDiscover(rootDir); err == nil {
+			release.Prune(rootDir, g2)
+		}
 		mode := "source (live code)"
 		if ver != "" {
 			mode = "pinned@" + ver
@@ -2848,6 +2854,9 @@ func handleReleases(rootDir, sub string) {
 		}
 		if _, err := release.Repoint(rootDir, g, pos[0], pos[1], to); err != nil {
 			fail(err)
+		}
+		if g2, err := graph.LoadOrDiscover(rootDir); err == nil {
+			release.Prune(rootDir, g2)
 		}
 		// The consumer's own checks are its "CI" for the upgrade.
 		g2, _ := graph.LoadOrDiscover(rootDir)

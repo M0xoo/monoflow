@@ -1,10 +1,13 @@
 // Package release implements MonoFlow's internal package releases: an immutable per-package
-// git tag "<slug>@<version>" plus an on-demand snapshot of the package (and the live
+// git tag "<slug>@<version>" plus a committed snapshot of the package (and the live
 // dependencies it was built with) under .agents/releases/<slug>@<version>/, keeping the
 // repo-relative layout so relative paths inside the snapshot still resolve.
 //
 // Consumers pin a release by pointing their manifest at the snapshot path; they are then
-// isolated from later changes to the package and upgrade at their own pace.
+// isolated from later changes to the package and upgrade at their own pace. Snapshots are
+// committed (vendored) so any clone, IDE or CI builds natively without a MonoFlow step;
+// only versions that some consumer pins are kept (see Prune), and Verify checks that a
+// vendored snapshot still matches its tag.
 package release
 
 import (
@@ -158,6 +161,7 @@ func Materialize(root string, g *graph.DependencyGraph, pkgName, version string)
 		return "", fmt.Errorf("extract %s: %v (%s)", tag, err, out)
 	}
 	_ = os.WriteFile(filepath.Join(tmp, ".monoflow-release"), []byte(tag+"\n"), 0644)
+	markGenerated(root)
 	_ = os.RemoveAll(dest)
 	if err := os.Rename(tmp, dest); err != nil {
 		return "", err
@@ -384,4 +388,65 @@ func setOwnGoWork(root, moduleDir string, own bool) {
 		}
 	}
 	_ = os.WriteFile(local, []byte("// MonoFlow: this module pins internal releases, so it builds outside the root\n// workspace. Managed by 'monoflow version pin/unpin'.\n"+goLine+"\n\nuse .\n"), 0644)
+}
+
+// Prune deletes snapshots that no pinned edge references any more.
+func Prune(root string, g *graph.DependencyGraph) []string {
+	used := map[string]bool{}
+	for _, e := range g.ScanEdges() {
+		if e.Mode == graph.EdgePinned {
+			used[Tag(e.Dependency, e.Constraint)] = true
+		}
+	}
+	entries, _ := os.ReadDir(filepath.Join(root, graph.ReleasesDir))
+	var removed []string
+	for _, e := range entries {
+		if e.IsDir() && !used[e.Name()] {
+			_ = os.RemoveAll(filepath.Join(root, graph.ReleasesDir, e.Name()))
+			removed = append(removed, e.Name())
+		}
+	}
+	return removed
+}
+
+// Tampered lists vendored snapshots whose files differ from their release tag (releases
+// are immutable: fix the package and release a new version instead).
+func Tampered(root string, g *graph.DependencyGraph) []string {
+	var bad []string
+	entries, _ := os.ReadDir(filepath.Join(root, graph.ReleasesDir))
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		tag := e.Name()
+		snap := filepath.Join(root, graph.ReleasesDir, tag)
+		_ = filepath.Walk(snap, func(p string, info os.FileInfo, err error) error {
+			if err != nil || info.IsDir() || info.Name() == ".monoflow-release" {
+				return nil
+			}
+			rel, _ := filepath.Rel(snap, p)
+			want, gerr := git(root, "show", tag+":"+filepath.ToSlash(rel))
+			got, _ := os.ReadFile(p)
+			if gerr != nil || strings.TrimSpace(want) != strings.TrimSpace(string(got)) {
+				bad = append(bad, filepath.ToSlash(filepath.Join(graph.ReleasesDir, tag, rel)))
+			}
+			return nil
+		})
+	}
+	return bad
+}
+
+// markGenerated makes GitHub collapse vendored snapshots in PR diffs.
+func markGenerated(root string) {
+	ga := filepath.Join(root, ".gitattributes")
+	line := "/" + graph.ReleasesDir + "/** linguist-generated=true"
+	if strings.Contains(readFile(ga), line) {
+		return
+	}
+	f, err := os.OpenFile(ga, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_, _ = f.WriteString("# MonoFlow internal release snapshots (vendored, immutable)\n" + line + "\n")
 }

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/antigravity/monoflow/pkg/graph"
+	"github.com/antigravity/monoflow/pkg/release"
 	"github.com/antigravity/monoflow/pkg/semver"
 	"github.com/antigravity/monoflow/pkg/task"
 )
@@ -394,6 +395,10 @@ func CheckVersionConsistency(rootDir string) (*ConsistencyReport, error) {
 				})
 			}
 		}
+	}
+
+	for _, f := range release.Tampered(rootDir, g) {
+		violations = append(violations, VersionViolation{Severity: "ERROR", Message: "vendored release snapshot modified: " + f})
 	}
 
 	// Internal edges: a range that excludes the version it resolves to breaks install/build.

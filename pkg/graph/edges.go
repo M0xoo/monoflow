@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -81,7 +82,7 @@ func (g *DependencyGraph) ScanEdges() []Edge {
 			byPy[normalizePyName(p.Name)] = p
 		}
 		if p.Language == LangGo {
-			if info, ok := parseGoMod(filepath.Join(g.RootDir, p.Path, "go.mod")); ok {
+			if info, ok := parseGoModContent(manifest(g.RootDir, filepath.Join(p.Path, "go.mod"))); ok {
 				byGoModule[info.Module] = p
 			}
 		}
@@ -94,16 +95,16 @@ func (g *DependencyGraph) ScanEdges() []Edge {
 
 	var edges []Edge
 	for _, p := range pkgs {
-		dir := filepath.Join(g.RootDir, p.Path)
+		read := func(name string) string { return manifest(g.RootDir, filepath.Join(p.Path, name)) }
 		switch p.Language {
 		case LangJavaScript, LangTypeScript:
-			edges = append(edges, npmEdges(p, dir, byName)...)
+			edges = append(edges, npmEdges(p, read("package.json"), byName)...)
 		case LangGo:
-			edges = append(edges, goEdges(p, dir, byGoModule, goWork)...)
+			edges = append(edges, goEdges(p, read("go.mod"), byGoModule, goWork)...)
 		case LangRust:
-			edges = append(edges, cargoEdges(p, dir, byName, cargoWorkspaceDeps)...)
+			edges = append(edges, cargoEdges(p, read("Cargo.toml"), byName, cargoWorkspaceDeps)...)
 		case LangPython:
-			edges = append(edges, pythonEdges(p, dir, byPy)...)
+			edges = append(edges, pythonEdges(p, read("pyproject.toml"), byPy)...)
 		}
 	}
 	sort.Slice(edges, func(i, j int) bool {
@@ -164,6 +165,19 @@ func contains(list []string, s string) bool {
 	return false
 }
 
+// manifest returns a package manifest from the working tree, or from HEAD when a sparse
+// worktree does not project that package (its edges must stay visible).
+func manifest(root, rel string) string {
+	if data, err := os.ReadFile(filepath.Join(root, rel)); err == nil {
+		return string(data)
+	}
+	out, err := exec.Command("git", "-C", root, "show", "HEAD:"+filepath.ToSlash(rel)).Output()
+	if err != nil {
+		return ""
+	}
+	return string(out)
+}
+
 func check(eco semver.Ecosystem, e *Edge) {
 	if e.Constraint == "" || e.DependencyVersion == "" {
 		e.Satisfied = true
@@ -177,9 +191,9 @@ func check(eco semver.Ecosystem, e *Edge) {
 	e.Satisfied = ok
 }
 
-func npmEdges(p *PackageNode, dir string, byName map[string]*PackageNode) []Edge {
+func npmEdges(p *PackageNode, content string, byName map[string]*PackageNode) []Edge {
 	var pj npmPackageJSON
-	if data, err := os.ReadFile(filepath.Join(dir, "package.json")); err != nil || json.Unmarshal(data, &pj) != nil {
+	if json.Unmarshal([]byte(content), &pj) != nil {
 		return nil
 	}
 	var out []Edge
@@ -219,12 +233,12 @@ func npmEdges(p *PackageNode, dir string, byName map[string]*PackageNode) []Edge
 	return out
 }
 
-func goEdges(p *PackageNode, dir string, byModule map[string]*PackageNode, goWork map[string]bool) []Edge {
-	info, ok := parseGoMod(filepath.Join(dir, "go.mod"))
+func goEdges(p *PackageNode, content string, byModule map[string]*PackageNode, goWork map[string]bool) []Edge {
+	info, ok := parseGoModContent(content)
 	if !ok {
 		return nil
 	}
-	versions := goRequireVersions(filepath.Join(dir, "go.mod"))
+	versions := goRequireVersions(content)
 	var out []Edge
 	for _, req := range info.Requires {
 		dep, ok := byModule[req]
@@ -248,9 +262,9 @@ func goEdges(p *PackageNode, dir string, byModule map[string]*PackageNode, goWor
 
 var goRequireRe = regexp.MustCompile(`^\s*(?:require\s+)?([^\s()]+)\s+(v[0-9][^\s]*)`)
 
-func goRequireVersions(path string) map[string]string {
+func goRequireVersions(content string) map[string]string {
 	out := map[string]string{}
-	for _, l := range strings.Split(readFileString(path), "\n") {
+	for _, l := range strings.Split(content, "\n") {
 		if strings.HasPrefix(strings.TrimSpace(l), "replace") || strings.Contains(l, "=>") {
 			continue
 		}
@@ -273,8 +287,8 @@ var (
 	fieldWorkspace = tomlField("workspace")
 )
 
-func cargoEdges(p *PackageNode, dir string, byName map[string]*PackageNode, wsDeps []string) []Edge {
-	sections := tomlSections(readFileString(filepath.Join(dir, "Cargo.toml")))
+func cargoEdges(p *PackageNode, content string, byName map[string]*PackageNode, wsDeps []string) []Edge {
+	sections := tomlSections(content)
 	type spec struct{ version, path string }
 	specs := map[string]spec{}
 	parse := func(name, val string) {
@@ -354,8 +368,8 @@ func cargoEdges(p *PackageNode, dir string, byName map[string]*PackageNode, wsDe
 
 var pyReq = regexp.MustCompile(`^\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*(\[[^\]]*\])?\s*([^;]*)`)
 
-func pythonEdges(p *PackageNode, dir string, byPy map[string]*PackageNode) []Edge {
-	sections := tomlSections(readFileString(filepath.Join(dir, "pyproject.toml")))
+func pythonEdges(p *PackageNode, content string, byPy map[string]*PackageNode) []Edge {
+	sections := tomlSections(content)
 	reqs := tomlArray(sections["project"], "dependencies")
 	for sec, lines := range sections {
 		if sec == "project.optional-dependencies" || sec == "dependency-groups" {

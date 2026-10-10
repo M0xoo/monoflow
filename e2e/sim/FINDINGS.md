@@ -180,3 +180,20 @@ agent-ledger-upgrade upgraded its pin 1.0.0 → 1.1.0 to get `Sub`.
 | R4-4 | `version suggest` → `""` without explanation | note "no changes since …" |
 | R4-5 | Every agent's inbox shows every DEPENDENCY_RELEASED | only worktrees containing the consumer |
 | R4-6 | `checkpoint revert` doesn't say what it restored | id, message, files |
+
+## Round 5 (2026-10-10) — versioning rerun
+
+MonoFlow CI: one green run per PR + main, CI_PASSED to every agent, 0 raw tool calls. Ground truth still red: the
+release snapshot was git-ignored and only materialised by MonoFlow, so a fresh clone's own `ci/run.sh` could not
+find `.agents/releases/libs-money@1.0.0`.
+
+| # | Finding | Fix |
+|---|---------|-----|
+| R5-1 | Ignored snapshots → native tools/CI in a fresh clone fail without a MonoFlow bootstrap | **snapshots are committed** (vendored, immutable, `linguist-generated`); `Prune` drops unreferenced ones; `Tampered` fails `version check` / DoD when a vendored release is edited |
+| R5-2 | Sparse worktree hides a pinned dependency's manifest → edge disappears, `version upgrades` = 0 | manifests read from git when not checked out |
+| R5-3 | `worktree list` inside a worktree read the worktree's own (empty) registry | manager resolves the main repo root |
+| R5-4 | `isolated: false` reads as "not isolated" | `isolation` (own worktree + branch) vs `deps_isolated` |
+| R5-5 | Informational release notes for source consumers clutter agent inboxes | only in `--all` |
+
+Validated: fresh clone `ci/run.sh` green; sparse ledger worktree projects only `services/ledger` (pinned money needs no
+checkout), sees its compatible upgrade, verifies, clean `git status`.
