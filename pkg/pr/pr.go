@@ -62,6 +62,7 @@ type PRMetadata struct {
 	ReviewDecision   string                 `json:"review_decision,omitempty"`
 	Pushed           bool                   `json:"pushed,omitempty"`
 	CIWatcher        string                 `json:"ci_watcher,omitempty"`
+	CIWaitCommand    string                 `json:"ci_wait_command,omitempty"`
 	RemotePR         *RemotePRResult        `json:"remote_pr,omitempty"`
 }
 
@@ -390,6 +391,7 @@ func (m *PRManager) Create(opts CreateOptions) (*PRMetadata, error) {
 	if pushed {
 		if job, err := events.NewCIWatcher(m.RootDir).StartWatch(events.WatchOptions{CommitSHA: headSHA, Branch: headBranch, Remote: remote, Async: true}); err == nil {
 			metadata.CIWatcher = job.ID
+			metadata.CIWaitCommand = "./bin/monoflow events wait " + headSHA + "   # run as a background task, then end your turn"
 		}
 	}
 
@@ -1083,6 +1085,7 @@ func (m *PRManager) Local(id string, opts LocalOptions) (*PRLocalResult, error) 
 }
 
 func (m *PRManager) getDiffFiles(base, head string) ([]string, error) {
+	base = m.freshestBase(base)
 	// Try base...head diff
 	cmd := exec.Command("git", "diff", "--name-only", base+"..."+head)
 	cmd.Dir = m.RootDir
@@ -1316,4 +1319,20 @@ func firstLine(s string) string {
 		return s[:i]
 	}
 	return s
+}
+
+// freshestBase prefers origin/<base> when the local <base> is stale (an ancestor of it):
+// otherwise a PR would include everything merged upstream since the last local pull.
+func (m *PRManager) freshestBase(base string) string {
+	remote := "origin/" + base
+	if exec.Command("git", "-C", m.RootDir, "rev-parse", "--verify", "--quiet", remote).Run() != nil {
+		return base
+	}
+	if exec.Command("git", "-C", m.RootDir, "rev-parse", "--verify", "--quiet", base).Run() != nil {
+		return remote
+	}
+	if exec.Command("git", "-C", m.RootDir, "merge-base", "--is-ancestor", base, remote).Run() == nil {
+		return remote
+	}
+	return base
 }
