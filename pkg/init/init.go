@@ -88,11 +88,10 @@ func InitRepo(targetDir string, binarySrcPath string) (*InitResult, error) {
 		return nil, err
 	}
 
-	// Also mirror into workspace root GEMINI.md or AGENTS.md if not present
-	agentsMD := filepath.Join(absTarget, "AGENTS.md")
-	if _, err := os.Stat(agentsMD); os.IsNotExist(err) {
-		_ = os.WriteFile(agentsMD, []byte(AgentRuleTemplate), 0644)
-	}
+	// Agent instructions: merge a delimited MonoFlow section into AGENTS.md (keeping any
+	// existing project instructions) and point CLAUDE.md at it when the repo has one.
+	_ = mergeSection(filepath.Join(absTarget, "AGENTS.md"), AgentRuleTemplate, true)
+	_ = mergeSection(filepath.Join(absTarget, "CLAUDE.md"), ClaudePointer, false)
 
 	skillPath := filepath.Join(agentsDir, "skills", "monoflow", "SKILL.md")
 	if err := os.WriteFile(skillPath, []byte(AgentSkillTemplate), 0644); err != nil {
@@ -282,4 +281,43 @@ func InstallAgentHooks(repoRoot string) error {
 		return os.WriteFile(pluginPath, []byte(agenthooks.OpencodePlugin), 0644)
 	}
 	return nil
+}
+
+const (
+	sectionStart = "<!-- monoflow:start (managed by monoflow init) -->"
+	sectionEnd   = "<!-- monoflow:end -->"
+)
+
+// ClaudePointer is merged into an existing CLAUDE.md (Claude Code reads CLAUDE.md, not AGENTS.md).
+const ClaudePointer = `## MonoFlow
+This monorepo is governed by MonoFlow; follow the MonoFlow section of AGENTS.md.
+Use ` + "`.agents/bin/monoflow verify --affected`" + ` for checks and ` + "`monoflow commit` / `monoflow pr create`" + ` instead of raw git/gh.
+`
+
+// mergeSection inserts or replaces the MonoFlow-managed section of a markdown file,
+// leaving everything else untouched. When create is false a missing file is left absent.
+func mergeSection(path, content string, create bool) error {
+	block := sectionStart + "\n" + strings.TrimSpace(content) + "\n" + sectionEnd + "\n"
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if !create {
+			return nil
+		}
+		return os.WriteFile(path, []byte(block), 0644)
+	}
+	s := string(data)
+	if i := strings.Index(s, sectionStart); i >= 0 {
+		if j := strings.Index(s[i:], sectionEnd); j >= 0 {
+			end := i + j + len(sectionEnd)
+			if end < len(s) && s[end] == '\n' {
+				end++
+			}
+			return os.WriteFile(path, []byte(s[:i]+block+s[end:]), 0644)
+		}
+	}
+	// Legacy installs wrote the bare template as the whole file: replace it.
+	if strings.HasPrefix(strings.TrimSpace(s), "# MonoFlow") {
+		return os.WriteFile(path, []byte(block), 0644)
+	}
+	return os.WriteFile(path, []byte(strings.TrimRight(s, "\n")+"\n\n"+block), 0644)
 }

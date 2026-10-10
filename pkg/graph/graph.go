@@ -331,15 +331,18 @@ type AffectedResult struct {
 func (g *DependencyGraph) ComputeAffected(changedFiles []string) AffectedResult {
 	directMap := make(map[string]bool)
 	for _, f := range changedFiles {
-		pkg := g.MapFileToPackage(f)
-		if pkg != nil {
-			directMap[pkg.Name] = true
-		} else if IsGlobalFile(f) {
-			// Workspace-level config owned by no package (go.work, lockfiles, CI) can
-			// break every package; remote CI re-runs everything, so must we.
+		if IsNonCodeFile(f) {
+			continue
+		}
+		if IsGlobalFile(f) {
+			// Workspace-level config (go.work, lockfiles, CI) can break every package,
+			// even when a root package technically owns the file; remote CI re-runs
+			// everything, so must we.
 			for name := range g.packages {
 				directMap[name] = true
 			}
+		} else if pkg := g.MapFileToPackage(f); pkg != nil {
+			directMap[pkg.Name] = true
 		}
 	}
 
@@ -422,4 +425,12 @@ var globalFilePattern = regexp.MustCompile(`^(go\.work(\.sum)?|package\.json|pac
 // whose change can affect every package.
 func IsGlobalFile(path string) bool {
 	return globalFilePattern.MatchString(strings.TrimPrefix(filepath.ToSlash(path), "./"))
+}
+
+var nonCodePattern = regexp.MustCompile(`(?i)(\.(md|mdx|rst)$|^LICENSE|(^|/)docs?/|^\.agents/|^\.claude/|^\.opencode/|^\.cursor/)`)
+
+// IsNonCodeFile reports files whose change cannot break a build or test (docs, agent
+// config). Kept in sync with the paths-ignore of the generated CI workflow.
+func IsNonCodeFile(path string) bool {
+	return nonCodePattern.MatchString(strings.TrimPrefix(filepath.ToSlash(path), "./"))
 }

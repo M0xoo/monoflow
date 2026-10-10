@@ -16,6 +16,7 @@ import (
 
 	initialize "github.com/antigravity/monoflow/pkg/init"
 	"github.com/antigravity/monoflow/pkg/merge"
+	"github.com/antigravity/monoflow/pkg/graph"
 	"github.com/antigravity/monoflow/pkg/runtimestate"
 	"github.com/antigravity/monoflow/pkg/subset"
 )
@@ -230,6 +231,32 @@ func (m *Manager) CreateWithOpts(agentID string, opts CreateOptions) (*WorktreeI
 		strategy = subset.DepStrategySource
 	}
 
+	// verify --affected must also test the dependents of what the agent changes, so they
+	// are projected up front (otherwise every verify fails with package_not_projected).
+	if len(targetPkgs) > 0 {
+		if g, err := graph.LoadOrDiscover(wtPath); err == nil {
+			seen := map[string]bool{}
+			var expanded []string
+			add := func(n string) {
+				if !seen[n] {
+					seen[n] = true
+					expanded = append(expanded, n)
+				}
+			}
+			for _, t := range targetPkgs {
+				if p, ok := g.GetPackage(t); ok {
+					add(p.Name)
+					for _, d := range g.GetTransitiveDownstream(p.Name) {
+						add(d)
+					}
+				} else {
+					add(t)
+				}
+			}
+			targetPkgs = expanded
+		}
+	}
+
 	if len(targetPkgs) > 0 {
 		subRes, errSub := subset.ApplyWithOptions(wtPath, targetPkgs, strategy)
 		if errSub == nil && subRes != nil {
@@ -263,6 +290,7 @@ func (m *Manager) CreateWithOpts(agentID string, opts CreateOptions) (*WorktreeI
 		Branch:          branch,
 	}
 
+	defer m.lockRegistry()()
 	registry, _ := m.loadRegistry()
 	registry[agentID] = info
 	_ = m.saveRegistry(registry)
@@ -408,6 +436,7 @@ func (m *Manager) Isolate(agentID string) (*IsolateResult, error) {
 	durMs := float64(time.Since(start).Microseconds()) / 1000.0
 
 	// Update registry
+	defer m.lockRegistry()()
 	reg, _ := m.loadRegistry()
 	if info, ok := reg[agentID]; ok {
 		info.Isolated = true
@@ -583,6 +612,7 @@ func (m *Manager) Touch(agentID string) error {
 }
 
 func (m *Manager) touchInternal(agentID string) error {
+	defer m.lockRegistry()()
 	reg, err := m.loadRegistry()
 	if err != nil {
 		return err
@@ -627,6 +657,7 @@ func (m *Manager) FinishSafe(agentID string, force bool) error {
 	}
 
 	// 2. Remove from registry
+	defer m.lockRegistry()()
 	reg, _ := m.loadRegistry()
 	delete(reg, agentID)
 	_ = m.saveRegistry(reg)
@@ -644,6 +675,7 @@ func (m *Manager) PruneStale(maxAge time.Duration) ([]string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	defer m.lockRegistry()()
 	reg, _ := m.loadRegistry()
 	var pruned []string
 	now := time.Now().UTC()
@@ -702,13 +734,41 @@ func (m *Manager) loadRegistry() (map[string]WorktreeInfo, error) {
 	return reg, nil
 }
 
+// saveRegistry writes atomically (temp file + rename) so concurrent readers in other
+// agent processes never observe a partial file (which they would read as empty and then
+// overwrite, losing other agents' worktrees).
 func (m *Manager) saveRegistry(reg map[string]WorktreeInfo) error {
 	_ = os.MkdirAll(m.worktreesDir, 0755)
 	data, err := json.MarshalIndent(reg, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(m.registryFile, data, 0644)
+	tmp, err := os.CreateTemp(m.worktreesDir, ".registry-*.json")
+	if err != nil {
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmp.Name())
+		return err
+	}
+	tmp.Close()
+	return os.Rename(tmp.Name(), m.registryFile)
+}
+
+// lockRegistry takes a cross-process exclusive lock for a registry read-modify-write
+// (m.mu only serialises goroutines within one process). Use: defer m.lockRegistry()().
+func (m *Manager) lockRegistry() func() {
+	_ = os.MkdirAll(m.worktreesDir, 0755)
+	f, err := os.OpenFile(filepath.Join(m.worktreesDir, ".registry.lock"), os.O_CREATE|os.O_RDWR, 0644)
+	if err != nil {
+		return func() {}
+	}
+	lockFile(f)
+	return func() {
+		unlockFile(f)
+		f.Close()
+	}
 }
 
 func fileExists(path string) bool {
@@ -739,6 +799,7 @@ func (m *Manager) Focus(agentID string, targetPackage string, strategy subset.De
 		return nil, err
 	}
 
+	defer m.lockRegistry()()
 	reg, _ := m.loadRegistry()
 	info, ok := reg[agentID]
 	if !ok {
@@ -772,6 +833,7 @@ func (m *Manager) AddPackage(agentID string, packages []string, strategy subset.
 		return nil, err
 	}
 
+	defer m.lockRegistry()()
 	reg, _ := m.loadRegistry()
 	info, ok := reg[agentID]
 	if !ok {
@@ -806,6 +868,7 @@ func (m *Manager) RemovePackage(agentID string, packages []string, force bool) (
 		return nil, err
 	}
 
+	defer m.lockRegistry()()
 	reg, _ := m.loadRegistry()
 	info, ok := reg[agentID]
 	if !ok {

@@ -101,3 +101,40 @@ commits restoring `go.work`. Round-1 issues confirmed fixed: no `--help` side ef
 | P1 | `CI_SKIPPED` when no run appears; one watcher per commit; `pr create` starts it | R2-15 | Circuit breaker auto-reverted the working tree to the latest (not necessarily green) checkpoint after 3 failed verifies — silently destroying an iterating agent's edits. | code review |
 | R2-16 | Monoflow repo itself tracked `.agents/cache` as a symlink (committed by an agent worktree); `init` committed the 12 MB local binary. | `git ls-files -s` mode 120000 |
 | R2-14 |
+
+## Round 3 (2026-10-10) — 7 agents, real GitHub, MonoFlow-generated CI
+
+**Remote CI never broke: 8/8 pushed heads pass full CI** (round 2: 4/8 red). **One Actions run per code PR**
+(6 runs / 6 PRs, all green; round 2: 17 runs / 8 heads), **0 runs for the docs-only PR**. 0 raw build/test or
+raw git calls across all agents. CI_PASSED events delivered; `worktree list` showed PR + CI per agent.
+Sparse worktrees: 10–13 of 35 files. Cache: 16 hits / 25 misses (39%).
+
+| # | Finding | Evidence |
+|---|---------|----------|
+| R3-1 | Sparse worktrees project upstream deps but not dependents → verify fails `package_not_projected` until `subset add`. | agent-ui, agent-money-sub |
+| R3-2 | Registry written non-atomically without a cross-process lock → concurrent agents lose each other's entries. | agent-docs: `worktree list` → `[]` |
+| R3-3 | `events unread` shows every agent's events. | agent-ledger |
+| R3-4 | Docs-only change: `total_targets: 0` without explanation. | agent-docs |
+
+## Plug-in on existing public monorepos (`e2e/plugin/check.sh`)
+
+| repo | before | after |
+|---|---|---|
+| changesets (pnpm, root vitest/eslint) | 24 pkgs, 23 without test cmd, TS labelled JS | 24 TS pkgs, root tools scoped per package |
+| opentelemetry-go (nested Go modules) | 9 of 29 modules, 4 edges, **edit → nothing affected** | 29 modules, 138 edges; leaf edit → 1 module (1.7 s), root edit → 27 (9 s warm) |
+| tokio (Cargo) | 0 edges | 12 crates, 26 edges |
+| langchain (Python, nested) | 6 projects, 0 edges | 22 projects, 71 edges |
+
+| # | Finding |
+|---|---------|
+| P-1 | Discovery only scanned fixed depths and parsed no Cargo/Python deps; root Go module ignored (CI-protection hole). |
+| P-2 | MonoFlow's own files (AGENTS.md, .agents/, .claude/) and docs made the root package "affected". |
+| P-3 | Upstream repos have pre-existing failures (otel-go: gofmt) → every verify red on day one. |
+| P-4 | `init` skipped an existing AGENTS.md entirely (agents never learn MonoFlow) and ignored CLAUDE.md. |
+| P-5 | JS repos running vitest/jest/eslint/tsc from the root: packages had no checks. |
+
+### TODO (round 3 + plug-in) — done in this round
+P0 registry lock + atomic writes (R3-2) · P0 manifest discovery at any depth with Go/Cargo/Python/JS dependency parsing (P-1) ·
+P0 baseline comparison: pre-existing failures reported, not blocking; `--strict` (P-3) · P1 project dependents (R3-1) ·
+P1 non-code files never affect packages, synced with CI paths-ignore (P-2) · P1 merge MonoFlow section into existing
+AGENTS.md / CLAUDE.md (P-4) · P1 scope root JS tools per package (P-5). Open: R3-3 inbox scoping, R3-4 hint.

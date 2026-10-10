@@ -216,6 +216,8 @@ var commandDetails = map[string]string{
   verify --package=<p> | --all        Verify one package / every package
   verify --test | --lint | --typecheck | --all-checks   Restrict or widen the check kinds
   verify --no-cache | --force         Ignore cached results
+  verify --base=<ref>                 Changes since the merge-base with <ref> (CI: the PR base)
+  verify --strict                     Also block on failures that pre-exist on the base branch
   verify --proof=<task-id>            Verify a Proof-of-Work receipt`,
 	"worktree": `  worktree create <agent-id> --packages=<p1,p2> [--deps=<strategy>] [--isolated-deps]
                                       Isolated worktree on branch agent/<agent-id>
@@ -502,6 +504,9 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 			opts.Mode = "all"
 		} else if strings.HasPrefix(arg, "--base=") {
 			verifyBase = strings.TrimPrefix(arg, "--base=")
+			opts.BaseRef = verifyBase
+		} else if arg == "--strict" {
+			opts.Strict = true
 		}
 	}
 

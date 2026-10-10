@@ -51,10 +51,10 @@ name: monoflow-ci
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
-    paths-ignore: ["**/*.md", "docs/**", "LICENSE"]
+    paths-ignore: ["**/*.md", "**/*.mdx", "**/*.rst", "docs/**", "**/docs/**", "LICENSE*", ".agents/**", ".claude/**", ".opencode/**"]
   push:
     branches: [main, master]
-    paths-ignore: ["**/*.md", "docs/**", "LICENSE"]
+    paths-ignore: ["**/*.md", "**/*.mdx", "**/*.rst", "docs/**", "**/docs/**", "LICENSE*", ".agents/**", ".claude/**", ".opencode/**"]
 
 # One run per PR head: a newer push cancels the superseded run.
 concurrency:

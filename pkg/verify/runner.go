@@ -21,6 +21,10 @@ type VerifyOptions struct {
 	SpecificFile string // for fine-grained TIA
 	Mode         string // "fast" (typecheck/lint), "test", "lint", "all"
 	NoCache      bool
+	// Strict disables baseline comparison: by default a failure that also happens on the
+	// merge-base (pre-existing in the repo, not caused by this change) does not block.
+	Strict  bool
+	BaseRef string // base for the baseline (default: origin/main, main, origin/master, master)
 }
 
 // TargetResult holds the result of verifying a single package.
@@ -32,6 +36,8 @@ type TargetResult struct {
 	Cached      bool              `json:"cached,omitempty"`
 	Errors      []DiagnosticError `json:"errors,omitempty"`
 	Quarantined []string          `json:"quarantined,omitempty"`
+	// Preexisting holds failures that also occur on the merge-base: reported, not blocking.
+	Preexisting []DiagnosticError `json:"preexisting,omitempty"`
 	CommandRun  string            `json:"command_run,omitempty"`
 }
 
@@ -291,6 +297,10 @@ func (r *Runner) VerifyAffected(g *graph.DependencyGraph, changedFiles []string,
 	}
 
 	wg.Wait()
+
+	if !opt.Strict {
+		r.classifyPreexisting(g, results, opt)
+	}
 
 	totalDur := float64(time.Since(start).Microseconds()) / 1000.0
 	passedCount := 0
