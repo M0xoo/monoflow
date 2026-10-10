@@ -20,6 +20,7 @@ import (
 	"github.com/antigravity/monoflow/pkg/proof"
 	"github.com/antigravity/monoflow/pkg/queue"
 	"github.com/antigravity/monoflow/pkg/review"
+	"github.com/antigravity/monoflow/pkg/scenario"
 	"github.com/antigravity/monoflow/pkg/subset"
 	"github.com/antigravity/monoflow/pkg/task"
 	"github.com/antigravity/monoflow/pkg/telemetry"
@@ -112,6 +113,9 @@ func main() {
 	case "version":
 		handleVersion(rootDir)
 
+	case "scenario":
+		handleScenario(rootDir)
+
 	default:
 		fmt.Printf("Unknown command: %s\n\n", cmd)
 		printUsage()
@@ -142,6 +146,7 @@ Usage:
   monoflow guard [check]              Test integrity guard (anti-cheating) & secret scanner
   monoflow task [check|prove|slice]   DoD contracts, Proof of Work receipts, & stacked diffs
   monoflow deliver [--target=<pkg>]   Assemble hermetic deliverable artifact (.agents/dist)
+  monoflow scenario [run] [--json]    Real end-to-end multi-agent enterprise monorepo simulation
   monoflow app test                   Delta compilation + symlink overlay (< 5s full-app)
   monoflow pr [create|list|view|review|test|local|merge] Full agent-native PR suite with affected packages
   monoflow quarantine [list|add]      Manage flaky test quarantine
@@ -1934,3 +1939,54 @@ func handleVersion(rootDir string) {
 		fmt.Println(string(data))
 	}
 }
+
+func handleScenario(rootDir string) {
+	targetDir := ""
+	asJSON := false
+	for _, arg := range os.Args[2:] {
+		if strings.HasPrefix(arg, "--dir=") {
+			targetDir = strings.TrimPrefix(arg, "--dir=")
+		} else if arg == "--json" {
+			asJSON = true
+		}
+	}
+
+	if !asJSON {
+		fmt.Println("🚀 Running MonoFlow Real Multi-Agent Monorepo & CI Verification Scenario...")
+		fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	}
+
+	report, err := scenario.RunScenario(targetDir)
+	if err != nil {
+		if asJSON {
+			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
+		} else {
+			fmt.Printf("❌ Scenario Execution Failed: %v\n", err)
+		}
+		os.Exit(1)
+	}
+
+	if asJSON {
+		data, _ := json.MarshalIndent(report, "", "  ")
+		fmt.Println(string(data))
+		return
+	}
+
+	for _, sc := range report.Scenes {
+		statusIcon := "✅"
+		if sc.Status == "BLOCKED_AS_EXPECTED" {
+			statusIcon = "🛡️ "
+		} else if sc.Status != "PASSED" {
+			statusIcon = "❌"
+		}
+		fmt.Printf("%s [SCENE %d/7] %s (%.1fms)\n", statusIcon, sc.SceneNumber, sc.Title, sc.DurationMs)
+		for k, v := range sc.Details {
+			fmt.Printf("      • %s: %v\n", k, v)
+		}
+	}
+	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	fmt.Printf("🏁 Scenario Summary: %d/%d Scenes Passed in %.2fs (Status: %s)\n",
+		report.Passed, report.TotalScenes, report.TotalTimeMs/1000.0, strings.ToUpper(report.Status))
+	fmt.Printf("📁 Fixture Monorepo: %s\n", report.RepoDir)
+}
+

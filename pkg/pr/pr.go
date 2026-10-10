@@ -668,11 +668,24 @@ func (m *PRManager) Test(id string, opts TestOptions) (*PRTestResult, error) {
 
 	// 3. Concurrency data race detector gate
 	if _, err := os.Stat(filepath.Join(m.RootDir, "go.mod")); err == nil {
-		cmdRace := exec.Command("go", "test", "-race", "-short", "./pkg/...")
-		cmdRace.Dir = m.RootDir
-		if raceOut, raceErr := cmdRace.CombinedOutput(); raceErr != nil {
-			status = "failed"
-			verdict = fmt.Sprintf("PR Delta failed: data race detected: %s", strings.TrimSpace(string(raceOut)))
+		var goPkgs []string
+		if _, err := os.Stat(filepath.Join(m.RootDir, "pkg")); err == nil {
+			goPkgs = append(goPkgs, "./pkg/...")
+		} else if g != nil && len(affected) > 0 {
+			for _, pkgName := range affected {
+				if pkgMeta, ok := g.GetPackage(pkgName); ok && pkgMeta != nil && pkgMeta.Language == "go" {
+					goPkgs = append(goPkgs, "./"+pkgMeta.Path+"/...")
+				}
+			}
+		}
+		if len(goPkgs) > 0 {
+			args := append([]string{"test", "-race", "-short"}, goPkgs...)
+			cmdRace := exec.Command("go", args...)
+			cmdRace.Dir = m.RootDir
+			if raceOut, raceErr := cmdRace.CombinedOutput(); raceErr != nil {
+				status = "failed"
+				verdict = fmt.Sprintf("PR Delta failed: data race detected: %s", strings.TrimSpace(string(raceOut)))
+			}
 		}
 	}
 
@@ -779,8 +792,8 @@ func (m *PRManager) Merge(id string, opts MergeOptions) (*PRMergeResult, error) 
 		// Git local squash/merge fallback
 		cmdCheckout := exec.Command("git", "checkout", pr.BaseBranch)
 		cmdCheckout.Dir = m.RootDir
-		if err := cmdCheckout.Run(); err != nil {
-			return nil, fmt.Errorf("failed to checkout base branch '%s': %w", pr.BaseBranch, err)
+		if out, err := cmdCheckout.CombinedOutput(); err != nil {
+			return nil, fmt.Errorf("failed to checkout base branch '%s': %w (%s)", pr.BaseBranch, err, string(out))
 		}
 
 		mergeArg := "--squash"
