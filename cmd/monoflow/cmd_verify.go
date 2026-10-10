@@ -200,6 +200,36 @@ func handleProofVerification(rootDir, taskID string) {
 }
 
 func getGitChangedFiles(rootDir string) []string {
+	files := uncommittedFiles(rootDir)
+
+	// If working tree is clean, fallback to diff against base branch or HEAD~1 to capture committed branch edits
+	if len(files) == 0 {
+		cmdDiff := exec.Command("git", "diff", "--name-only", "origin/main...HEAD")
+		cmdDiff.Dir = rootDir
+		if diffOut, err := cmdDiff.CombinedOutput(); err == nil && len(strings.TrimSpace(string(diffOut))) > 0 {
+			for _, f := range strings.Split(strings.TrimSpace(string(diffOut)), "\n") {
+				if trimmed := strings.TrimSpace(f); trimmed != "" {
+					files = append(files, trimmed)
+				}
+			}
+		} else {
+			cmdDiffHead := exec.Command("git", "diff", "--name-only", "HEAD~1...HEAD")
+			cmdDiffHead.Dir = rootDir
+			if headOut, err := cmdDiffHead.CombinedOutput(); err == nil && len(strings.TrimSpace(string(headOut))) > 0 {
+				for _, f := range strings.Split(strings.TrimSpace(string(headOut)), "\n") {
+					if trimmed := strings.TrimSpace(f); trimmed != "" {
+						files = append(files, trimmed)
+					}
+				}
+			}
+		}
+	}
+
+	return files
+}
+
+// uncommittedFiles lists working-tree changes only (no fallback to the branch's commits).
+func uncommittedFiles(rootDir string) []string {
 	cmd := exec.Command("git", "status", "--porcelain")
 	cmd.Dir = rootDir
 	out, err := cmd.CombinedOutput()
@@ -229,30 +259,6 @@ func getGitChangedFiles(rootDir string) []string {
 		}
 		files = kept
 	}
-
-	// If working tree is clean, fallback to diff against base branch or HEAD~1 to capture committed branch edits
-	if len(files) == 0 {
-		cmdDiff := exec.Command("git", "diff", "--name-only", "origin/main...HEAD")
-		cmdDiff.Dir = rootDir
-		if diffOut, err := cmdDiff.CombinedOutput(); err == nil && len(strings.TrimSpace(string(diffOut))) > 0 {
-			for _, f := range strings.Split(strings.TrimSpace(string(diffOut)), "\n") {
-				if trimmed := strings.TrimSpace(f); trimmed != "" {
-					files = append(files, trimmed)
-				}
-			}
-		} else {
-			cmdDiffHead := exec.Command("git", "diff", "--name-only", "HEAD~1...HEAD")
-			cmdDiffHead.Dir = rootDir
-			if headOut, err := cmdDiffHead.CombinedOutput(); err == nil && len(strings.TrimSpace(string(headOut))) > 0 {
-				for _, f := range strings.Split(strings.TrimSpace(string(headOut)), "\n") {
-					if trimmed := strings.TrimSpace(f); trimmed != "" {
-						files = append(files, trimmed)
-					}
-				}
-			}
-		}
-	}
-
 	return files
 }
 

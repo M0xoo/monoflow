@@ -126,7 +126,7 @@ func handlePush(rootDir string) {
 	// 1d. Outer-loop gate: the exact commit must have passed local CI (affected packages +
 	// dependents + the repo's ci_cmd, in a clean checkout) before it is pushed.
 	if !skipVerify {
-		if dirty := getGitChangedFiles(rootDir); len(dirty) > 0 && !onlyNonCode(dirty) {
+		if dirty := uncommittedFiles(rootDir); len(dirty) > 0 && !onlyNonCode(dirty) {
 			data, _ := json.MarshalIndent(map[string]any{"status": "blocked",
 				"verdict": "Uncommitted changes: commit them with 'monoflow commit' (which starts the outer loop) before pushing."}, "", "  ")
 			fmt.Println(string(data))
