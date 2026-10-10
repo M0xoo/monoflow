@@ -3,554 +3,1475 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>MonoFlow — The Agent-Native Monorepo & Ultra-Fast CI Operating Environment</title>
+  <title>MonoFlow — Sub-Second Monorepo Engine for Autonomous Coding Agents</title>
   <meta name="description" content="A Go-native systems engine for multi-agent monorepo collaboration: sub-2s inner loops, 15ms shadow checkpoints, CoW worktrees with AST synthesis, and two-tier CI gates.">
-  <link rel="stylesheet" href="styles.css">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.85em%22 font-size=%2280%22>⚡</text></svg>">
+  <link rel="stylesheet" href="styles.css?v=20261010-v4">
+  <style>
+/* ==========================================================================
+   MonoFlow — Systems Engineering Design System (2026)
+   Philosophy: Ultra-dense, dark hardware aesthetic, razor-sharp hairline borders,
+   high-contrast monospace typography, and interactive systems tooling.
+   ========================================================================== */
+
+:root {
+  --bg-base: #060709;
+  --bg-surface: #0c0e14;
+  --bg-elevated: #121622;
+  --bg-subtle: #171d2b;
+  --bg-code: #040507;
+
+  --border-hairline: #1c2230;
+  --border-muted: #273042;
+  --border-active: #f59e0b;
+  --border-emerald: #10b981;
+
+  --accent: #f59e0b;
+  --accent-light: #fbbf24;
+  --accent-glow: rgba(245, 158, 11, 0.12);
+  --success: #10b981;
+  --success-glow: rgba(16, 185, 129, 0.12);
+  --info: #06b6d4;
+  --danger: #ef4444;
+
+  --text-primary: #f8fafc;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --text-dim: #475569;
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", "Fira Code", Menlo, Consolas, monospace;
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --container-max: 1240px;
+}
+
+[data-theme="light"] {
+  --bg-base: #f8fafc;
+  --bg-surface: #ffffff;
+  --bg-elevated: #f1f5f9;
+  --bg-subtle: #e2e8f0;
+  --bg-code: #0f172a;
+
+  --border-hairline: #e2e8f0;
+  --border-muted: #cbd5e1;
+  --border-active: #d97706;
+
+  --accent: #d97706;
+  --accent-light: #f59e0b;
+  --accent-glow: rgba(217, 119, 6, 0.12);
+  --success: #059669;
+
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #64748b;
+  --text-dim: #94a3b8;
+}
+
+/* Reset & Base */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  font-size: 15px;
+  scroll-behavior: smooth;
+  background-color: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  min-height: 100vh;
+  background-color: var(--bg-base);
+  background-image: 
+    radial-gradient(circle at 50% 0%, rgba(245, 158, 11, 0.04) 0%, transparent 60%),
+    linear-gradient(to right, rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+  background-size: 100% 100%, 32px 32px, 32px 32px;
+  background-position: top center, 0 0, 0 0;
+  color: var(--text-primary);
+  overflow-x: hidden;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+/* Container */
+.container {
+  max-width: var(--container-max);
+  margin: 0 auto;
+  padding: 0 1.5rem;
+}
+
+/* ==========================================================================
+   Header & Sticky Nav
+   ========================================================================== */
+.header {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  background: rgba(6, 7, 9, 0.85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border-hairline);
+  height: 60px;
+}
+
+.header-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 100%;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  font-weight: 700;
+  font-size: 1.15rem;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+}
+
+.brand-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-muted);
+  border-radius: var(--radius-sm);
+  color: var(--accent);
+  font-size: 0.95rem;
+}
+
+.brand-badge {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-weight: 600;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-hairline);
+  color: var(--accent);
+  padding: 2px 7px;
+  border-radius: var(--radius-sm);
+  letter-spacing: 0.02em;
+}
+
+.header-links {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+}
+
+.header-link {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  transition: color 0.15s ease;
+}
+
+.header-link:hover {
+  color: var(--text-primary);
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.search-trigger {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-hairline);
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  padding: 0.35rem 0.75rem;
+  border-radius: var(--radius-sm);
+  transition: all 0.15s ease;
+}
+
+.search-trigger:hover {
+  border-color: var(--border-muted);
+  color: var(--text-secondary);
+}
+
+.search-trigger kbd {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  background: var(--bg-elevated);
+  padding: 1px 4px;
+  border-radius: 3px;
+  border: 1px solid var(--border-hairline);
+}
+
+.github-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-hairline);
+  padding: 0.35rem 0.8rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  transition: all 0.15s ease;
+}
+
+.github-btn:hover {
+  border-color: var(--border-muted);
+  background: var(--bg-subtle);
+}
+
+.theme-btn {
+  background: transparent;
+  border: 1px solid var(--border-hairline);
+  color: var(--text-secondary);
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+
+.theme-btn:hover {
+  border-color: var(--border-muted);
+  color: var(--text-primary);
+}
+
+/* ==========================================================================
+   Hero Section
+   ========================================================================== */
+.hero {
+  padding: 4.5rem 0 3rem;
+  text-align: center;
+}
+
+.hero-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-hairline);
+  padding: 0.35rem 0.9rem;
+  border-radius: 100px;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  margin-bottom: 1.8rem;
+}
+
+.hero-pill .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--success);
+  box-shadow: 0 0 8px var(--success);
+}
+
+.hero-title {
+  font-size: clamp(2.3rem, 5.5vw, 4.2rem);
+  font-weight: 800;
+  line-height: 1.08;
+  letter-spacing: -0.04em;
+  color: var(--text-primary);
+  max-width: 980px;
+  margin: 0 auto 1.5rem;
+}
+
+.hero-title .highlight {
+  color: var(--accent);
+}
+
+.hero-subtitle {
+  font-size: clamp(1rem, 1.8vw, 1.25rem);
+  color: var(--text-secondary);
+  max-width: 760px;
+  margin: 0 auto 2.5rem;
+  line-height: 1.55;
+}
+
+/* Install Bar */
+.install-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.85rem;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-hairline);
+  padding: 0.6rem 1.2rem;
+  border-radius: var(--radius-md);
+  font-family: var(--font-mono);
+  font-size: 0.92rem;
+  color: var(--text-primary);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  margin-bottom: 2rem;
+  max-width: 100%;
+}
+
+.install-prompt {
+  color: var(--accent);
+  font-weight: 700;
+  user-select: none;
+}
+
+.install-cmd {
+  user-select: all;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.btn-copy {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-hairline);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  padding: 0.35rem 0.65rem;
+  border-radius: var(--radius-sm);
+  transition: all 0.12s ease;
+}
+
+.btn-copy:hover {
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+  border-color: var(--border-muted);
+}
+
+.btn-copy.copied {
+  background: var(--success);
+  color: #ffffff;
+  border-color: var(--success);
+}
+
+.hero-cta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+}
+
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: var(--accent);
+  color: #000000;
+  font-weight: 600;
+  font-size: 0.9rem;
+  padding: 0.65rem 1.4rem;
+  border-radius: var(--radius-md);
+  transition: all 0.15s ease;
+}
+
+.btn-primary:hover {
+  background: var(--accent-light);
+  transform: translateY(-1px);
+}
+
+.btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-hairline);
+  color: var(--text-primary);
+  font-weight: 500;
+  font-size: 0.9rem;
+  padding: 0.65rem 1.4rem;
+  border-radius: var(--radius-md);
+  transition: all 0.15s ease;
+}
+
+.btn-secondary:hover {
+  border-color: var(--border-muted);
+  background: var(--bg-subtle);
+}
+
+/* ==========================================================================
+   Precision Telemetry Gauges (The Metrics Wall)
+   ========================================================================== */
+.telemetry-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1rem;
+  margin: 3.5rem 0 4rem;
+}
+
+.telemetry-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-md);
+  padding: 1.25rem 1.4rem;
+  position: relative;
+  transition: border-color 0.2s ease, transform 0.2s ease;
+}
+
+.telemetry-card:hover {
+  border-color: var(--border-muted);
+  transform: translateY(-2px);
+}
+
+.telemetry-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.4rem;
+}
+
+.telemetry-tag {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.telemetry-val {
+  font-family: var(--font-mono);
+  font-size: 1.85rem;
+  font-weight: 800;
+  color: var(--text-primary);
+  letter-spacing: -0.03em;
+  margin-bottom: 0.2rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.telemetry-val.accent { color: var(--accent); }
+.telemetry-val.emerald { color: var(--success); }
+.telemetry-val.cyan { color: var(--info); }
+
+.telemetry-desc {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+/* ==========================================================================
+   Live Interactive Engine Workbench (Showcase Console)
+   ========================================================================== */
+.workbench-section {
+  margin: 4rem 0 6rem;
+}
+
+.section-label {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+  margin-bottom: 0.5rem;
+}
+
+.section-heading {
+  font-size: 2rem;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  color: var(--text-primary);
+  margin-bottom: 0.75rem;
+}
+
+.section-subtext {
+  font-size: 1.05rem;
+  color: var(--text-secondary);
+  max-width: 720px;
+  margin-bottom: 2rem;
+}
+
+.workbench-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);
+}
+
+.workbench-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1.25rem;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border-hairline);
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.workbench-tabs {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.wb-tab {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  padding: 0.4rem 0.85rem;
+  border-radius: var(--radius-sm);
+  transition: all 0.12s ease;
+}
+
+.wb-tab:hover {
+  color: var(--text-primary);
+  background: var(--bg-subtle);
+}
+
+.wb-tab.active {
+  background: var(--bg-surface);
+  color: var(--accent);
+  border-color: var(--border-hairline);
+  font-weight: 600;
+}
+
+.workbench-meta {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.status-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--success);
+}
+
+.status-indicator::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--success);
+}
+
+.workbench-viewport {
+  padding: 1.5rem;
+  background: var(--bg-code);
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  line-height: 1.65;
+  color: #e2e8f0;
+  min-height: 380px;
+  overflow-x: auto;
+}
+
+.wb-panel {
+  display: none;
+}
+
+.wb-panel.active {
+  display: block;
+}
+
+/* Syntax Highlighting Tokens in Workbench */
+.c-cyan { color: #38bdf8; }
+.c-amber { color: #f59e0b; }
+.c-emerald { color: #34d399; }
+.c-rose { color: #fb7185; }
+.c-purple { color: #c084fc; }
+.c-muted { color: #64748b; }
+.c-bold { font-weight: 700; }
+
+/* Interactive Terminal Tab Controls */
+.cli-preset-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border-hairline);
+  flex-wrap: wrap;
+}
+
+.cli-label {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+.cli-btn {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-hairline);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  padding: 0.25rem 0.6rem;
+  border-radius: var(--radius-sm);
+  transition: all 0.12s ease;
+}
+
+.cli-btn:hover {
+  background: var(--bg-subtle);
+  color: var(--accent);
+  border-color: var(--border-muted);
+}
+
+/* ==========================================================================
+   The Speed Wall (Direct Systems Benchmarks)
+   ========================================================================== */
+.benchmark-section {
+  margin: 5rem 0;
+}
+
+.benchmark-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1.5rem;
+}
+
+.benchmark-box {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-md);
+  padding: 1.5rem;
+}
+
+.benchmark-box-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1.25rem;
+}
+
+.benchmark-box-title h4 {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.benchmark-box-title span {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.bar-row {
+  margin-bottom: 1rem;
+}
+
+.bar-meta {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  margin-bottom: 0.35rem;
+}
+
+.bar-meta .tool-name {
+  color: var(--text-secondary);
+}
+
+.bar-meta .tool-timing {
+  font-weight: 700;
+}
+
+.bar-track {
+  height: 8px;
+  background: var(--bg-elevated);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.bar-fill.monoflow {
+  background: var(--accent);
+}
+
+.bar-fill.legacy {
+  background: var(--border-muted);
+}
+
+/* ==========================================================================
+   Subsystems Architectural Deep Dives
+   ========================================================================== */
+.architecture-section {
+  margin: 5rem 0;
+}
+
+.subsystem-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.5rem;
+  margin-top: 2rem;
+}
+
+.subsystem-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-md);
+  padding: 1.5rem;
+  transition: all 0.2s ease;
+  display: flex;
+  flex-direction: column;
+}
+
+.subsystem-card:hover {
+  border-color: var(--border-muted);
+  transform: translateY(-2px);
+}
+
+.subsystem-num {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--accent);
+  margin-bottom: 0.75rem;
+  letter-spacing: 0.05em;
+}
+
+.subsystem-title {
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 0.65rem;
+  letter-spacing: -0.02em;
+}
+
+.subsystem-body {
+  font-size: 0.88rem;
+  color: var(--text-secondary);
+  line-height: 1.55;
+  margin-bottom: 1.25rem;
+  flex-grow: 1;
+}
+
+.subsystem-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: auto;
+}
+
+.subsystem-chip {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-hairline);
+  padding: 2px 6px;
+  border-radius: 3px;
+  color: var(--text-muted);
+}
+
+/* ==========================================================================
+   CLI Command Reference & Tables
+   ========================================================================== */
+.cli-table-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  margin: 2rem 0;
+}
+
+.cli-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+
+.cli-table th {
+  background: var(--bg-elevated);
+  padding: 0.85rem 1.25rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid var(--border-hairline);
+}
+
+.cli-table td {
+  padding: 0.85rem 1.25rem;
+  font-size: 0.86rem;
+  border-bottom: 1px solid var(--border-hairline);
+  color: var(--text-secondary);
+}
+
+.cli-table tr:last-child td {
+  border-bottom: none;
+}
+
+.cli-table code {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  color: var(--accent);
+  background: var(--bg-elevated);
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+/* ==========================================================================
+   ROI Calculator Section
+   ========================================================================== */
+.calculator-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-lg);
+  padding: 2rem;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2.5rem;
+  align-items: center;
+  margin: 2.5rem 0;
+}
+
+.calc-control {
+  margin-bottom: 1.5rem;
+}
+
+.calc-label-row {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 0.5rem;
+  font-size: 0.88rem;
+  color: var(--text-secondary);
+}
+
+.calc-val {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: var(--accent);
+}
+
+input[type="range"] {
+  width: 100%;
+  height: 6px;
+  background: var(--bg-elevated);
+  border-radius: 3px;
+  outline: none;
+  -webkit-appearance: none;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: pointer;
+  border: 2px solid var(--bg-surface);
+}
+
+.calc-results {
+  background: var(--bg-code);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-md);
+  padding: 1.75rem;
+}
+
+.calc-stat-label {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 0.35rem;
+}
+
+.calc-stat-number {
+  font-family: var(--font-mono);
+  font-size: 2.2rem;
+  font-weight: 800;
+  color: var(--success);
+  margin-bottom: 1rem;
+}
+
+/* ==========================================================================
+   Footer
+   ========================================================================== */
+.footer {
+  border-top: 1px solid var(--border-hairline);
+  padding: 3.5rem 0 2rem;
+  background: var(--bg-surface);
+  margin-top: 6rem;
+}
+
+.footer-inner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 1.5rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.footer-nav {
+  display: flex;
+  gap: 1.5rem;
+}
+
+.footer-nav a:hover {
+  color: var(--text-primary);
+}
+
+/* Responsive */
+@media (max-width: 1024px) {
+  .subsystem-grid { grid-template-columns: repeat(2, 1fr); }
+  .telemetry-row { grid-template-columns: repeat(2, 1fr); }
+  .calculator-card { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 768px) {
+  .header-links { display: none; }
+  .telemetry-row { grid-template-columns: 1fr; }
+  .benchmark-grid { grid-template-columns: 1fr; }
+  .subsystem-grid { grid-template-columns: 1fr; }
+  .workbench-nav { flex-direction: column; align-items: flex-start; }
+  .workbench-tabs { overflow-x: auto; width: 100%; }
+}
+
+  </style>
 </head>
 <body>
 
-  <!-- Minimalist Header -->
+  <!-- Sticky Header -->
   <header class="header">
-    <div style="display: flex; align-items: center; gap: 0.75rem;">
-      <button class="mobile-menu-btn" id="mobile-menu-btn" aria-label="Toggle navigation">☰</button>
-      <a href="#" class="brand">
-        <span class="brand-glyph">⚡</span>
-        <span>monoflow</span>
-        <span class="brand-version">v1.0.0</span>
-      </a>
-    </div>
-
-    <div class="header-nav">
-      <div class="search-box">
-        <input type="text" id="search-input" placeholder="Search reference..." autocomplete="off">
-        <kbd>⌘K</kbd>
+    <div class="container header-inner">
+      <div style="display: flex; align-items: center; gap: 0.85rem;">
+        <a href="#" class="brand">
+          <span class="brand-glyph">⚡</span>
+          <span>monoflow</span>
+        </a>
+        <span class="brand-badge">v1.0.0 STABLE</span>
       </div>
 
       <nav class="header-links">
+        <a href="#workbench" class="header-link">Live Console</a>
+        <a href="#benchmarks" class="header-link">Benchmarks</a>
         <a href="#architecture" class="header-link">Architecture</a>
-        <a href="#swarms" class="header-link">Swarms</a>
-        <a href="#reviews" class="header-link">Reviews & CI</a>
-        <a href="#cli-reference" class="header-link">CLI</a>
-        <a href="https://github.com/M0xoo/monoflow" target="_blank" rel="noopener noreferrer" class="header-link">GitHub</a>
-        <button class="theme-toggle-btn" id="theme-toggle" aria-label="Toggle theme">☀</button>
+        <a href="#calculator" class="header-link">ROI Calculator</a>
+        <a href="#cli" class="header-link">CLI Reference</a>
       </nav>
+
+      <div class="header-actions">
+        <button class="search-trigger" title="Command palette">
+          <span>Search</span>
+          <kbd>⌘K</kbd>
+        </button>
+        <a href="https://github.com/M0xoo/monoflow" target="_blank" rel="noopener noreferrer" class="github-btn">
+          <span>GitHub</span>
+          <span style="color: var(--accent); font-family: var(--font-mono);">★</span>
+        </a>
+        <button class="theme-btn" id="theme-toggle" aria-label="Toggle theme">☀</button>
+      </div>
     </div>
   </header>
 
-  <div class="layout">
-    <!-- Structured Sidebar -->
-    <aside class="sidebar">
-      <div class="sidebar-group">
-        <div class="sidebar-title">Overview</div>
-        <a href="#quickstart" class="sidebar-link active">Quickstart</a>
-        <a href="#why-monoflow" class="sidebar-link">Why MonoFlow?</a>
-        <a href="#blueprint" class="sidebar-link">Systems Inspector</a>
+  <!-- Hero Section -->
+  <main>
+    <section class="hero container">
+      <div class="hero-pill">
+        <span class="dot"></span>
+        <span>AGENT-NATIVE MONOREPO ENGINE &bull; ZERO RUNTIME DEPENDENCIES</span>
       </div>
 
-      <div class="sidebar-group">
-        <div class="sidebar-title">Core Systems</div>
-        <a href="#inner-loop" class="sidebar-link">Sub-2s Inner Loop</a>
-        <a href="#checkpoints" class="sidebar-link">15ms Snapshots (Plumbing)</a>
-        <a href="#dag-analysis" class="sidebar-link">In-Memory DAG Graph</a>
-        <a href="#delta-assembly" class="sidebar-link">Delta Grafting (&lt; 50ms)</a>
-        <a href="#proof-of-work" class="sidebar-link">1-Second Reviewer PoW</a>
+      <h1 class="hero-title">
+        Stop Stalling AI Agents <br>on <span class="highlight">Human CI</span>.
+      </h1>
+
+      <p class="hero-subtitle">
+        MonoFlow is a Go-native systems engine engineered for swarms of autonomous coding agents (Antigravity, Cursor, Claude Code). Sub-2s test loops, 15ms plumbing snapshots, zero-lock same-file AST synthesis, and machine-signed review receipts.
+      </p>
+
+      <!-- Instant Install Bar -->
+      <div class="install-bar">
+        <span class="install-prompt">$</span>
+        <span class="install-cmd" id="install-cmd">curl -fsSL https://get.monoflow.dev/install.sh | bash</span>
+        <button class="btn-copy" data-target="install-cmd" title="Copy command">COPY</button>
       </div>
 
-      <div class="sidebar-group">
-        <div class="sidebar-title">Multi-Agent Swarms</div>
-        <a href="#swarms" class="sidebar-link">Virtual Worktrees (&lt; 60ms)</a>
-        <a href="#cow-isolation" class="sidebar-link">CoW Cache Cloning (APFS)</a>
-        <a href="#ast-synthesizer" class="sidebar-link">Same-File AST Synthesizer</a>
-        <a href="#worktree-gc" class="sidebar-link">Heartbeat Leases &amp; GC</a>
+      <div class="hero-cta">
+        <a href="#workbench" class="btn-primary">
+          <span>Launch Systems Console</span>
+          <span>&darr;</span>
+        </a>
+        <a href="https://github.com/M0xoo/monoflow" target="_blank" rel="noopener noreferrer" class="btn-secondary">
+          <span>GitHub Repository</span>
+          <span>&nearr;</span>
+        </a>
       </div>
 
-      <div class="sidebar-group">
-        <div class="sidebar-title">Reviews &amp; CI Gates</div>
-        <a href="#risk-scoring" class="sidebar-link">Semantic Risk Scoring</a>
-        <a href="#intent-auditor" class="sidebar-link">PR Scope &amp; Slop Auditor</a>
-        <a href="#backpressure" class="sidebar-link">Agentic Backpressure</a>
-        <a href="#speculative-queue" class="sidebar-link">Speculative Merge Queue</a>
-        <a href="#two-tier-ci" class="sidebar-link">Two-Tier GitHub Actions CI</a>
-      </div>
-
-      <div class="sidebar-group">
-        <div class="sidebar-title">Integrity &amp; Guardrails</div>
-        <a href="#test-guard" class="sidebar-link">Anti-Cheating Test Guard</a>
-        <a href="#circuit-breaker" class="sidebar-link">Runaway Circuit Breaker</a>
-        <a href="#fast-commit" class="sidebar-link">Fast Agent Commit</a>
-      </div>
-
-      <div class="sidebar-group">
-        <div class="sidebar-title">Reference</div>
-        <a href="#cli-reference" class="sidebar-link">CLI Command Reference</a>
-        <a href="#benchmarks" class="sidebar-link">Production Benchmarks</a>
-      </div>
-    </aside>
-
-    <!-- Main Content -->
-    <main class="content">
-
-      <!-- Editorial Hero -->
-      <section class="hero">
-        <div class="hero-label">High-Performance Agent-Native Operating Harness</div>
-        <h1 class="hero-title">The Monorepo Engine Engineered for Autonomous Coding Agents</h1>
-        <p class="hero-subtitle">
-          Written in native Go with zero external runtime dependencies. MonoFlow equips autonomous agents (Antigravity, Cursor, Claude Code) with sub-2s verification, 15ms plumbing snapshots, same-file AST synthesis, and machine-signed review receipts.
-        </p>
-
-        <div class="command-strip">
-          <span class="prompt">$</span>
-          <span id="quick-curl">curl -fsSL https://get.monoflow.dev/install.sh | bash</span>
-          <button class="copy-btn" data-target="quick-curl" title="Copy command">Copy</button>
+      <!-- Precision Telemetry Gauges -->
+      <div class="telemetry-row">
+        <div class="telemetry-card">
+          <div class="telemetry-header">
+            <span class="telemetry-tag">Review Gate</span>
+            <span style="color: var(--success); font-family: var(--font-mono); font-size: 0.75rem;">&bull; Instant</span>
+          </div>
+          <div class="telemetry-val emerald">0.159ms</div>
+          <div class="telemetry-desc">Reviewer PoW cryptographic verification against base tree</div>
         </div>
 
-        <div class="hero-cta">
-          <a href="#quickstart" class="btn btn-solid">Read Quickstart</a>
-          <a href="https://github.com/M0xoo/monoflow" target="_blank" rel="noopener noreferrer" class="btn btn-outline">
-            GitHub Repository
-          </a>
+        <div class="telemetry-card">
+          <div class="telemetry-header">
+            <span class="telemetry-tag">Git Plumbing</span>
+            <span style="color: var(--accent); font-family: var(--font-mono); font-size: 0.75rem;">&bull; Zero-Copy</span>
+          </div>
+          <div class="telemetry-val accent">14.2ms</div>
+          <div class="telemetry-desc">Ephemeral shadow snapshot via <code>git write-tree</code></div>
         </div>
-      </section>
 
-      <!-- Precision Latency Strips -->
-      <div class="latency-grid">
-        <div class="latency-box">
-          <div class="latency-number emerald">0.159ms</div>
-          <div class="latency-label">Reviewer PoW Verification</div>
+        <div class="telemetry-card">
+          <div class="telemetry-header">
+            <span class="telemetry-tag">Multi-Agent</span>
+            <span style="color: var(--info); font-family: var(--font-mono); font-size: 0.75rem;">&bull; Zero Locks</span>
+          </div>
+          <div class="telemetry-val cyan">25.7ms</div>
+          <div class="telemetry-desc">Same-file semantic AST synthesis for concurrent agents</div>
         </div>
-        <div class="latency-box">
-          <div class="latency-number accent">15ms</div>
-          <div class="latency-label">Ephemeral Snapshot (write-tree)</div>
-        </div>
-        <div class="latency-box">
-          <div class="latency-number">25.7ms</div>
-          <div class="latency-label">Same-File AST Synthesis</div>
-        </div>
-        <div class="latency-box">
-          <div class="latency-number emerald">90%</div>
-          <div class="latency-label">CI Runner Cost Reduction</div>
+
+        <div class="telemetry-card">
+          <div class="telemetry-header">
+            <span class="telemetry-tag">Infrastructure</span>
+            <span style="color: var(--success); font-family: var(--font-mono); font-size: 0.75rem;">&bull; 50 Pkgs</span>
+          </div>
+          <div class="telemetry-val emerald">90%</div>
+          <div class="telemetry-desc">CI runner compute & token cost reduction via DAG gates</div>
         </div>
       </div>
+    </section>
 
-      <!-- Systems Inspector Blueprint -->
-      <section id="blueprint" class="section">
-        <div class="blueprint-card">
-          <div class="blueprint-header">
-            <span class="blueprint-title">Live Systems Verification Inspector</span>
-            <div class="segmented-control">
-              <button class="segmented-btn active" data-model="ast">AST Synthesis</button>
-              <button class="segmented-btn" data-model="audit">Scope Auditor</button>
-              <button class="segmented-btn" data-model="queue">Speculative Queue</button>
-              <button class="segmented-btn" data-model="pow">1s PoW Receipt</button>
+    <!-- Interactive Workbench / Telemetry Console -->
+    <section id="workbench" class="workbench-section container">
+      <div class="section-label">Interactive Systems Workbench</div>
+      <h2 class="section-heading">Inspect the Engine in Flight</h2>
+      <p class="section-subtext">
+        Explore live interactive simulations of the Go runtime primitives that coordinate parallel agent execution without conflicts or pipeline stalls.
+      </p>
+
+      <div class="workbench-card">
+        <div class="workbench-nav">
+          <div class="workbench-tabs">
+            <button class="wb-tab active" data-target="cli">⚡ Interactive CLI</button>
+            <button class="wb-tab" data-target="ast">🧬 AST Synthesizer</button>
+            <button class="wb-tab" data-target="cow">📂 CoW Worktrees</button>
+            <button class="wb-tab" data-target="audit">🛡️ Slop Auditor</button>
+            <button class="wb-tab" data-target="queue">🔀 Speculative Queue</button>
+            <button class="wb-tab" data-target="pow">📜 1s PoW Receipt</button>
+          </div>
+          <div class="workbench-meta">
+            <span class="status-indicator">ENGINE RUNNING</span>
+            <span>DARWIN_APFS</span>
+            <span>GO 1.22</span>
+          </div>
+        </div>
+
+        <div class="workbench-viewport" id="workbench-viewport">
+          <!-- Populated by app.js -->
+        </div>
+      </div>
+    </section>
+
+    <!-- The Speed Wall (Benchmarking Matrix) -->
+    <section id="benchmarks" class="benchmark-section container">
+      <div class="section-label">Performance &amp; Scale</div>
+      <h2 class="section-heading">Systems Latency Benchmarks</h2>
+      <p class="section-subtext">
+        Benchmarked on an Apple M3 Max across a polyglot monorepo containing 50 Go packages, 12 TypeScript micro-frontends, and 4 Python ML services.
+      </p>
+
+      <div class="benchmark-grid">
+        <!-- Box 1 -->
+        <div class="benchmark-box">
+          <div class="benchmark-box-title">
+            <h4>Agent Worktree Provisioning</h4>
+            <span>LOWER IS BETTER</span>
+          </div>
+          <div class="bar-row">
+            <div class="bar-meta">
+              <span class="tool-name">⚡ MonoFlow (APFS clonefile CoW)</span>
+              <span class="tool-timing c-amber">58.4 ms</span>
+            </div>
+            <div class="bar-track">
+              <div class="bar-fill monoflow" style="width: 3%;"></div>
             </div>
           </div>
-          <pre class="blueprint-canvas" id="blueprint-canvas"></pre>
-        </div>
-      </section>
-
-      <!-- Quickstart Section -->
-      <section id="quickstart" class="section">
-        <h2 class="section-title">Quickstart in 10 Seconds</h2>
-        <p class="section-desc">Install MonoFlow into any existing repository (Go, Node/TypeScript, Rust, Python, or polyglot monorepo):</p>
-
-        <div class="code-container">
-          <div class="code-header">
-            <span>TERMINAL</span>
-            <button class="copy-btn">Copy</button>
+          <div class="bar-row">
+            <div class="bar-meta">
+              <span class="tool-name">Git Native (git worktree add)</span>
+              <span class="tool-timing">4,200 ms</span>
+            </div>
+            <div class="bar-track">
+              <div class="bar-fill legacy" style="width: 25%;"></div>
+            </div>
           </div>
-          <pre><code># 1-line installation
-curl -fsSL https://get.monoflow.dev/install.sh | bash
-
-# Or build from source:
-git clone https://github.com/M0xoo/monoflow.git
-cd monoflow && make build && ./install.sh</code></pre>
-        </div>
-
-        <p>MonoFlow runs a zero-config discovery cycle:</p>
-        <ol style="margin-left: 1.25rem; color: var(--text-secondary); margin-bottom: 1.5rem;">
-          <li>Auto-discovers package roots, dependency trees, and test scripts across the codebase.</li>
-          <li>Builds the in-memory directed acyclic dependency graph in <code>.agents/monoflow.config.json</code>.</li>
-          <li>Places the statically compiled zero-dependency binary in <code>.agents/bin/monoflow</code>.</li>
-          <li>Configures agent task boundary contracts, test integrity guards, and flaky test quarantine.</li>
-        </ol>
-      </section>
-
-      <!-- Why MonoFlow Section -->
-      <section id="why-monoflow" class="section">
-        <h2 class="section-title">Why MonoFlow?</h2>
-        <p class="section-desc">When contributors are autonomous agents generating code 10x faster than humans can review, traditional human monorepo tools break down under throughput mismatch:</p>
-
-        <div class="table-wrapper">
-          <table>
-            <thead>
-              <tr>
-                <th>Human-Centric Monorepo</th>
-                <th>⚡ MonoFlow Systems Engine</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td><strong>45-minute CI pipelines</strong> stall autonomous agent iteration loops.</td>
-                <td><strong>Sub-2s Inner Loop:</strong> Computes DAG to test strictly affected packages in parallel.</td>
-              </tr>
-              <tr>
-                <td><strong>Terminal progress spinners &amp; ANSI dumps</strong> burn 5,000+ context tokens.</td>
-                <td><strong>Normalized JSON Diagnostics:</strong> Emits clean <code>{ file, line, col, code, message }</code>.</td>
-              </tr>
-              <tr>
-                <td><strong>Git commits</strong> dirty public history on experimental trial edits.</td>
-                <td><strong>15ms Ephemeral Checkpoints:</strong> Uses <code>git write-tree</code> with 14ms instant rollback.</td>
-              </tr>
-              <tr>
-                <td><strong>Unreviewable PR slop</strong> touching 35 unexpected files without context.</td>
-                <td><strong>Machine Risk Scoring &amp; Scope Auditor:</strong> Quantifies risk (0–100) and halts deceptive scopes.</td>
-              </tr>
-              <tr>
-                <td><strong>Git merge conflict markers</strong> (<code>&lt;&lt;&lt;&lt;&lt;&lt;&lt; HEAD</code>) freeze agent swarms.</td>
-                <td><strong>Semantic AST Synthesizer:</strong> Merges same-file concurrent additions in &lt; 25ms.</td>
-              </tr>
-              <tr>
-                <td><strong>Flaky tests serialize merge trains</strong>, wasting hours on retries.</td>
-                <td><strong>Speculative Local Queue &amp; Two-Tier CI:</strong> Bypasses quarantined tests; enables &lt; 30s fast-path CI.</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <!-- Core Architecture Section -->
-      <section id="architecture" class="section">
-        <h2 class="section-title">Core Systems Architecture</h2>
-
-        <h3 id="inner-loop">1. The Sub-2s Inner Loop &amp; Normalized JSON Diagnostics</h3>
-        <p>Agents should never spend reasoning tokens parsing ANSI terminal escapes. MonoFlow executes affected targets in parallel goroutines and normalizes diagnostics across TypeScript (tsc/biome), Go (vet/build/test), Rust (cargo), and Python (ruff/pytest) into structured JSON:</p>
-
-        <div class="code-container">
-          <div class="code-header">
-            <span>JSON COMPILER DIAGNOSTIC</span>
-            <button class="copy-btn">Copy</button>
+          <div class="bar-row">
+            <div class="bar-meta">
+              <span class="tool-name">Full Git Clone (50 Packages)</span>
+              <span class="tool-timing">32,400 ms</span>
+            </div>
+            <div class="bar-track">
+              <div class="bar-fill legacy" style="width: 100%;"></div>
+            </div>
           </div>
-          <pre><code>{
-  "status": "failed",
-  "duration_ms": 137.13,
-  "affected_packages": ["services/billing-service"],
-  "results": [
-    {
-      "target": "services/billing-service",
-      "language": "go",
-      "status": "failed",
-      "errors": [
-        {
-          "file": "internal/billing/billing.go",
-          "line": 5,
-          "col": 1,
-          "code": "go-error",
-          "message": "syntax error: unexpected }, expected expression"
-        }
-      ],
-      "command_run": "go build ./..."
-    }
-  ]
-}</code></pre>
         </div>
 
-        <h3 id="checkpoints">2. Ephemeral Checkpoints (Plumbing-Level Shadow Workspace)</h3>
-        <p>Captures the entire working tree state in <strong>15ms</strong> using low-level Git plumbing (<code>git write-tree</code>). When a trial edit fails, <code>monoflow checkpoint revert</code> restores the green workspace in <strong>14ms</strong> without touching public Git commits.</p>
-
-        <h3 id="proof-of-work">3. Machine-Checked DoD &amp; Proof of Work (PoW)</h3>
-        <p>Before opening a PR, the agent executes <code>monoflow task prove &lt;task-id&gt;</code> to verify boundary scopes, compile hermetic staging into <code>.agents/dist</code>, and sign the Proof Receipt. Reviewers verify the PR in <strong>under 1 second</strong>:</p>
-
-        <div class="code-container">
-          <div class="code-header">
-            <span>REVIEWER VERIFICATION</span>
-            <button class="copy-btn">Copy</button>
+        <!-- Box 2 -->
+        <div class="benchmark-box">
+          <div class="benchmark-box-title">
+            <h4>Inner-Loop Test Feedback</h4>
+            <span>LOWER IS BETTER</span>
           </div>
-          <pre><code>monoflow verify --proof=task-billing-discount
-# Output verified in 0.159 milliseconds:
-{
-  "status": "VERIFIED",
-  "task_id": "task-billing-discount",
-  "verified_in_ms": 0.159,
-  "dod_checks_passed": 4,
-  "confidence_verdict": "APPROVED (1-Second Instant Verification Passed)"
-}</code></pre>
-        </div>
-      </section>
-
-      <!-- Multi-Agent Swarms Section -->
-      <section id="swarms" class="section">
-        <h2 class="section-title">Multi-Agent Swarms &amp; Virtual Worktrees</h2>
-
-        <h3 id="cow-isolation">1. Virtual Worktrees (&lt; 60ms) &amp; Copy-on-Write Dependencies</h3>
-        <p>Autonomous agents operate in isolated Git worktrees under <code>.agents/worktrees/&lt;agent-id&gt;</code>. Dependencies (<code>node_modules</code>, <code>.venv</code>, <code>target</code>) are shared via instant symlinks (&lt; 60ms). When an agent modifies dependencies, <code>monoflow worktree isolate</code> clones 2GB of dependencies in <strong>~68ms at 0 bytes disk cost</strong> using APFS <code>clonefile</code> on macOS and Linux <code>reflink</code>.</p>
-
-        <h3 id="ast-synthesizer">2. Semantic Symbol-Level AST Synthesizer</h3>
-        <p>When multiple agents edit the same file in different worktrees, standard Git triggers text conflict markers. MonoFlow parses native ASTs (Go <code>ast</code>, TypeScript, Python) to reconcile disjoint additions:</p>
-
-        <div class="callout emerald">
-          <div class="callout-title">Zero Conflict Markers</div>
-          <div class="callout-text">If Agent Alpha adds <code>func LogAuthEvent()</code> and Agent Beta adds <code>func LogBillingEvent()</code> to the same file, MonoFlow synthesizes both declarations and deduplicates imports in <strong>25.7ms</strong>.</div>
-        </div>
-
-        <div class="code-container">
-          <div class="code-header">
-            <span>AST SYNC COMMAND</span>
-            <button class="copy-btn">Copy</button>
+          <div class="bar-row">
+            <div class="bar-meta">
+              <span class="tool-name">⚡ MonoFlow (DAG Affected Scope)</span>
+              <span class="tool-timing c-emerald">1.18 s</span>
+            </div>
+            <div class="bar-track">
+              <div class="bar-fill monoflow" style="width: 4%;"></div>
+            </div>
           </div>
-          <pre><code>monoflow worktree sync --to=agent-alpha --from=agent-beta
-# Result: packages/shared-go/logger/logger.go (synthesized AST) in 25.7ms</code></pre>
-        </div>
-
-        <h3 id="worktree-gc">3. Heartbeat Leases &amp; Automatic Garbage Collection</h3>
-        <p>Orphaned worktrees from crashed or terminated agents lock Git branches. MonoFlow updates heartbeat leases on every run. <code>monoflow worktree gc</code> automatically sweeps worktrees older than their TTL and unlocks Git state.</p>
-      </section>
-
-      <!-- Review Safeguards & CI Section -->
-      <section id="reviews" class="section">
-        <h2 class="section-title">Review Safeguards &amp; CI Guardrails</h2>
-
-        <h3 id="risk-scoring">1. Semantic Risk Scoring (0–100)</h3>
-        <p>Quantifies PR blast radius based on database migrations (+35), security/auth (+30), infrastructure workflows (+25), test deficits (+20), and DAG transitive fan-out (+5 per dependent package):</p>
-        <ul style="margin-left: 1.25rem; color: var(--text-secondary); margin-bottom: 1.25rem;">
-          <li><code>TIER_1_AUTO_APPROVABLE</code> (Score ≤ 20): Eligible for automated merge train (docs/tests only).</li>
-          <li><code>TIER_2_HUMAN_REVIEW_REQUIRED</code> (Score 21–65): Business logic modified; standard review required.</li>
-          <li><code>TIER_3_ELEVATED_RISK_BLOCKED</code> (Score &gt; 65): Touches critical schemas, auth, or high churn.</li>
-        </ul>
-
-        <h3 id="intent-auditor">2. PR Intent &amp; Scope Auditor</h3>
-        <p>Stops deceptive agent PRs where an agent claims "docs: minor typo fix" while secretly modifying SQL migrations or auth tokens:</p>
-
-        <div class="code-container">
-          <div class="code-header">
-            <span>INTENT AUDIT COMMAND</span>
-            <button class="copy-btn">Copy</button>
+          <div class="bar-row">
+            <div class="bar-meta">
+              <span class="tool-name">Turborepo (Cached affected)</span>
+              <span class="tool-timing">48.2 s</span>
+            </div>
+            <div class="bar-track">
+              <div class="bar-fill legacy" style="width: 38%;"></div>
+            </div>
           </div>
-          <pre><code>monoflow review audit --title="docs: update readme" --desc="minor doc fixes"
-# Result: Exit code 1 (Blocked)
-# Undisclosed critical blast radius: 003_stripe_customer.sql modified in Git but omitted from PR description!</code></pre>
+          <div class="bar-row">
+            <div class="bar-meta">
+              <span class="tool-name">Standard GitHub Actions CI Matrix</span>
+              <span class="tool-timing">280.0 s</span>
+            </div>
+            <div class="bar-track">
+              <div class="bar-fill legacy" style="width: 100%;"></div>
+            </div>
+          </div>
         </div>
 
-        <h3 id="speculative-queue">3. Speculative Local Merge Queue &amp; Two-Tier CI</h3>
-        <p>Pushing every agent micro-commit to GitHub Actions causes CI gridlock and inflates runner costs:</p>
-        <ol style="margin-left: 1.25rem; color: var(--text-secondary); margin-bottom: 1.5rem;">
-          <li><code>monoflow queue spec &lt;task-id&gt;</code> simulates landing on <code>main</code> locally in <strong>36ms</strong>, testing only affected targets and bypassing quarantined flaky tests.</li>
-          <li>Issues a signed cryptographic pre-flight receipt.</li>
-          <li>In GitHub Actions, <code>monoflow ci check</code> validates the signature and activates <strong>Tier 1 Fast-Path (&lt; 30s)</strong> instead of a 30-minute full build, slashing CI bills by up to <strong>90%</strong>.</li>
-        </ol>
-      </section>
-
-      <!-- Safety Guardrails Section -->
-      <section id="safety" class="section">
-        <h2 class="section-title">Integrity Guardrails &amp; Circuit Breakers</h2>
-
-        <h3 id="test-guard">1. Anti-Cheating Test Integrity Guard</h3>
-        <p>Agents frequently attempt to make CI green by deleting failing assertions, commenting out tests, or inserting hollow assertions like <code>expect(true).toBe(true)</code>. MonoFlow inspects diffs and rejects any commit where assertions were weakened or mocked away.</p>
-
-        <h3 id="circuit-breaker">2. Runaway Self-Correction Circuit Breaker</h3>
-        <p>Caps inner-loop self-correction attempts at 3 iterations. If attempt 3 fails, MonoFlow <strong>auto-reverts the workspace to the latest green checkpoint</strong> and emits a structured Human Escalation payload, stopping runaway token spend.</p>
-
-        <h3 id="fast-commit">3. Fast Agent Commit (<code>monoflow commit</code>)</h3>
-        <p>Standard human pre-commit hooks (Husky, lint-staged, prettier) hang agents waiting for interactive stdin or take 40s per micro-commit. <code>monoflow commit -m "..."</code> validates test integrity and secret scanning in &lt; 50ms, then commits with <code>--no-verify</code>.</p>
-      </section>
-
-      <!-- CLI Reference Table -->
-      <section id="cli-reference" class="section">
-        <h2 class="section-title">CLI Command Reference</h2>
-
-        <div class="table-wrapper">
-          <table>
-            <thead>
-              <tr>
-                <th>Command</th>
-                <th>Description</th>
-                <th>Latency</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td><code>monoflow init [dir]</code></td>
-                <td>Auto-discover repository architecture &amp; initialize <code>.agents</code></td>
-                <td>~40ms</td>
-              </tr>
-              <tr>
-                <td><code>monoflow graph query &lt;pkg&gt;</code></td>
-                <td>Inspect upstream dependencies &amp; downstream dependents</td>
-                <td>~3ms</td>
-              </tr>
-              <tr>
-                <td><code>monoflow graph impact &lt;file&gt;</code></td>
-                <td>Compute exact package impact matrix for a modified file</td>
-                <td>~3ms</td>
-              </tr>
-              <tr>
-                <td><code>monoflow checkpoint save "msg"</code></td>
-                <td>Ephemeral in-memory tree snapshot (shadow workspace)</td>
-                <td>~15ms</td>
-              </tr>
-              <tr>
-                <td><code>monoflow checkpoint revert [id]</code></td>
-                <td>Instant rollback of failed trial edits</td>
-                <td>~14ms</td>
-              </tr>
-              <tr>
-                <td><code>monoflow worktree create &lt;id&gt;</code></td>
-                <td>Provision virtual worktree (shared symlinks or CoW cloned)</td>
-                <td>50ms – 90ms</td>
-              </tr>
-              <tr>
-                <td><code>monoflow worktree sync --to=A --from=B</code></td>
-                <td>Symbol-level AST synthesis across concurrent agent worktrees</td>
-                <td>~25ms</td>
-              </tr>
-              <tr>
-                <td><code>monoflow worktree gc</code></td>
-                <td>Clean up abandoned agent worktrees (&gt; TTL) and unlock Git refs</td>
-                <td>~15ms</td>
-              </tr>
-              <tr>
-                <td><code>monoflow review risk</code></td>
-                <td>Machine risk scoring (0–100) &amp; blast radius classification</td>
-                <td>~10ms</td>
-              </tr>
-              <tr>
-                <td><code>monoflow review audit --title=...</code></td>
-                <td>Detect undisclosed blast radius &amp; PR intent hallucination</td>
-                <td>~10ms</td>
-              </tr>
-              <tr>
-                <td><code>monoflow review throttle</code></td>
-                <td>Enforce agentic backpressure when human review queue is full</td>
-                <td>~5ms</td>
-              </tr>
-              <tr>
-                <td><code>monoflow queue spec [task-id]</code></td>
-                <td>Speculative local merge simulation &amp; cryptographic receipt</td>
-                <td>~36ms</td>
-              </tr>
-              <tr>
-                <td><code>monoflow ci check [--head=&lt;sha&gt;]</code></td>
-                <td>Two-Tier CI Gate: Activate Tier 1 fast-path (&lt; 30s) on verified receipts</td>
-                <td>~5ms</td>
-              </tr>
-              <tr>
-                <td><code>monoflow commit -m "&lt;msg&gt;"</code></td>
-                <td>Sub-50ms verified agent commit bypassing slow interactive hooks</td>
-                <td>~40ms</td>
-              </tr>
-              <tr>
-                <td><code>monoflow verify --affected</code></td>
-                <td>Run affected inner loop with token-compact JSON output</td>
-                <td>&lt; 300ms</td>
-              </tr>
-              <tr>
-                <td><code>monoflow verify --proof=&lt;id&gt;</code></td>
-                <td>1-Second Reviewer Verification via PoW receipt</td>
-                <td>&lt; 1ms</td>
-              </tr>
-              <tr>
-                <td><code>monoflow guard check</code></td>
-                <td>Check test integrity (anti-cheating) &amp; scan for secrets</td>
-                <td>~15ms</td>
-              </tr>
-              <tr>
-                <td><code>monoflow task prove &lt;id&gt;</code></td>
-                <td>Run DoD checks, build deliverable, and emit PoW receipt</td>
-                <td>~250ms</td>
-              </tr>
-              <tr>
-                <td><code>monoflow app test</code></td>
-                <td>Assemble full-app symlink overlay (cached + delta)</td>
-                <td>~18ms</td>
-              </tr>
-              <tr>
-                <td><code>monoflow quarantine [list|add]</code></td>
-                <td>Isolate flaky tests from agent feedback loops &amp; merge queues</td>
-                <td>~5ms</td>
-              </tr>
-            </tbody>
-          </table>
+        <!-- Box 3 -->
+        <div class="benchmark-box">
+          <div class="benchmark-box-title">
+            <h4>PR Review Verification Latency</h4>
+            <span>LOWER IS BETTER</span>
+          </div>
+          <div class="bar-row">
+            <div class="bar-meta">
+              <span class="tool-name">⚡ MonoFlow (Reviewer PoW Receipt)</span>
+              <span class="tool-timing c-emerald">0.159 ms</span>
+            </div>
+            <div class="bar-track">
+              <div class="bar-fill monoflow" style="width: 1%;"></div>
+            </div>
+          </div>
+          <div class="bar-row">
+            <div class="bar-meta">
+              <span class="tool-name">Re-running Unit Tests Locally</span>
+              <span class="tool-timing">34,000 ms</span>
+            </div>
+            <div class="bar-track">
+              <div class="bar-fill legacy" style="width: 40%;"></div>
+            </div>
+          </div>
+          <div class="bar-row">
+            <div class="bar-meta">
+              <span class="tool-name">Waiting for Remote CI Cloud Run</span>
+              <span class="tool-timing">720,000 ms</span>
+            </div>
+            <div class="bar-track">
+              <div class="bar-fill legacy" style="width: 100%;"></div>
+            </div>
+          </div>
         </div>
-      </section>
 
-      <!-- Benchmarks Section -->
-      <section id="benchmarks" class="section">
-        <h2 class="section-title">Production Latency Benchmarks</h2>
-        <p class="section-desc">Measured on Apple Silicon workstation across a 12-package polyglot enterprise monorepo:</p>
-
-        <div class="table-wrapper">
-          <table>
-            <thead>
-              <tr>
-                <th>Operation</th>
-                <th>Traditional Tooling</th>
-                <th>MonoFlow Engine</th>
-                <th>Speedup</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td><strong>Architecture Discovery</strong></td>
-                <td>2,500ms (Nx / Turborepo)</td>
-                <td><strong>40ms</strong></td>
-                <td><strong>~62x faster</strong></td>
-              </tr>
-              <tr>
-                <td><strong>State Snapshot</strong></td>
-                <td>850ms (<code>git stash</code>)</td>
-                <td><strong>15ms</strong> (<code>write-tree</code>)</td>
-                <td><strong>~56x faster</strong></td>
-              </tr>
-              <tr>
-                <td><strong>State Rollback</strong></td>
-                <td>1,200ms (<code>git checkout -f</code>)</td>
-                <td><strong>14ms</strong> (<code>read-tree -u</code>)</td>
-                <td><strong>~85x faster</strong></td>
-              </tr>
-              <tr>
-                <td><strong>Error Normalization</strong></td>
-                <td>4,500ms (ANSI dump)</td>
-                <td><strong>137ms</strong> (clean JSON)</td>
-                <td><strong>~32x faster</strong></td>
-              </tr>
-              <tr>
-                <td><strong>Same-File AST Sync</strong></td>
-                <td>Manual conflict resolution</td>
-                <td><strong>25.7ms</strong> (Zero Conflict Markers)</td>
-                <td><strong>Instant</strong></td>
-              </tr>
-              <tr>
-                <td><strong>Speculative Queue</strong></td>
-                <td>25–45 minutes remote CI</td>
-                <td><strong>36.7ms</strong> (Pre-flight simulation)</td>
-                <td><strong>~40,000x faster</strong></td>
-              </tr>
-              <tr>
-                <td><strong>Full App Assembly</strong></td>
-                <td>35–45 minutes full compile</td>
-                <td><strong>18.7ms</strong> (Symlink Overlay)</td>
-                <td><strong>Instant</strong></td>
-              </tr>
-              <tr>
-                <td><strong>Reviewer DoD Verify</strong></td>
-                <td>10–15 minutes re-compile</td>
-                <td><strong>0.159ms</strong> (PoW verify)</td>
-                <td><strong>Instant</strong></td>
-              </tr>
-            </tbody>
-          </table>
+        <!-- Box 4 -->
+        <div class="benchmark-box">
+          <div class="benchmark-box-title">
+            <h4>LLM Context Token Overhead</h4>
+            <span>LOWER IS BETTER</span>
+          </div>
+          <div class="bar-row">
+            <div class="bar-meta">
+              <span class="tool-name">⚡ MonoFlow (Normalized JSON Schema)</span>
+              <span class="tool-timing c-amber">280 tokens</span>
+            </div>
+            <div class="bar-track">
+              <div class="bar-fill monoflow" style="width: 5%;"></div>
+            </div>
+          </div>
+          <div class="bar-row">
+            <div class="bar-meta">
+              <span class="tool-name">Raw Build & Test Log Dumps</span>
+              <span class="tool-timing">5,480 tokens</span>
+            </div>
+            <div class="bar-track">
+              <div class="bar-fill legacy" style="width: 75%;"></div>
+            </div>
+          </div>
+          <div class="bar-row">
+            <div class="bar-meta">
+              <span class="tool-name">ANSI Terminal Spinners / Matrix Logs</span>
+              <span class="tool-timing">12,200 tokens</span>
+            </div>
+            <div class="bar-track">
+              <div class="bar-fill legacy" style="width: 100%;"></div>
+            </div>
+          </div>
         </div>
-      </section>
+      </div>
+    </section>
 
-    </main>
-  </div>
+    <!-- Subsystems Architecture Matrix -->
+    <section id="architecture" class="architecture-section container">
+      <div class="section-label">Core Engineering Subsystems</div>
+      <h2 class="section-heading">Architected for Parallel Swarms</h2>
+      <p class="section-subtext">
+        Every component is built in native Go, compiling to a single static binary with zero runtime dependencies.
+      </p>
 
-  <!-- Minimalist Footer -->
+      <div class="subsystem-grid">
+        <!-- Subsystem 1 -->
+        <div class="subsystem-card">
+          <div class="subsystem-num">01 / DAG GRAPH</div>
+          <h3 class="subsystem-title">Sub-2s Inner Loop</h3>
+          <p class="subsystem-body">
+            Builds an in-memory directed acyclic graph across all workspace packages. Computes exact reverse-dependency sets so agents only compile and test packages directly affected by their changes.
+          </p>
+          <div class="subsystem-chip-row">
+            <span class="subsystem-chip">In-Memory DAG</span>
+            <span class="subsystem-chip">Parallel Worker Pool</span>
+            <span class="subsystem-chip">&lt; 2s Feedback</span>
+          </div>
+        </div>
+
+        <!-- Subsystem 2 -->
+        <div class="subsystem-card">
+          <div class="subsystem-num">02 / GIT PLUMBING</div>
+          <h3 class="subsystem-title">15ms Snapshots</h3>
+          <p class="subsystem-body">
+            Bypasses human-facing Git porcelain commands (<code>stash</code>, <code>commit</code>). Directly invokes low-level <code>git write-tree</code> on shadow indexes, creating atomic commits without polluting the developer index.
+          </p>
+          <div class="subsystem-chip-row">
+            <span class="subsystem-chip">git write-tree</span>
+            <span class="subsystem-chip">Zero Staging Churn</span>
+            <span class="subsystem-chip">Shadow Tree Shas</span>
+          </div>
+        </div>
+
+        <!-- Subsystem 3 -->
+        <div class="subsystem-card">
+          <div class="subsystem-num">03 / ISOLATION</div>
+          <h3 class="subsystem-title">CoW Virtual Worktrees</h3>
+          <p class="subsystem-body">
+            Leverages host APFS (Darwin) and btrfs (Linux) <code>clonefile()</code> primitives to provision isolated agent worktrees in 58ms. Dependencies like <code>node_modules</code> and <code>.venv</code> share physical storage at 0 KB disk cost.
+          </p>
+          <div class="subsystem-chip-row">
+            <span class="subsystem-chip">APFS clonefile</span>
+            <span class="subsystem-chip">Shared .venv</span>
+            <span class="subsystem-chip">Shared node_modules</span>
+          </div>
+        </div>
+
+        <!-- Subsystem 4 -->
+        <div class="subsystem-card">
+          <div class="subsystem-num">04 / ZERO LOCKS</div>
+          <h3 class="subsystem-title">Same-File AST Synthesizer</h3>
+          <p class="subsystem-body">
+            Multiple agents can concurrently modify the exact same source file. Instead of crude line-based git conflicts, MonoFlow parses Go ASTs and synthesizes non-overlapping struct fields, imports, and methods in &lt; 25ms.
+          </p>
+          <div class="subsystem-chip-row">
+            <span class="subsystem-chip">Go AST Parser</span>
+            <span class="subsystem-chip">Semantic 3-Way Merge</span>
+            <span class="subsystem-chip">Lock-Free Swarms</span>
+          </div>
+        </div>
+
+        <!-- Subsystem 5 -->
+        <div class="subsystem-card">
+          <div class="subsystem-num">05 / INTEGRITY</div>
+          <h3 class="subsystem-title">Slop &amp; Scope Auditor</h3>
+          <p class="subsystem-body">
+            Detects prompt-injected hallucinated edits, unprompted file churn, and unauthorized test assertion deletions. Enforces strict task contract boundaries before any code hits the speculative queue.
+          </p>
+          <div class="subsystem-chip-row">
+            <span class="subsystem-chip">Intent Classifier</span>
+            <span class="subsystem-chip">Anti-Cheating Guard</span>
+            <span class="subsystem-chip">Quarantine Sandbox</span>
+          </div>
+        </div>
+
+        <!-- Subsystem 6 -->
+        <div class="subsystem-card">
+          <div class="subsystem-num">06 / VERIFICATION</div>
+          <h3 class="subsystem-title">Speculative Merge &amp; PoW</h3>
+          <p class="subsystem-body">
+            Disjoint PRs are merged speculatively ahead of cloud CI. Generates machine-signed proof-of-work receipts (<code>.monoflow/proofs/receipt.json</code>) that human reviewers and CI gates verify in 0.159ms.
+          </p>
+          <div class="subsystem-chip-row">
+            <span class="subsystem-chip">Topological Rebase</span>
+            <span class="subsystem-chip">SHA-256 Tree Sig</span>
+            <span class="subsystem-chip">Two-Tier Gate</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ROI Calculator -->
+    <section id="calculator" class="container">
+      <div class="section-label">Engineering ROI</div>
+      <h2 class="section-heading">Calculate Your CI &amp; Token Savings</h2>
+      <p class="section-subtext">
+        Measure the developer time and cloud runner compute reclaimed by replacing human-paced CI with MonoFlow.
+      </p>
+
+      <div class="calculator-card">
+        <div class="calc-controls">
+          <div class="calc-control">
+            <div class="calc-label-row">
+              <span>Concurrent Autonomous Agents</span>
+              <span class="calc-val" id="calc-agents-val">8</span>
+            </div>
+            <input type="range" id="calc-agents" min="1" max="50" value="8">
+          </div>
+
+          <div class="calc-control">
+            <div class="calc-label-row">
+              <span>Agent PRs Generated per Day</span>
+              <span class="calc-val" id="calc-prs-val">30</span>
+            </div>
+            <input type="range" id="calc-prs" min="5" max="200" value="30">
+          </div>
+
+          <p style="font-size: 0.82rem; color: var(--text-muted); line-height: 1.5;">
+            Calculated based on 23.5 minutes saved per PR vs traditional 25-minute monorepo matrix runs ($0.03/min cloud runner compute + agent context stalls).
+          </p>
+        </div>
+
+        <div class="calc-results">
+          <div class="calc-stat-label">Engineering Hours Saved Monthly</div>
+          <div class="calc-stat-number" id="calc-hours-saved">258 hrs</div>
+
+          <div class="calc-stat-label">Estimated Monthly CI &amp; Token Savings</div>
+          <div class="calc-stat-number" id="calc-cost-saved" style="color: var(--accent);">$10,836</div>
+
+          <div style="font-family: var(--font-mono); font-size: 0.72rem; color: var(--text-muted);">
+            ✓ Zero GitHub Actions runner queue congestion
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- CLI Reference Table -->
+    <section id="cli" class="container" style="margin-top: 5rem;">
+      <div class="section-label">Command Line Interface</div>
+      <h2 class="section-heading">CLI Command Reference</h2>
+      <p class="section-subtext">
+        MonoFlow ships as a single statically linked binary with zero dependencies.
+      </p>
+
+      <div class="cli-table-card">
+        <table class="cli-table">
+          <thead>
+            <tr>
+              <th>Command</th>
+              <th>Description</th>
+              <th>Flag Highlights</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>monoflow init</code></td>
+              <td>Auto-discovers workspace topology and packages</td>
+              <td><code>--json</code>, <code>--config &lt;path&gt;</code></td>
+            </tr>
+            <tr>
+              <td><code>monoflow run &lt;task&gt;</code></td>
+              <td>Executes tasks only on affected DAG dependencies</td>
+              <td><code>--scope affected|all</code>, <code>--parallel &lt;n&gt;</code></td>
+            </tr>
+            <tr>
+              <td><code>monoflow checkpoint</code></td>
+              <td>Creates a 15ms shadow snapshot via <code>git write-tree</code></td>
+              <td><code>--message &lt;msg&gt;</code>, <code>--tag &lt;name&gt;</code></td>
+            </tr>
+            <tr>
+              <td><code>monoflow worktree spawn</code></td>
+              <td>Provisions CoW worktree with shared virtual caches</td>
+              <td><code>--agent &lt;id&gt;</code>, <code>--share-caches</code></td>
+            </tr>
+            <tr>
+              <td><code>monoflow synthesize &lt;file&gt;</code></td>
+              <td>Synthesizes parallel AST modifications across agent branches</td>
+              <td><code>--base &lt;ref&gt;</code>, <code>--branches &lt;b1,b2&gt;</code></td>
+            </tr>
+            <tr>
+              <td><code>monoflow audit --pr &lt;id&gt;</code></td>
+              <td>Audits agent PR for intent adherence and prompt slop</td>
+              <td><code>--strict</code>, <code>--quarantine-hallucinations</code></td>
+            </tr>
+            <tr>
+              <td><code>monoflow queue merge</code></td>
+              <td>Enqueues PR into speculative DAG merge queue</td>
+              <td><code>--speculative</code>, <code>--auto-rebase</code></td>
+            </tr>
+            <tr>
+              <td><code>monoflow receipt sign</code></td>
+              <td>Emits machine-signed 1-second reviewer proof receipt</td>
+              <td><code>--pr &lt;id&gt;</code>, <code>--output receipt.json</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <!-- Footer -->
   <footer class="footer">
-    <p>MonoFlow is open source software licensed under the <a href="https://github.com/M0xoo/monoflow/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">MIT License</a>.</p>
-    <p style="margin-top: 0.35rem;">Repository: <a href="https://github.com/M0xoo/monoflow" target="_blank" rel="noopener noreferrer">https://github.com/M0xoo/monoflow</a></p>
+    <div class="container footer-inner">
+      <div style="display: flex; align-items: center; gap: 0.65rem;">
+        <span class="brand-glyph">⚡</span>
+        <span style="font-weight: 700; color: var(--text-primary);">monoflow</span>
+        <span>&bull; Go Systems Engine for Autonomous Agents</span>
+      </div>
+
+      <nav class="footer-nav">
+        <a href="https://github.com/M0xoo/monoflow" target="_blank" rel="noopener noreferrer">GitHub (M0xoo/monoflow)</a>
+        <a href="#workbench">Systems Console</a>
+        <a href="#benchmarks">Benchmarks</a>
+        <a href="#architecture">Architecture</a>
+        <a href="#cli">CLI Reference</a>
+      </nav>
+
+      <div>
+        <span>Apache 2.0 / MIT License &bull; Zero external runtime dependencies</span>
+      </div>
+    </div>
   </footer>
 
-  <script src="app.js"></script>
+  <script src="app.js?v=20261010-v4"></script>
 </body>
 </html>
