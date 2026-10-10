@@ -32,6 +32,14 @@ func GitHubWorkflow(g *graph.DependencyGraph) string {
           go-version-file: %s
           cache: false`, goVersionFile))
 	}
+	if !langs[graph.LangGo] {
+		// MonoFlow itself is built from source when no binary is committed.
+		setup = append(setup, `      - uses: actions/setup-go@v5
+        if: hashFiles('.agents/bin/monoflow-linux-amd64') == ''
+        with:
+          go-version: stable
+          cache: false`)
+	}
 	if langs[graph.LangTypeScript] || langs[graph.LangJavaScript] {
 		setup = append(setup, `      - uses: actions/setup-node@v4
         with:

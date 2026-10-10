@@ -138,3 +138,28 @@ P0 registry lock + atomic writes (R3-2) · P0 manifest discovery at any depth wi
 P0 baseline comparison: pre-existing failures reported, not blocking; `--strict` (P-3) · P1 project dependents (R3-1) ·
 P1 non-code files never affect packages, synced with CI paths-ignore (P-2) · P1 merge MonoFlow section into existing
 AGENTS.md / CLAUDE.md (P-4) · P1 scope root JS tools per package (P-5). Open: R3-3 inbox scoping, R3-4 hint.
+
+## Versioning between in-repo packages (2026-10-10)
+
+Problems in the original `pkg/version`:
+
+| # | Finding |
+|---|---------|
+| V-1 | `version check` validated SemVer *syntax* only; consumer ranges were never compared with the versions they resolve to. |
+| V-2 | `bump major` always cascaded: every consumer was rewritten onto the breaking version without being migrated. |
+| V-3 | Bump type was chosen by hand; nothing detected that an exported symbol was removed. |
+| V-4 | No notion of how a dependency is consumed; every producer change re-verified every consumer, so no package could move at its own pace. |
+| V-5 | Cargo/pyproject version rewrite also hit `version =` inside `[dependencies.x]`; cascade replaced `workspace:*` with `^x.y.z`. |
+| V-6 | **The round-1 cache fix (F4) had never landed** (a silent no-op edit): dependents stayed cached-green after a dependency broke them. Found by the versioning e2e; fixed for verify and deliver, regression-tested, every other reported fix audited. |
+
+Design (implemented): every in-repo edge is **source** (live code) or **pinned** (a MonoFlow internal release:
+tag `<slug>@<v>` + snapshot `.agents/releases/<slug>@<v>/`, referenced from the consumer's own manifest).
+Only source edges propagate "affected". Producers must version honestly (`version suggest` / DoD-Versioning from the
+exported-API diff). Releases notify each consumer with a per-consumer classification (compatible / breaking + the
+API changes it uses); consumers upgrade with `version upgrade`, which runs *their* verify. Bumps never rewrite consumers.
+Go: a module that pins releases leaves go.work and builds with `GOWORK=off` (Go merges workspace replaces).
+
+E2E (Go sandbox): breaking change on HEAD → only money + billing (source) verified, billing fails until migrated in the
+same change; ledger (pinned 1.0.0) untouched. `release 2.0.0` → ledger gets `breaking`, impact `removed Add`, exact
+upgrade command; billing gets an informational note. `upgrade` → ledger's own verify fails on `money.Add`; after
+migration it passes and the edge reads `pinned 2.0.0`.
