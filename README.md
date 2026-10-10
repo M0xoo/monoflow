@@ -158,6 +158,10 @@ Test your PR against a rapidly moving master branch in seconds:
 | `monoflow graph impact <file>` | Compute exact package impact matrix for a modified file | ~3ms |
 | `monoflow checkpoint save "msg"` | Ephemeral in-memory tree snapshot (shadow workspace) | ~15ms |
 | `monoflow checkpoint revert [id]` | Instant rollback of failed trial edits | ~14ms |
+| `monoflow worktree create <id> [--isolated-deps]` | Provision virtual worktree (shared symlink or CoW cloned) | 50ms – 70ms |
+| `monoflow worktree isolate <id>` | Promote worktree to mutable APFS/reflink cloned `node_modules`/`.venv` | ~68ms |
+| `monoflow worktree sync --to=B --from=A` | Instant multi-agent AST synchronization between worktrees | ~13ms |
+| `monoflow worktree finish <id>` | Harvest diff, remove worktree & prune Git records | ~27ms |
 | `monoflow verify --affected` | Run affected inner loop with token-compact JSON output | < 300ms |
 | `monoflow verify --proof=<id>` | **1-Second Reviewer Verification** | **< 1ms** |
 | `monoflow task check` | Enforce task boundary contracts (`allowed_paths`) | ~5ms |

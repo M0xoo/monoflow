@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -13,12 +14,28 @@ import (
 
 // WorktreeInfo records metadata for an active virtual worktree.
 type WorktreeInfo struct {
-	AgentID       string    `json:"agent_id"`
-	Path          string    `json:"path"`
-	CreatedAt     time.Time `json:"created_at"`
-	HeadSHA       string    `json:"head_sha"`
-	SymlinksCount int       `json:"symlinks_count"`
-	ModifiedFiles []string  `json:"modified_files,omitempty"`
+	AgentID         string    `json:"agent_id"`
+	Path            string    `json:"path"`
+	CreatedAt       time.Time `json:"created_at"`
+	HeadSHA         string    `json:"head_sha"`
+	SymlinksCount   int       `json:"symlinks_count"`
+	Isolated        bool      `json:"isolated"`
+	IsolationMethod string    `json:"isolation_method,omitempty"`
+	ModifiedFiles   []string  `json:"modified_files,omitempty"`
+}
+
+// CreateOptions configures worktree creation.
+type CreateOptions struct {
+	IsolatedDeps bool
+}
+
+// IsolateResult details the result of isolating dependencies for an agent worktree.
+type IsolateResult struct {
+	AgentID         string   `json:"agent_id"`
+	IsolatedTargets []string `json:"isolated_targets"`
+	DurationMs      float64  `json:"duration_ms"`
+	Method          string   `json:"method"`
+	Status          string   `json:"status"`
 }
 
 // Manager orchestrates high-speed virtual worktrees with shared dependency caches.
@@ -49,8 +66,13 @@ func (m *Manager) runGit(args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// Create provisions an isolated virtual worktree in ~50ms and symlinks shared caches.
+// Create provisions an isolated virtual worktree in ~50ms.
 func (m *Manager) Create(agentID string) (*WorktreeInfo, error) {
+	return m.CreateWithOpts(agentID, CreateOptions{IsolatedDeps: false})
+}
+
+// CreateWithOpts provisions a virtual worktree with optional dependency isolation.
+func (m *Manager) CreateWithOpts(agentID string, opts CreateOptions) (*WorktreeInfo, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -70,27 +92,38 @@ func (m *Manager) Create(agentID string) (*WorktreeInfo, error) {
 		return nil, fmt.Errorf("failed to create git worktree: %w", err)
 	}
 
-	// 2. Symlink shared dependencies to avoid 20GB disk duplication and npm install stalls
+	// 2. Symlink or Clone dependencies
 	sharedTargets := []string{
 		"node_modules",
 		".pnpm-store",
 		"target",
 		".agents/cache",
 		"go.work",
+		".venv",
 	}
 
 	symlinkCount := 0
+	isolationMethod := ""
+
 	for _, target := range sharedTargets {
 		srcPath := filepath.Join(m.RootDir, target)
 		destPath := filepath.Join(wtPath, target)
 
-		if fi, err := os.Stat(srcPath); err == nil {
+		if _, err := os.Stat(srcPath); err == nil {
 			_ = os.MkdirAll(filepath.Dir(destPath), 0755)
-			if fi.IsDir() {
-				if err := os.Symlink(srcPath, destPath); err == nil {
+
+			if opts.IsolatedDeps && (target == "node_modules" || target == ".venv") {
+				// Clone using Copy-on-Write (CoW / reflink / clonefile)
+				method, err := cloneDirectory(srcPath, destPath)
+				if err == nil {
+					isolationMethod = method
+				} else {
+					// Fallback to symlink if clone fails
+					_ = os.Symlink(srcPath, destPath)
 					symlinkCount++
 				}
 			} else {
+				// Fast symlink
 				if err := os.Symlink(srcPath, destPath); err == nil {
 					symlinkCount++
 				}
@@ -114,11 +147,13 @@ func (m *Manager) Create(agentID string) (*WorktreeInfo, error) {
 	headSHA, _ := m.runGit("rev-parse", "HEAD")
 
 	info := WorktreeInfo{
-		AgentID:       agentID,
-		Path:          wtPath,
-		CreatedAt:     time.Now().UTC(),
-		HeadSHA:       headSHA,
-		SymlinksCount: symlinkCount,
+		AgentID:         agentID,
+		Path:            wtPath,
+		CreatedAt:       time.Now().UTC(),
+		HeadSHA:         headSHA,
+		SymlinksCount:   symlinkCount,
+		Isolated:        opts.IsolatedDeps,
+		IsolationMethod: isolationMethod,
 	}
 
 	registry, _ := m.loadRegistry()
@@ -126,6 +161,85 @@ func (m *Manager) Create(agentID string) (*WorktreeInfo, error) {
 	_ = m.saveRegistry(registry)
 
 	return &info, nil
+}
+
+// Isolate promotes an existing worktree to have its own mutable, Copy-on-Write cloned node_modules / venv.
+func (m *Manager) Isolate(agentID string) (*IsolateResult, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	wtPath := filepath.Join(m.worktreesDir, agentID)
+	if !fileExists(wtPath) {
+		return nil, fmt.Errorf("worktree for agent '%s' not found", agentID)
+	}
+
+	start := time.Now()
+	targetsToIsolate := []string{"node_modules", ".venv"}
+	var isolated []string
+	methodUsed := ""
+
+	for _, t := range targetsToIsolate {
+		src := filepath.Join(m.RootDir, t)
+		dst := filepath.Join(wtPath, t)
+
+		if fileExists(src) {
+			// If dst is currently a symlink, remove it
+			if fi, err := os.Lstat(dst); err == nil && (fi.Mode()&os.ModeSymlink != 0) {
+				_ = os.Remove(dst)
+			}
+
+			method, err := cloneDirectory(src, dst)
+			if err == nil {
+				isolated = append(isolated, t)
+				methodUsed = method
+			}
+		}
+	}
+
+	durMs := float64(time.Since(start).Microseconds()) / 1000.0
+
+	// Update registry
+	reg, _ := m.loadRegistry()
+	if info, ok := reg[agentID]; ok {
+		info.Isolated = true
+		info.IsolationMethod = methodUsed
+		reg[agentID] = info
+		_ = m.saveRegistry(reg)
+	}
+
+	return &IsolateResult{
+		AgentID:         agentID,
+		IsolatedTargets: isolated,
+		DurationMs:      durMs,
+		Method:          methodUsed,
+		Status:          "isolated",
+	}, nil
+}
+
+// cloneDirectory uses OS-level Copy-on-Write (APFS clonefile or Linux reflink) to clone directories instantly.
+func cloneDirectory(src, dst string) (string, error) {
+	_ = os.RemoveAll(dst)
+
+	if runtime.GOOS == "darwin" {
+		// macOS APFS clonefile (instant Copy-on-Write)
+		cmd := exec.Command("cp", "-c", "-R", src, dst)
+		if err := cmd.Run(); err == nil {
+			return "apfs-clonefile", nil
+		}
+	} else if runtime.GOOS == "linux" {
+		// Linux reflink (Btrfs, XFS, ZFS)
+		cmd := exec.Command("cp", "--reflink=auto", "-R", src, dst)
+		if err := cmd.Run(); err == nil {
+			return "linux-reflink", nil
+		}
+	}
+
+	// Fallback recursive copy
+	cmd := exec.Command("cp", "-R", src, dst)
+	if err := cmd.Run(); err != nil {
+		return "", err
+	}
+	return "copy", nil
 }
 
 // List returns all active agent worktrees.

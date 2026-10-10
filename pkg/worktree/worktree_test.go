@@ -29,7 +29,7 @@ func setupTestRepo(t *testing.T) string {
 	// Dummy files and dummy node_modules
 	_ = os.WriteFile(filepath.Join(tmpDir, "index.ts"), []byte("console.log('root');\n"), 0644)
 	_ = os.MkdirAll(filepath.Join(tmpDir, "node_modules"), 0755)
-	_ = os.WriteFile(filepath.Join(tmpDir, "node_modules", "pkg.json"), []byte("{}"), 0644)
+	_ = os.WriteFile(filepath.Join(tmpDir, "node_modules", "pkg.json"), []byte(`{"name":"original"}`), 0644)
 
 	run("add", "index.ts")
 	run("commit", "-m", "init commit")
@@ -106,5 +106,67 @@ func TestWorktreeCreateListSyncFinish(t *testing.T) {
 	remaining, _ := mgr.List()
 	if len(remaining) != 1 || remaining[0].AgentID != "agent-beta" {
 		t.Fatalf("expected 1 remaining worktree (beta), got %d", len(remaining))
+	}
+}
+
+func TestWorktreeIsolateDeps(t *testing.T) {
+	repoDir := setupTestRepo(t)
+	defer os.RemoveAll(repoDir)
+
+	mgr := NewManager(repoDir)
+
+	// 1. Create with IsolatedDeps = true
+	info, err := mgr.CreateWithOpts("agent-upgrade", CreateOptions{IsolatedDeps: true})
+	if err != nil {
+		t.Fatalf("failed to create isolated worktree: %v", err)
+	}
+
+	if !info.Isolated {
+		t.Errorf("expected info.Isolated to be true")
+	}
+
+	// Verify node_modules is a real cloned directory, NOT a symlink
+	nodeModulesPath := filepath.Join(info.Path, "node_modules")
+	fi, err := os.Lstat(nodeModulesPath)
+	if err != nil {
+		t.Fatalf("node_modules not found in isolated worktree: %v", err)
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("expected real directory, but node_modules is still a symlink")
+	}
+
+	// 2. Modify node_modules in the worktree
+	worktreePkgFile := filepath.Join(nodeModulesPath, "pkg.json")
+	err = os.WriteFile(worktreePkgFile, []byte(`{"name":"upgraded-v2"}`), 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 3. Verify root node_modules was NOT modified (true isolation)
+	rootPkgFile := filepath.Join(repoDir, "node_modules", "pkg.json")
+	rootData, _ := os.ReadFile(rootPkgFile)
+	if string(rootData) != `{"name":"original"}` {
+		t.Fatalf("root node_modules was corrupted by worktree! got: %s", string(rootData))
+	}
+
+	// 4. Test Isolate on an existing shared worktree
+	sharedInfo, err := mgr.Create("agent-shared")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	isoRes, err := mgr.Isolate("agent-shared")
+	if err != nil {
+		t.Fatalf("Isolate failed: %v", err)
+	}
+	if isoRes.Status != "isolated" {
+		t.Errorf("expected isolated status, got %s", isoRes.Status)
+	}
+
+	// Verify shared worktree's node_modules is now also an independent directory
+	sharedNM := filepath.Join(sharedInfo.Path, "node_modules")
+	fiShared, _ := os.Lstat(sharedNM)
+	if fiShared.Mode()&os.ModeSymlink != 0 {
+		t.Errorf("expected promoted node_modules to be a real directory, not symlink")
 	}
 }

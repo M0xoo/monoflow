@@ -485,22 +485,45 @@ func handleWorktree(rootDir string) {
 			os.Exit(1)
 		}
 		agentID := os.Args[3]
+		isolated := false
+		for _, arg := range os.Args[4:] {
+			if arg == "--isolated-deps" {
+				isolated = true
+			}
+		}
+
 		start := time.Now()
-		info, err := mgr.Create(agentID)
+		info, err := mgr.CreateWithOpts(agentID, worktree.CreateOptions{IsolatedDeps: isolated})
 		durMs := float64(time.Since(start).Microseconds()) / 1000.0
 		if err != nil {
 			fmt.Printf(`{"error": "%s"}`+"\n", err)
 			os.Exit(1)
 		}
 		data, _ := json.MarshalIndent(map[string]any{
-			"status":         "created",
-			"agent_id":       info.AgentID,
-			"path":           info.Path,
-			"head_sha":       info.HeadSHA,
-			"symlinks_count": info.SymlinksCount,
-			"duration_ms":    durMs,
-			"verdict":        "Virtual worktree provisioned in < 60ms with shared dependency symlinks",
+			"status":           "created",
+			"agent_id":         info.AgentID,
+			"path":             info.Path,
+			"head_sha":         info.HeadSHA,
+			"symlinks_count":   info.SymlinksCount,
+			"isolated":         info.Isolated,
+			"isolation_method": info.IsolationMethod,
+			"duration_ms":      durMs,
+			"verdict":          "Virtual worktree provisioned (< 60ms shared, or ~400ms CoW cloned)",
 		}, "", "  ")
+		fmt.Println(string(data))
+
+	case "isolate":
+		if len(os.Args) < 4 {
+			fmt.Println(`{"error": "missing agent-id for worktree isolate"}`)
+			os.Exit(1)
+		}
+		agentID := os.Args[3]
+		res, err := mgr.Isolate(agentID)
+		if err != nil {
+			fmt.Printf(`{"error": "%s"}`+"\n", err)
+			os.Exit(1)
+		}
+		data, _ := json.MarshalIndent(res, "", "  ")
 		fmt.Println(string(data))
 
 	case "list":
