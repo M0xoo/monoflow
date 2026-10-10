@@ -166,7 +166,8 @@ func CheckTestIntegrity(rootDir string) (violations []IntegrityViolation, err er
 		}
 
 		// Only inspect test files
-		isTestFile := strings.Contains(currentFile, "test") || strings.Contains(currentFile, "spec")
+		// Vendored release snapshots are managed by MonoFlow (pruned on upgrade), not edited tests.
+		isTestFile := (strings.Contains(currentFile, "test") || strings.Contains(currentFile, "spec")) && !strings.HasPrefix(currentFile, ".agents/releases/")
 		if !isTestFile {
 			continue
 		}

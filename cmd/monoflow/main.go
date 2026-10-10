@@ -397,8 +397,10 @@ func handleGraph(rootDir string) {
 			"path":                  pkg.Path,
 			"language":              pkg.Language,
 			"upstream_dependencies": g.GetUpstream(pkg.Name),
+			"pinned_dependencies":   pkg.PinnedDependencies,
 			"downstream_dependents": g.GetDownstream(pkg.Name),
 			"transitive_dependents": g.GetTransitiveDownstream(pkg.Name),
+			"pinned_dependents":     pinnedDependents(g, pkg.Name),
 		}, "", "  ")
 		fmt.Println(string(data))
 
@@ -418,6 +420,8 @@ func handleGraph(rootDir string) {
 			"owning_package":        pkg.Name,
 			"direct_dependents":     g.GetDownstream(pkg.Name),
 			"transitive_dependents": g.GetTransitiveDownstream(pkg.Name),
+			"pinned_dependents":     pinnedDependents(g, pkg.Name),
+			"note":                  "pinned dependents build against a release of this package: unaffected now, notified on its next release",
 		}, "", "  ")
 		fmt.Println(string(data))
 
@@ -1108,17 +1112,17 @@ func handleWorktree(rootDir string) {
 			os.Exit(1)
 		}
 		resMap := map[string]any{
-			"status":           "created",
-			"agent_id":         info.AgentID,
-			"path":             info.Path,
-			"head_sha":         info.HeadSHA,
-			"symlinks_count":   info.SymlinksCount,
-			"isolation":        "own git worktree on branch " + info.Branch + " (packages projected via sparse checkout)",
-			"deps_isolated":    info.Isolated,
-			"deps_isolation":   info.IsolationMethod,
-			"is_sparse":        info.IsSparse,
-			"duration_ms":      durMs,
-			"verdict":          "Virtual worktree provisioned (< 60ms shared, or ~400ms CoW cloned)",
+			"status":         "created",
+			"agent_id":       info.AgentID,
+			"path":           info.Path,
+			"head_sha":       info.HeadSHA,
+			"symlinks_count": info.SymlinksCount,
+			"isolation":      "own git worktree on branch " + info.Branch + " (packages projected via sparse checkout)",
+			"deps_isolated":  info.Isolated,
+			"deps_isolation": info.IsolationMethod,
+			"is_sparse":      info.IsSparse,
+			"duration_ms":    durMs,
+			"verdict":        "Virtual worktree provisioned (< 60ms shared, or ~400ms CoW cloned)",
 		}
 		if info.FocusedPackage != "" {
 			resMap["focused_package"] = info.FocusedPackage
@@ -2990,4 +2994,16 @@ func projectedPackages(rootDir string) map[string]bool {
 		set[p] = true
 	}
 	return set
+}
+
+// pinnedDependents lists consumers that pin a release of pkg (they are not affected by
+// changes to its live code but must know about breaking releases).
+func pinnedDependents(g *graph.DependencyGraph, pkg string) []string {
+	out := []string{}
+	for _, p := range g.GetAllPackages() {
+		if containsStr(p.PinnedDependencies, pkg) {
+			out = append(out, p.Name)
+		}
+	}
+	return out
 }

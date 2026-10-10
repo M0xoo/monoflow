@@ -197,3 +197,14 @@ find `.agents/releases/libs-money@1.0.0`.
 
 Validated: fresh clone `ci/run.sh` green; sparse ledger worktree projects only `services/ledger` (pinned money needs no
 checkout), sees its compatible upgrade, verifies, clean `git status`.
+
+## Round 6 (2026-10-10) — versioning confirmation
+
+**Ground truth (full `ci/run.sh` on fresh clones): 5/5 heads green, incl. main**, with a pinned Go consumer and a breaking
+change in flight. **One Actions run per PR**, all green; CI_PASSED delivered to every agent; 1 raw check call in total
+(allowed by nudge-once).
+
+| # | Finding | Fix |
+|---|---------|-----|
+| R6-1 | Upgrade prunes the old vendored snapshot; the commit guard read its deleted test file as "test weakened" | guard ignores `.agents/releases/` |
+| R6-2 | `graph query` / `graph impact` omit pinned consumers | `pinned_dependents` / `pinned_dependencies` |

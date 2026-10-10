@@ -173,3 +173,22 @@ func TestCheckTestIntegrity_ProseCommentNotAssertion(t *testing.T) {
 		t.Fatalf("commented-out expect() must still be flagged")
 	}
 }
+
+func TestCheckTestIntegrity_IgnoresVendoredReleases(t *testing.T) {
+	repoDir := setupTestGitRepoForGuard(t)
+	defer os.RemoveAll(repoDir)
+	snap := filepath.Join(repoDir, ".agents", "releases", "lib@1.0.0", "lib", "lib_test.go")
+	_ = os.MkdirAll(filepath.Dir(snap), 0755)
+	_ = os.WriteFile(snap, []byte("package lib\n\nfunc TestX(t *testing.T) {\n\tt.Fatal(\"x\")\n}\n"), 0644)
+	for _, args := range [][]string{{"add", "-A"}, {"commit", "-qm", "vendor release"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repoDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	_ = os.RemoveAll(filepath.Join(repoDir, ".agents", "releases", "lib@1.0.0")) // pruned on upgrade
+	if v, _ := CheckTestIntegrity(repoDir); len(v) != 0 {
+		t.Fatalf("pruning a vendored release must not count as weakening tests: %+v", v)
+	}
+}
