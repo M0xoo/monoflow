@@ -56,7 +56,7 @@ func (m *Manager) Save(message string) (*Checkpoint, error) {
 	if _, err := m.runGit(runtimestate.AddArgs()...); err != nil {
 		return nil, fmt.Errorf("failed to stage changes for checkpoint: %w", err)
 	}
-	_, _ = m.runGit(runtimestate.UnstageArgs()...)
+	_, _ = m.runGit(runtimestate.UnstageArgs(m.RootDir)...)
 
 	// 2. Write tree object (pure git plumbing)
 	treeHash, err := m.runGit("write-tree")

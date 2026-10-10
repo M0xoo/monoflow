@@ -4,7 +4,11 @@
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 WORK=${1:?workdir}; BIN=${2:?bin}; OUT=${3:?outdir}; MODEL=${4:-opencode/big-pickle}; shift 4 || shift $#
-AGENTS=("$@"); [ ${#AGENTS[@]} -eq 0 ] && AGENTS=(agent-billing agent-money agent-ui agent-ledger)
+AGENTS=("$@"); [ ${#AGENTS[@]} -eq 0 ] && AGENTS=(agent-billing agent-money agent-ui agent-ledger agent-api agent-money-sub)
+if [ -n "${SIM_GH_REPO:-}" ] && [ -z "${SIM_LINUX_BIN:-}" ] && [ -n "${MONOFLOW_SRC:-}" ]; then
+  export SIM_LINUX_BIN="$WORK.monoflow-linux-amd64"
+  (cd "$MONOFLOW_SRC" && GOOS=linux GOARCH=amd64 go build -o "$SIM_LINUX_BIN" ./cmd/monoflow)
+fi
 REPO=$(bash "$HERE/setup.sh" "$WORK" "$BIN" | tail -1)
 mkdir -p "$OUT"
 for a in "${AGENTS[@]}"; do
@@ -15,22 +19,47 @@ for a in "${AGENTS[@]}"; do
   sleep 2
 done
 wait
-# Ground truth: with a real GitHub remote, the GitHub Actions conclusion per branch head;
-# otherwise run the full CI script on every branch that reached the local remote.
+# Ground truth: run the full CI script (ci/run.sh) locally on every branch head that
+# reached the remote. Remote CI is MonoFlow's economical workflow, measured separately.
 : > "$OUT/remote_ci.txt"
-if [ -n "${SIM_GH_REPO:-}" ]; then
-  sleep 5
-  gh run list -R "$SIM_GH_REPO" --limit 50 --json headBranch,headSha,status,conclusion,event \
-    -q '.[] | "\(.headBranch) \(.event) \(.status) \(.conclusion) \(.headSha[0:8])"' >> "$OUT/remote_ci.txt"
-  gh pr list -R "$SIM_GH_REPO" --state all --json number,headRefName,title -q '.[] | "PR #\(.number) \(.headRefName) \(.title)"' >> "$OUT/remote_ci.txt"
-fi
-for br in $( [ -z "${SIM_GH_REPO:-}" ] && git --git-dir="$WORK/remote.git" for-each-ref --format='%(refname:short)' refs/heads); do
+REMOTE_URL=$(git -C "$REPO" remote get-url origin)
+for br in $(git ls-remote --heads "$REMOTE_URL" | awk '{print $2}' | sed 's|refs/heads/||'); do
   d="$WORK/ci-$(echo "$br" | tr / _)"; rm -rf "$d"
-  git clone -q -b "$br" "$WORK/remote.git" "$d" 2>/dev/null
+  git clone -q -b "$br" "$REMOTE_URL" "$d" 2>/dev/null
   if (cd "$d" && bash ci/run.sh >/dev/null 2>"$d.err"); then r=PASS; else r=FAIL; fi
-  echo "$br $r $(tail -3 "$d.err" | tr '\n' ' ')" >> "$OUT/remote_ci.txt"
+  echo "$br $(git -C "$d" rev-parse --short HEAD) $r $(tail -2 "$d.err" | tr '\n' ' ')" >> "$OUT/remote_ci.txt"
 done
-( cd "$REPO" && ./bin/monoflow pr list; ./bin/monoflow cache status; ./bin/monoflow events list; git worktree list; git branch --show-current ) > "$OUT/final_state.txt" 2>&1
+
+# CI economy: remote runs per branch/event; any run on a commit that fails ground truth
+# means MonoFlow let a red commit reach CI.
+if [ -n "${SIM_GH_REPO:-}" ]; then
+  for _ in $(seq 1 60); do
+    pending=$(gh run list -R "$SIM_GH_REPO" --limit 100 --json status -q '[.[] | select(.status != "completed")] | length')
+    [ "$pending" = "0" ] && break
+    sleep 10
+  done
+  gh run list -R "$SIM_GH_REPO" --limit 100 --json headBranch,headSha,event,status,conclusion \
+    -q '.[] | "\(.headBranch) \(.headSha[0:7]) \(.event) \(.conclusion)"' > "$OUT/ci_runs.txt"
+  {
+    echo "total_runs=$(wc -l < "$OUT/ci_runs.txt" | tr -d ' ')"
+    echo "by_event: $(awk '{print $3}' "$OUT/ci_runs.txt" | sort | uniq -c | tr '\n' ' ')"
+    echo "by_conclusion: $(awk '{print $4}' "$OUT/ci_runs.txt" | sort | uniq -c | tr '\n' ' ')"
+    echo "runs_per_branch: $(awk '{print $1}' "$OUT/ci_runs.txt" | sort | uniq -c | tr '\n' ' ')"
+    echo "prs=$(gh pr list -R "$SIM_GH_REPO" --state all --json number -q length)"
+  } > "$OUT/ci_economy.txt"
+  sleep 20 # let detached MonoFlow watchers record CI events
+fi
+
+# Worktree footprint vs the full repo (files checked out, KB on disk excluding .git).
+{
+  printf 'root files=%s kb=%s\n' "$(git -C "$REPO" ls-files | wc -l | tr -d ' ')" "$(du -sk --exclude=.git "$REPO" 2>/dev/null | cut -f1 || du -sk "$REPO" | cut -f1)"
+  for wt in "$REPO"/.agents/worktrees/*/; do
+    [ -d "$wt" ] || continue
+    printf '%s files=%s kb=%s\n' "$(basename "$wt")" "$(cd "$wt" && find . -path ./.git -prune -o -path ./.agents -prune -o -type f -print | wc -l | tr -d ' ')" "$(du -sk "$wt" | cut -f1)"
+  done
+} > "$OUT/worktree_footprint.txt"
+
+( cd "$REPO" && ./bin/monoflow worktree list; ./bin/monoflow cache status; ./bin/monoflow events list; git branch --show-current ) > "$OUT/final_state.txt" 2>&1
 # How often agents reached for raw tools vs MonoFlow (from the transcripts).
 for a in "${AGENTS[@]}"; do
   jq -r 'select(.type=="tool_use" and .part.tool=="bash") | .part.state.input.command' "$OUT/$a.jsonl" 2>/dev/null > "$OUT/$a.commands"

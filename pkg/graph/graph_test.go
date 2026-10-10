@@ -123,3 +123,34 @@ func TestComputeAffected(t *testing.T) {
 		t.Errorf("expected all affected %v, got %v", expectedAll, affected.AllAffected)
 	}
 }
+
+func TestComputeAffectedGlobalFiles(t *testing.T) {
+	g := New("/tmp/repo")
+	g.AddPackage(&PackageNode{Name: "a", Path: "libs/a"})
+	g.AddPackage(&PackageNode{Name: "b", Path: "libs/b"})
+	g.RebuildEdges()
+	for _, f := range []string{"go.work", "pnpm-lock.yaml", ".github/workflows/ci.yml", "ci/run.sh"} {
+		if got := g.ComputeAffected([]string{f}).AllAffected; len(got) != 2 {
+			t.Errorf("%s should affect every package, got %v", f, got)
+		}
+	}
+	if got := g.ComputeAffected([]string{"README.md"}).AllAffected; len(got) != 0 {
+		t.Errorf("README.md should affect nothing, got %v", got)
+	}
+}
+
+func TestGetPackageByPathAndShortName(t *testing.T) {
+	g := New("/tmp/repo")
+	g.AddPackage(&PackageNode{Name: "@acme/ui", Path: "packages/ui"})
+	g.AddPackage(&PackageNode{Name: "libs/money", Path: "libs/money"})
+	g.AddPackage(&PackageNode{Name: "a/util", Path: "a/util"})
+	g.AddPackage(&PackageNode{Name: "b/util", Path: "b/util"})
+	for q, want := range map[string]string{"packages/ui": "@acme/ui", "./packages/ui/": "@acme/ui", "ui": "@acme/ui", "money": "libs/money"} {
+		if p, ok := g.GetPackage(q); !ok || p.Name != want {
+			t.Errorf("GetPackage(%q) = %v, want %s", q, p, want)
+		}
+	}
+	if _, ok := g.GetPackage("util"); ok {
+		t.Errorf("ambiguous short name must not resolve")
+	}
+}

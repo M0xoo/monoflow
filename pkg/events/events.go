@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -26,6 +27,7 @@ const (
 	EventPRReviewed       EventType = "PR_REVIEWED"
 	EventPRTested         EventType = "PR_TESTED"
 	EventPRConflict       EventType = "PR_CONFLICT"
+	EventCISkipped        EventType = "CI_SKIPPED"
 )
 
 // Event represents a machine-readable asynchronous event dispatched to agents.
@@ -82,7 +84,50 @@ func (em *EventManager) Emit(evt *Event) error {
 		return fmt.Errorf("failed to serialize event: %w", err)
 	}
 
-	return os.WriteFile(path, data, 0644)
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return err
+	}
+	if (evt.Type == EventCIPassed || evt.Type == EventCIFailed) && evt.Branch != "" && evt.CommitSHA != "" {
+		em.supersedeOlderCI(evt)
+	}
+	return nil
+}
+
+// supersedeOlderCI marks unread CI results for older commits of the same branch as read,
+// so agents never act on a failure that a newer push already replaced.
+func (em *EventManager) supersedeOlderCI(newer *Event) {
+	entries, err := os.ReadDir(em.eventsDir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if !strings.HasSuffix(entry.Name(), ".json") || entry.Name() == newer.ID+".json" {
+			continue
+		}
+		path := filepath.Join(em.eventsDir, entry.Name())
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var old Event
+		if json.Unmarshal(data, &old) != nil || old.Read || old.Branch != newer.Branch ||
+			(old.Type != EventCIPassed && old.Type != EventCIFailed) || old.CommitSHA == newer.CommitSHA {
+			continue
+		}
+		anc := exec.Command("git", "merge-base", "--is-ancestor", old.CommitSHA, newer.CommitSHA)
+		anc.Dir = em.RootDir
+		if anc.Run() != nil {
+			continue
+		}
+		old.Read = true
+		if old.Payload == nil {
+			old.Payload = map[string]any{}
+		}
+		old.Payload["superseded_by"] = newer.ID
+		if out, err := json.MarshalIndent(old, "", "  "); err == nil {
+			_ = os.WriteFile(path, out, 0644)
+		}
+	}
 }
 
 // List returns all recorded events, optionally filtered to unread only.

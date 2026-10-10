@@ -54,6 +54,8 @@ type CIWatcher struct {
 	RootDir  string
 	watchDir string
 	events   *EventManager
+	// Spawn starts the detached supervisor process (overridable in tests).
+	Spawn func(job *WatchJob, opts WatchOptions) error
 }
 
 // NewCIWatcher initializes a background CI supervisor.
@@ -69,7 +71,17 @@ func NewCIWatcher(rootDir string) *CIWatcher {
 }
 
 // StartWatch initiates CI monitoring. If opts.Async is true, returns immediately in < 50ms.
+// A commit that already has an active watcher reuses it instead of starting another.
 func (cw *CIWatcher) StartWatch(opts WatchOptions) (*WatchJob, error) {
+	if opts.Async && opts.CommitSHA != "" {
+		if jobs, err := cw.ListJobs(); err == nil {
+			for _, j := range jobs {
+				if j.CommitSHA == opts.CommitSHA && j.Status == WatchStatusMonitoring {
+					return j, nil
+				}
+			}
+		}
+	}
 	cw.mu.Lock()
 
 	commitSHA := opts.CommitSHA
@@ -116,7 +128,11 @@ func (cw *CIWatcher) StartWatch(opts WatchOptions) (*WatchJob, error) {
 	if opts.Async {
 		// The CLI process exits right after replying, which would kill a goroutine, so
 		// supervise in a detached child process that outlives it.
-		if err := cw.spawnDetached(job, opts); err != nil {
+		spawn := cw.Spawn
+		if spawn == nil {
+			spawn = cw.spawnDetached
+		}
+		if err := spawn(job, opts); err != nil {
 			cw.finishJob(job, WatchStatusTimedOut, "failed to start background watcher: "+err.Error())
 			return job, err
 		}
@@ -143,6 +159,15 @@ func (cw *CIWatcher) spawnDetached(job *WatchJob, opts WatchOptions) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return err
+	}
+	// Only the monoflow CLI can serve as the watcher process (never a test binary, which
+	// would re-run its own test suite).
+	if !strings.HasPrefix(filepath.Base(exe), "monoflow") {
+		if alt, lookErr := exec.LookPath("monoflow"); lookErr == nil {
+			exe = alt
+		} else {
+			return fmt.Errorf("monoflow binary not found for background watcher (running as %s)", filepath.Base(exe))
+		}
 	}
 	args := []string{"events", "watch", job.CommitSHA, "--branch=" + job.Branch, "--job=" + job.ID}
 	if opts.Remote != "" {
@@ -291,6 +316,7 @@ func (cw *CIWatcher) supervise(job *WatchJob, opts WatchOptions) {
 	}
 
 	deadline := time.Now().Add(timeout)
+	noRunDeadline := time.Now().Add(3 * time.Minute)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -328,6 +354,22 @@ func (cw *CIWatcher) supervise(job *WatchJob, opts WatchOptions) {
 		}
 
 		runs, err := cw.fetchRemoteRuns(job.CommitSHA)
+		if err == nil && len(runs) == 0 && time.Now().After(noRunDeadline) {
+			// The economical workflow only runs for PR heads/main (not drafts or docs-only
+			// changes), so "no run" is a legitimate, final outcome; say so instead of
+			// leaving the agent waiting for an event that never comes.
+			evt := &Event{
+				Type:      EventCISkipped,
+				CommitSHA: job.CommitSHA,
+				Branch:    job.Branch,
+				Summary:   fmt.Sprintf("No remote CI run for %s on %s (no open PR, draft, or docs-only change)", job.CommitSHA[:min(8, len(job.CommitSHA))], job.Branch),
+			}
+			_ = cw.events.Emit(evt)
+			job.EventEmitted = true
+			job.EventID = evt.ID
+			cw.finishJob(job, WatchStatusCompletedPassed, "no CI run triggered")
+			return
+		}
 		if err == nil && len(runs) > 0 {
 			allCompleted := true
 			hasFailure := false

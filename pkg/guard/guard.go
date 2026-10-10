@@ -317,7 +317,7 @@ func FastAgentCommit(rootDir, message string) (*CommitResult, error) {
 	if out, err := cmdAdd.CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("git add failed: %w (%s)", err, string(out))
 	}
-	unstage := exec.Command("git", runtimestate.UnstageArgs()...)
+	unstage := exec.Command("git", runtimestate.UnstageArgs(rootDir)...)
 	unstage.Dir = rootDir
 	_ = unstage.Run()
 

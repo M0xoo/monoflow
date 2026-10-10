@@ -53,3 +53,47 @@ MonoFlow verified, committed, PR'd and pushed it as "passed".
 | P2 | Code-shaped matching for commented-out assertions | F19 |
 | P3 | Don't commit the local monoflow binary; untrack `.agents/cache` in this repo | F18 |
 | P3 | JS vs TS language detection; `pr status` reports pushed-to-remote for non-GitHub remotes | F13, F14 |
+
+## Round 2 (2026-10-10) — real GitHub repo + Actions, 6 agents
+
+CI economy: **17 Actions runs for 8 branch heads** (every head ran twice: `push` + `pull_request`), **4/8 heads red**
+(ui, api, billing, ledger — all the leaked `go.work`). The round-1 `go vet` trap was caught locally this time (agent fixed it).
+
+Remote CI (GitHub Actions on `M0xoo/monoflow-sim-acme`): **agent-ui and agent-api first pushes FAILED**
+(`pattern ./...: directory prefix . does not contain modules listed in go.work`); agents repaired them with follow-up
+commits restoring `go.work`. Round-1 issues confirmed fixed: no `--help` side effects, root stayed on `main`,
+`agent/<id>` branches, Go dependents found, PRs opened on GitHub (#1–#4), CI_FAILED events delivered.
+
+| # | Finding | Evidence |
+|---|---------|----------|
+| R2-1 | Sparse worktree's pruned `go.work` is committed (skip-worktree bit does not survive) → broke remote CI. | agent-ui `ea8903e`, agent-api `838789e` |
+| R2-2 | Root config files owned by no package (`go.work`, lockfiles, `ci/`, `.github/workflows`) make `verify --affected` report 0 targets → pre-push gate passes a CI-breaking change. | agent-api: `total_targets: 0` for go.work change |
+| R2-3 | Skill doc references nonexistent `monoflow stack slice` and `.agents/bin/monoflow`; `pr --help` doesn't say how to satisfy the DoD gate. | agent-api, agent-ui |
+| R2-4 | `worktree sync` help/implementation mismatch; no "update my branch from main" command (`sync` fails on unpushed branch). | agent-money-sub |
+| R2-5 | Superseded `CI_FAILED` events stay unread/actionable after a newer commit on the same branch passes. | agent-ui |
+| R2-6 | Registry `head_sha`/heartbeat frozen at creation; no PR/CI state per worktree. | `worktree list` vs `git worktree list` |
+| R2-7 | `pr create` already pushes, so the documented `push` step is redundant (second watcher). | agent-money, agent-money-sub |
+| R2-8 | `verify --affected` from the repo root sees nothing when the work is in worktrees (expected) but gives no hint. | agent-money |
+| R2-9 | `graph query money` (short name) fails. | agent-money, agent-money-sub |
+| R2-10 | Cache stats are global; agents can't attribute hits to their own run. | agent-ui |
+| R2-11 | Every head ran CI twice (push + pull_request), superseded runs never cancelled, docs-only/draft changes would run CI; `init --setup-gh-actions` is documented but not implemented. | 17 runs / 8 heads |
+| R2-12 | `PruneStale`/`finish` force-delete worktrees with uncommitted/unpushed work (heartbeat only written at create). | code review while fixing R2-6 |
+| R2-13 | Shared state dirs (`.agents/prs`, `proofs`) not linked when absent at create → PRs/proofs invisible outside the worktree; `node_modules` symlink shows as untracked. | sim2 worktrees |
+| R2-14 | Branch push with no PR (economical CI) would leave the watcher waiting 25 min; `pr create` + `push` start duplicate watchers. | design |
+
+### Prioritised TODO (round 2)
+
+| Prio | TODO | Covers |
+|------|------|--------|
+| P0 | Commit/checkpoint never stage a projected `go.work` (detect via projection marker) | R2-1 |
+| P0 | Unowned root/global files (go.work, lockfiles, root package.json/tsconfig, `ci/`, `.github/workflows`, Makefile) mark **all** packages affected | R2-2 |
+| P1 | `monoflow sync` with no args on an agent branch = rebase onto the base branch (main) | R2-4 |
+| P1 | New CI result for a branch auto-acks older CI events of that branch | R2-5 |
+| P1 | `worktree list` reports live branch/HEAD (from git), PR id and last CI status; heartbeat on every command | R2-6 |
+| P2 | Fix skill/AGENTS templates (task slice, ./bin/monoflow, `pr create` pushes, DoD gate hint) | R2-3, R2-7 |
+| P2 | `graph query` accepts a unique basename (`money`) | R2-9 |
+| P2 | Per-run cache counts in `verify` output (`cached_targets` already) — document; no change | R2-10 |
+| P0 | `init --setup-gh-actions`: PR+main triggers only, concurrency cancel, skip drafts/docs, `verify --affected --base=<PR base>` with restored cache; `verify --base` | R2-11 |
+| P0 | Never discard unsaved work in `finish`/`gc` (`--force` to override); activity from git | R2-12 |
+| P1 | Always link shared state dirs; exclude dependency links | R2-13 |
+| P1 | `CI_SKIPPED` when no run appears; one watcher per commit; `pr create` starts it | R2-14 |

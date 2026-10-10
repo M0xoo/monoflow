@@ -61,6 +61,7 @@ type PRMetadata struct {
 	StackTiers       *task.StackedSlice     `json:"stack_tiers,omitempty"`
 	ReviewDecision   string                 `json:"review_decision,omitempty"`
 	Pushed           bool                   `json:"pushed,omitempty"`
+	CIWatcher        string                 `json:"ci_watcher,omitempty"`
 	RemotePR         *RemotePRResult        `json:"remote_pr,omitempty"`
 }
 
@@ -384,6 +385,12 @@ func (m *PRManager) Create(opts CreateOptions) (*PRMetadata, error) {
 		StackTiers:       stackTiers,
 		Pushed:           pushed,
 		RemotePR:         remotePR,
+	}
+	// The PR push is the CI trigger: watch it here so agents need no separate `push`.
+	if pushed {
+		if job, err := events.NewCIWatcher(m.RootDir).StartWatch(events.WatchOptions{CommitSHA: headSHA, Branch: headBranch, Remote: remote, Async: true}); err == nil {
+			metadata.CIWatcher = job.ID
+		}
 	}
 
 	if err := m.save(metadata); err != nil {

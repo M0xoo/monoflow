@@ -7,7 +7,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -37,6 +39,11 @@ type WorktreeInfo struct {
 	MonoflowBin     string    `json:"monoflow_bin,omitempty"`
 	ShieldHooks     bool      `json:"shield_hooks"`
 	Branch          string    `json:"branch,omitempty"`
+	// Live state (computed by List, not persisted)
+	Ahead    int    `json:"ahead,omitempty"`    // commits not yet on the base branch
+	Unpushed int    `json:"unpushed,omitempty"` // commits not yet on the remote branch
+	PR       string `json:"pr,omitempty"`       // MonoFlow PR id / GitHub URL for this branch
+	CI       string `json:"ci,omitempty"`       // latest CI result for this branch (CI_PASSED / CI_FAILED)
 }
 
 // CreateOptions configures worktree creation.
@@ -134,7 +141,9 @@ func (m *Manager) CreateWithOpts(agentID string, opts CreateOptions) (*WorktreeI
 		".agents/events",
 		".venv",
 	}
-	_ = os.MkdirAll(filepath.Join(m.RootDir, ".agents", "events"), 0755)
+	for _, d := range sharedStateDirs {
+		_ = os.MkdirAll(filepath.Join(m.RootDir, d), 0755)
+	}
 
 	// The package cache is content-addressed, so it is always shared with the root repo:
 	// agents get cache hits for every untouched dependency. Deliverables in .agents/dist
@@ -197,7 +206,7 @@ func (m *Manager) CreateWithOpts(agentID string, opts CreateOptions) (*WorktreeI
 
 	// Path symmetry: ./bin/monoflow must work inside the worktree exactly as at the root.
 	monoflowBin := m.linkMonoflowBinary(wtPath)
-	excludeFromGit(wtPath, runtimestate.IgnorePatterns()...)
+	excludeFromGit(wtPath, append(runtimestate.IgnorePatterns(), sharedDepLinks...)...)
 
 	// Git Shield inheritance: if the root repo is shielded, the worktree must be too.
 	if initialize.HasShieldHooks(m.RootDir) && !initialize.HasShieldHooks(wtPath) {
@@ -229,6 +238,9 @@ func (m *Manager) CreateWithOpts(agentID string, opts CreateOptions) (*WorktreeI
 			isSparse = true
 		}
 	}
+
+	// Sparse checkout and hook installation can replace links; re-assert them last.
+	m.ensureSharedState(wtPath)
 
 	headSHA, _ := m.runGit("-C", wtPath, "rev-parse", "HEAD")
 
@@ -467,6 +479,7 @@ func (m *Manager) List() ([]WorktreeInfo, error) {
 				}
 				itemCopy.ModifiedFiles = files
 			}
+			m.fillLiveState(&itemCopy)
 		}
 		res = append(res, itemCopy)
 	}
@@ -584,15 +597,34 @@ func (m *Manager) touchInternal(agentID string) error {
 
 // Finish tears down the virtual worktree and prunes git records in ~20ms.
 func (m *Manager) Finish(agentID string) error {
+	return m.FinishSafe(agentID, true)
+}
+
+// FinishSafe removes an agent worktree. Unless force is set it refuses when the worktree
+// holds uncommitted changes or unpushed commits. The agent/<id> branch is deleted too
+// when nothing on it would be lost.
+func (m *Manager) FinishSafe(agentID string, force bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	wtPath := filepath.Join(m.worktreesDir, agentID)
+	unsaved := fileExists(wtPath) && hasUnsavedWork(wtPath)
+	if unsaved && !force {
+		return fmt.Errorf("worktree '%s' has uncommitted changes or unpushed commits; commit and push them (monoflow commit / monoflow push) or pass --force to discard", agentID)
+	}
+	branch := ""
+	if out, err := exec.Command("git", "-C", wtPath, "rev-parse", "--abbrev-ref", "HEAD").Output(); err == nil {
+		branch = strings.TrimSpace(string(out))
+	}
 
 	// 1. git worktree remove --force <path>
 	_, _ = m.runGit("worktree", "remove", "--force", wtPath)
 	_ = os.RemoveAll(wtPath)
 	_, _ = m.runGit("worktree", "prune")
+
+	if strings.HasPrefix(branch, "agent/") && !unsaved {
+		_, _ = m.runGit("branch", "-D", branch)
+	}
 
 	// 2. Remove from registry
 	reg, _ := m.loadRegistry()
@@ -600,6 +632,11 @@ func (m *Manager) Finish(agentID string) error {
 	_ = m.saveRegistry(reg)
 
 	return nil
+}
+
+// ValidAgentID reports whether id is usable as a directory and branch name.
+func ValidAgentID(id string) bool {
+	return regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`).MatchString(id)
 }
 
 // PruneStale cleans up worktrees that are older than maxAge or orphaned.
@@ -612,9 +649,10 @@ func (m *Manager) PruneStale(maxAge time.Duration) ([]string, error) {
 	now := time.Now().UTC()
 
 	for id, info := range reg {
-		lastSeen := info.LastHeartbeat
-		if lastSeen.IsZero() {
-			lastSeen = info.CreatedAt
+		lastSeen := lastActivity(info)
+		// Never discard work: a worktree with uncommitted changes or unpushed commits is kept.
+		if fileExists(info.Path) && hasUnsavedWork(info.Path) {
+			continue
 		}
 		if now.Sub(lastSeen) > maxAge {
 			wtPath := filepath.Join(m.worktreesDir, id)
@@ -795,4 +833,181 @@ func (m *Manager) UpdateFromRemote(agentID string, packages []string, remote, br
 
 	_ = m.touchInternal(agentID)
 	return subset.Update(wtPath, packages, remote, branch)
+}
+
+// lastActivity is the most recent sign of life: registry heartbeat, last index write
+// (any add/commit/checkout) or last commit in the worktree.
+func lastActivity(info WorktreeInfo) time.Time {
+	last := info.LastHeartbeat
+	if last.IsZero() {
+		last = info.CreatedAt
+	}
+	if out, err := exec.Command("git", "-C", info.Path, "rev-parse", "--git-path", "index").Output(); err == nil {
+		p := strings.TrimSpace(string(out))
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(info.Path, p)
+		}
+		if fi, err := os.Stat(p); err == nil && fi.ModTime().After(last) {
+			last = fi.ModTime().UTC()
+		}
+	}
+	if out, err := exec.Command("git", "-C", info.Path, "log", "-1", "--format=%ct").Output(); err == nil {
+		if sec, err := strconv.ParseInt(strings.TrimSpace(string(out)), 10, 64); err == nil {
+			if t := time.Unix(sec, 0).UTC(); t.After(last) {
+				last = t
+			}
+		}
+	}
+	return last
+}
+
+// hasUnsavedWork reports uncommitted changes or commits missing from the remote branch.
+func hasUnsavedWork(path string) bool {
+	out, err := exec.Command("git", "-C", path, "status", "--porcelain").Output()
+	if err != nil {
+		return true
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if len(line) < 4 {
+			continue
+		}
+		p := strings.TrimSpace(line[3:])
+		// MonoFlow's own provisioning (config copies, state links, binary link) is not agent work.
+		if strings.HasPrefix(p, ".agents/") || p == ".agents" || p == "bin/monoflow" || p == "bin/" || isSharedDepLink(p) {
+			continue
+		}
+		return true
+	}
+	out, err = exec.Command("git", "-C", path, "rev-list", "--count", "@{upstream}..HEAD").Output()
+	if err != nil {
+		// No upstream: unsaved if it has commits not contained in any other branch
+		// (e.g. the base branch) or remote.
+		cur, _ := exec.Command("git", "-C", path, "symbolic-ref", "-q", "HEAD").Output()
+		args := []string{"-C", path, "rev-list", "--count", "HEAD", "--not", "--remotes"}
+		if refs, err := exec.Command("git", "-C", path, "for-each-ref", "--format=%(refname)", "refs/heads").Output(); err == nil {
+			for _, r := range strings.Fields(string(refs)) {
+				if r != strings.TrimSpace(string(cur)) {
+					args = append(args, r)
+				}
+			}
+		}
+		out, err = exec.Command("git", args...).Output()
+		if err != nil {
+			return true
+		}
+	}
+	n, _ := strconv.Atoi(strings.TrimSpace(string(out)))
+	return n > 0
+}
+
+// fillLiveState refreshes branch/HEAD from git and attaches PR and CI status, so one
+// `worktree list` call shows where every agent stands.
+func (m *Manager) fillLiveState(info *WorktreeInfo) {
+	git := func(args ...string) string {
+		out, err := exec.Command("git", append([]string{"-C", info.Path}, args...)...).Output()
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(string(out))
+	}
+	if b := git("rev-parse", "--abbrev-ref", "HEAD"); b != "" {
+		info.Branch = b
+	}
+	if h := git("rev-parse", "HEAD"); h != "" {
+		info.HeadSHA = h
+	}
+	info.LastHeartbeat = lastActivity(*info)
+	base := m.defaultBaseBranch()
+	info.Ahead, _ = strconv.Atoi(git("rev-list", "--count", base+"..HEAD"))
+	if n := git("rev-list", "--count", "@{upstream}..HEAD"); n != "" {
+		info.Unpushed, _ = strconv.Atoi(n)
+	} else {
+		info.Unpushed = info.Ahead
+	}
+
+	if entries, err := os.ReadDir(filepath.Join(m.RootDir, ".agents", "prs")); err == nil {
+		var newest time.Time
+		for _, e := range entries {
+			data, err := os.ReadFile(filepath.Join(m.RootDir, ".agents", "prs", e.Name()))
+			if err != nil {
+				continue
+			}
+			var pr struct {
+				ID         string    `json:"id"`
+				HeadBranch string    `json:"head_branch"`
+				GitHubURL  string    `json:"github_url"`
+				CreatedAt  time.Time `json:"created_at"`
+			}
+			if json.Unmarshal(data, &pr) == nil && pr.HeadBranch == info.Branch && pr.CreatedAt.After(newest) {
+				newest = pr.CreatedAt
+				info.PR = pr.ID
+				if pr.GitHubURL != "" {
+					info.PR = pr.GitHubURL
+				}
+			}
+		}
+	}
+	if entries, err := os.ReadDir(filepath.Join(m.RootDir, ".agents", "events")); err == nil {
+		var newest time.Time
+		for _, e := range entries {
+			data, err := os.ReadFile(filepath.Join(m.RootDir, ".agents", "events", e.Name()))
+			if err != nil {
+				continue
+			}
+			var evt struct {
+				Type      string    `json:"type"`
+				Branch    string    `json:"branch"`
+				CommitSHA string    `json:"commit_sha"`
+				CreatedAt time.Time `json:"created_at"`
+			}
+			if json.Unmarshal(data, &evt) == nil && evt.Branch == info.Branch && strings.HasPrefix(evt.Type, "CI_") && evt.CreatedAt.After(newest) {
+				newest = evt.CreatedAt
+				info.CI = evt.Type
+				if evt.CommitSHA != info.HeadSHA {
+					info.CI += " (older commit)"
+				}
+			}
+		}
+	}
+}
+
+// sharedStateDirs are MonoFlow state directories every worktree shares with the root so
+// PRs, proofs, CI events and the package cache are visible from anywhere in the repo.
+var sharedStateDirs = []string{".agents/cache", ".agents/prs", ".agents/proofs", ".agents/events"}
+
+// ensureSharedState makes each shared state dir in wtPath a symlink to the root's,
+// migrating anything already written to a private copy.
+func (m *Manager) ensureSharedState(wtPath string) {
+	for _, d := range sharedStateDirs {
+		src := filepath.Join(m.RootDir, d)
+		dst := filepath.Join(wtPath, d)
+		_ = os.MkdirAll(src, 0755)
+		if fi, err := os.Lstat(dst); err == nil {
+			if fi.Mode()&os.ModeSymlink != 0 {
+				continue
+			}
+			if fi.IsDir() {
+				entries, _ := os.ReadDir(dst)
+				for _, e := range entries {
+					_ = os.Rename(filepath.Join(dst, e.Name()), filepath.Join(src, e.Name()))
+				}
+			}
+			_ = os.RemoveAll(dst)
+		}
+		_ = os.MkdirAll(filepath.Dir(dst), 0755)
+		_ = os.Symlink(src, dst)
+	}
+}
+
+// sharedDepLinks are dependency dirs symlinked from the root into worktrees. Typical
+// ignore rules ("node_modules/") do not match symlinks, so they are excluded explicitly.
+var sharedDepLinks = []string{"/node_modules", "/.pnpm-store", "/target", "/.venv"}
+
+func isSharedDepLink(p string) bool {
+	for _, l := range sharedDepLinks {
+		if p == strings.TrimPrefix(l, "/") {
+			return true
+		}
+	}
+	return false
 }

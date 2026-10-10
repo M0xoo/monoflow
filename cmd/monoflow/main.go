@@ -24,6 +24,7 @@ import (
 	"github.com/antigravity/monoflow/pkg/proof"
 	"github.com/antigravity/monoflow/pkg/queue"
 	"github.com/antigravity/monoflow/pkg/review"
+	"github.com/antigravity/monoflow/pkg/runtimestate"
 	"github.com/antigravity/monoflow/pkg/scenario"
 	"github.com/antigravity/monoflow/pkg/subset"
 	"github.com/antigravity/monoflow/pkg/task"
@@ -158,7 +159,7 @@ func usageText(w io.Writer) {
 	fmt.Fprintln(w, `MonoFlow — The Agent-Native Monorepo & Ultra-Fast CI Engine
 
 Usage:
-  monoflow init [dir]                 Install MonoFlow into an existing or new repo
+  monoflow init [dir] [--setup-gh-actions]  Install MonoFlow (+ economical affected-only GitHub Actions CI)
   monoflow clone <url> [dest] --packages=<p1,p2> Clone subset of monorepo packages (< 1s partial clone)
   monoflow subset [set|add|remove|update|deps|check|status|reset] Manage package subset projection & dependency health
   monoflow graph [query|impact]       Query upstream/downstream dependencies & impact
@@ -220,7 +221,8 @@ var commandDetails = map[string]string{
                                       Isolated worktree on branch agent/<agent-id>
   worktree list                       List registered worktrees
   worktree focus|update <agent-id> --packages=<...>   Change the projected packages
-  worktree sync <agent-id> [--remote=<r>] [--branch=<b>]   Rebase onto the latest base
+  worktree sync --to=<agent> --from=<agent>   AST-merge another agent's changes into a worktree
+                                      (to update your branch from main, run 'monoflow sync' inside it)
   worktree finish <agent-id> [--force] Remove the worktree and its registry entry
   worktree isolate <agent-id>         Materialize per-worktree dependencies`,
 	"pr": `  pr create --title="<t>" [--body="<b>"] [--base=<b>] [--head=<b>] [--draft] [--stack] [--no-push]
@@ -242,7 +244,9 @@ var commandDetails = map[string]string{
 	"commit": `  commit -m "<msg>"                   Verified commit of all changes in the current worktree`,
 	"cache":  `  cache status | cache clean | cache serve [--port=<n>] [--dir=<d>] [--token=<t>]`,
 	"task":   `  task check | task slice | task prove [task-id] | task changeset`,
-	"sync":   `  sync [remote] [branch] [--rebase] [--autostash]   Update the current branch from its remote`,
+	"sync": `  sync                                On an agent/feature branch: rebase onto origin/<base> (aborts cleanly on conflict)
+                                      On the base branch: fast-forward from the remote
+  sync [remote] [branch] [--rebase] [--autostash]   Explicit remote/branch`,
 	"branch": `  branch                              List branches
   branch <name> [-c|--create]         Switch to (or create) a branch`,
 }
@@ -283,8 +287,13 @@ func findRepoRoot() (string, error) {
 
 func handleInit(rootDir string) {
 	targetDir := "."
-	if len(os.Args) > 2 {
-		targetDir = os.Args[2]
+	setupGH := false
+	for _, a := range os.Args[2:] {
+		if a == "--setup-gh-actions" {
+			setupGH = true
+		} else if !strings.HasPrefix(a, "-") {
+			targetDir = a
+		}
 	}
 
 	selfBin, _ := os.Executable()
@@ -292,6 +301,13 @@ func handleInit(rootDir string) {
 	if err != nil {
 		fmt.Printf("Error initializing repo: %v\n", err)
 		os.Exit(1)
+	}
+	workflowPath := ""
+	if setupGH {
+		if workflowPath, err = initialize.WriteGitHubWorkflow(res.RepoRoot); err != nil {
+			fmt.Printf("Error writing GitHub Actions workflow: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	data, _ := json.MarshalIndent(map[string]any{
@@ -302,6 +318,7 @@ func handleInit(rootDir string) {
 		"config_path":         res.ConfigPath,
 		"rule_file":           filepath.Join(res.RepoRoot, ".agents", "rules", "agentic-monorepo.md"),
 		"skill_file":          filepath.Join(res.RepoRoot, ".agents", "skills", "monoflow", "SKILL.md"),
+		"workflow_file":       workflowPath,
 	}, "", "  ")
 
 	fmt.Println(string(data))
@@ -459,6 +476,7 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 	opts := verify.VerifyOptions{}
 	targetPkg := ""
 	verifyAll := false
+	verifyBase := ""
 
 	// Check flags
 	for _, arg := range os.Args[2:] {
@@ -482,6 +500,8 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 			opts.Mode = "lint"
 		} else if arg == "--all-checks" {
 			opts.Mode = "all"
+		} else if strings.HasPrefix(arg, "--base=") {
+			verifyBase = strings.TrimPrefix(arg, "--base=")
 		}
 	}
 
@@ -562,6 +582,9 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 		}
 	} else {
 		changedFiles := getGitChangedFiles(rootDir)
+		if verifyBase != "" {
+			changedFiles = changedFilesSince(rootDir, verifyBase)
+		}
 		res = runner.VerifyAffected(g, changedFiles, opts)
 		res.DurationMs = float64(time.Since(start).Microseconds()) / 1000.0
 	}
@@ -1005,8 +1028,8 @@ func handleWorktree(rootDir string) {
 			os.Exit(1)
 		}
 		agentID := os.Args[3]
-		if strings.HasPrefix(agentID, "-") {
-			fmt.Printf(`{"error": "invalid agent-id %q: usage: monoflow worktree create <agent-id> --packages=<p1,p2>"}`+"\n", agentID)
+		if !worktree.ValidAgentID(agentID) {
+			fmt.Printf(`{"error": "invalid agent-id %q (letters, digits, . _ -): usage: monoflow worktree create <agent-id> --packages=<p1,p2>"}`+"\n", agentID)
 			os.Exit(1)
 		}
 		isolated := false
@@ -1223,8 +1246,14 @@ func handleWorktree(rootDir string) {
 			os.Exit(1)
 		}
 		agentID := os.Args[3]
+		force := false
+		for _, a := range os.Args[4:] {
+			if a == "--force" {
+				force = true
+			}
+		}
 		start := time.Now()
-		err := mgr.Finish(agentID)
+		err := mgr.FinishSafe(agentID, force)
 		durMs := float64(time.Since(start).Microseconds()) / 1000.0
 		if err != nil {
 			fmt.Printf(`{"error": "%s"}`+"\n", err)
@@ -1660,9 +1689,9 @@ func handlePush(rootDir string) {
 
 	// 2. Perform push
 	start := time.Now()
-	pushArgs := []string{"push", remote, branch}
+	pushArgs := []string{"push", "-u", remote, branch}
 	if forceDirect && branch != "main" && branch != "master" {
-		pushArgs = []string{"push", "--force-with-lease", remote, branch}
+		pushArgs = []string{"push", "-u", "--force-with-lease", remote, branch}
 	}
 	cmdPush := exec.Command("git", pushArgs...)
 	cmdPush.Dir = rootDir
@@ -1733,13 +1762,24 @@ func handleSync(rootDir string) {
 		branch = positional[1]
 	}
 
+	current := "main"
+	if out, err := exec.Command("git", "-C", rootDir, "rev-parse", "--abbrev-ref", "HEAD").Output(); err == nil {
+		current = strings.TrimSpace(string(out))
+	}
 	if branch == "" {
-		cmdRev := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
-		cmdRev.Dir = rootDir
-		if out, err := cmdRev.CombinedOutput(); err == nil {
-			branch = strings.TrimSpace(string(out))
-		} else {
-			branch = "main"
+		// On a feature/agent branch "sync" means: bring my branch up to date with the base
+		// branch (rebase). On the base branch itself it fast-forwards from the remote.
+		base := "main"
+		if out, err := exec.Command("git", "-C", rootDir, "symbolic-ref", "--short", "refs/remotes/"+remote+"/HEAD").Output(); err == nil {
+			base = strings.TrimPrefix(strings.TrimSpace(string(out)), remote+"/")
+		} else if exec.Command("git", "-C", rootDir, "rev-parse", "--verify", "--quiet", "refs/remotes/"+remote+"/master").Run() == nil &&
+			exec.Command("git", "-C", rootDir, "rev-parse", "--verify", "--quiet", "refs/remotes/"+remote+"/main").Run() != nil {
+			base = "master"
+		}
+		branch = base
+		if current != base {
+			rebase = true
+			autostash = true
 		}
 	}
 
@@ -1769,7 +1809,18 @@ func handleSync(rootDir string) {
 	cmdMerge := exec.Command("git", mergeArgs...)
 	cmdMerge.Dir = rootDir
 	if out, err := cmdMerge.CombinedOutput(); err != nil {
-		fmt.Printf(`{"status": "sync_failed", "step": %q, "error": %q, "output": %q, "hint": "If branches have diverged, consider using --rebase or resolving local changes."}`+"\n", strategy, err.Error(), strings.TrimSpace(string(out)))
+		res := map[string]any{"status": "sync_failed", "step": strategy, "error": err.Error(), "output": verify.CompactFailure(string(out))}
+		if rebase {
+			// Never leave the worktree mid-rebase: report the conflicts and restore the branch.
+			conf, _ := exec.Command("git", "-C", rootDir, "diff", "--name-only", "--diff-filter=U").Output()
+			_ = exec.Command("git", "-C", rootDir, "rebase", "--abort").Run()
+			res["conflicting_files"] = strings.Fields(string(conf))
+			res["hint"] = fmt.Sprintf("Your branch conflicts with %s/%s. Branch left unchanged. Update the conflicting files to fit the latest %s (see 'git diff %s...FETCH_HEAD -- <file>'), commit, and run 'monoflow sync' again.", remote, branch, branch, current)
+		} else {
+			res["hint"] = "Branches have diverged; run 'monoflow sync' from your agent branch (rebases onto the base) or pass --rebase."
+		}
+		data, _ := json.MarshalIndent(res, "", "  ")
+		fmt.Println(string(data))
 		os.Exit(1)
 	}
 
@@ -1791,7 +1842,8 @@ func handleSync(rootDir string) {
 	res := map[string]any{
 		"status":        "synced",
 		"remote":        remote,
-		"branch":        branch,
+		"branch":        current,
+		"onto":          remote + "/" + branch,
 		"head_sha":      headSHA,
 		"strategy":      strategy,
 		"duration_ms":   durMs,
@@ -1990,6 +2042,17 @@ func getGitChangedFiles(rootDir string) []string {
 				files = append(files, parts[len(parts)-1])
 			}
 		}
+	}
+
+	// A sparse worktree's projected go.work is not a change.
+	if runtimestate.ProjectedGoWork(rootDir) {
+		kept := files[:0]
+		for _, f := range files {
+			if f != "go.work" {
+				kept = append(kept, f)
+			}
+		}
+		files = kept
 	}
 
 	// If working tree is clean, fallback to diff against base branch or HEAD~1 to capture committed branch edits
@@ -2482,4 +2545,31 @@ func hookStateDir() string {
 		return ""
 	}
 	return filepath.Join(root, ".agents", "hooks")
+}
+
+// changedFilesSince lists files changed since the merge-base with base (committed and
+// uncommitted). An unknown or all-zero base (first push of a branch) yields every file
+// via the global marker so nothing is skipped.
+func changedFilesSince(rootDir, base string) []string {
+	seen := map[string]bool{}
+	var files []string
+	add := func(out []byte) {
+		for _, f := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			if f = strings.TrimSpace(f); f != "" && !seen[f] {
+				seen[f] = true
+				files = append(files, f)
+			}
+		}
+	}
+	mb, err := exec.Command("git", "-C", rootDir, "merge-base", base, "HEAD").Output()
+	if err != nil || strings.Trim(base, "0") == "" {
+		return []string{"go.work"} // forces a full verification (global file)
+	}
+	if out, err := exec.Command("git", "-C", rootDir, "diff", "--name-only", strings.TrimSpace(string(mb))).Output(); err == nil {
+		add(out)
+	}
+	if out, err := exec.Command("git", "-C", rootDir, "ls-files", "--others", "--exclude-standard").Output(); err == nil {
+		add(out)
+	}
+	return files
 }

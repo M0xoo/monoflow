@@ -2,7 +2,8 @@
 # Provision a realistic MonoFlow-governed monorepo for multi-agent simulation.
 # Usage: e2e/sim/setup.sh <workdir> <monoflow-binary>
 # With SIM_GH_REPO=<owner>/<name> the remote is a real (private) GitHub repo with a
-# GitHub Actions workflow running ci/run.sh; it is created if missing and reset otherwise.
+# MonoFlow-generated (affected-only) GitHub Actions workflow; it is created if missing and
+# reset otherwise. ci/run.sh is the full-CI ground truth the harness runs locally.
 set -euo pipefail
 WORK=${1:?workdir}; BIN=${2:?monoflow binary}
 rm -rf "$WORK"; mkdir -p "$WORK"
@@ -185,27 +186,12 @@ for m in libs/money services/billing services/ledger; do (cd "$m" && go vet ./..
 for p in packages/ui packages/api-client apps/web; do (cd "$p" && node test.js); done
 C
 chmod +x ci/run.sh
-mkdir -p .github/workflows
-cat > .github/workflows/ci.yml <<'W'
-name: ci
-on:
-  push:
-  pull_request:
-jobs:
-  full:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with: { go-version: "1.22" }
-      - uses: actions/setup-node@v4
-        with: { node-version: "20" }
-      - run: bash ci/run.sh
-W
 printf '/bin/monoflow\n/.agents/bin/monoflow\n' > .gitignore
 
 git add -A && git commit -qm "chore: initial acme monorepo"
-"$BIN" init . >/dev/null
+"$BIN" init . --setup-gh-actions >/dev/null
+# CI installs this binary (built from the MonoFlow under test) instead of building from source.
+[ -n "${SIM_LINUX_BIN:-}" ] && install -m 0755 "$SIM_LINUX_BIN" .agents/bin/monoflow-linux-amd64
 tmp=$(mktemp) && jq '. + {ci_cmd: "bash ci/run.sh"}' .agents/monoflow.config.json > "$tmp" && mv "$tmp" .agents/monoflow.config.json
 git add -A && MONOFLOW_INTERNAL=1 git commit -qm "chore: install monoflow" --no-verify
 if [ -n "${SIM_GH_REPO:-}" ]; then

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -191,7 +192,18 @@ func (g *DependencyGraph) GetPackage(name string) (*PackageNode, bool) {
 			return p, true
 		}
 	}
-	return nil, false
+	// Last resort: a unique short name ("money" for libs/money, "ui" for @acme/ui).
+	var match *PackageNode
+	for _, p := range g.packages {
+		short := p.Name[strings.LastIndexAny(p.Name, "/")+1:]
+		if short == clean || filepath.Base(p.Path) == clean {
+			if match != nil && match != p {
+				return nil, false
+			}
+			match = p
+		}
+	}
+	return match, match != nil
 }
 
 // GetAllPackages returns a sorted list of all packages.
@@ -322,6 +334,12 @@ func (g *DependencyGraph) ComputeAffected(changedFiles []string) AffectedResult 
 		pkg := g.MapFileToPackage(f)
 		if pkg != nil {
 			directMap[pkg.Name] = true
+		} else if IsGlobalFile(f) {
+			// Workspace-level config owned by no package (go.work, lockfiles, CI) can
+			// break every package; remote CI re-runs everything, so must we.
+			for name := range g.packages {
+				directMap[name] = true
+			}
 		}
 	}
 
@@ -396,4 +414,12 @@ func toSortedList(m map[string]bool) []string {
 	}
 	sort.Strings(res)
 	return res
+}
+
+var globalFilePattern = regexp.MustCompile(`^(go\.work(\.sum)?|package\.json|package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|yarn\.lock|bun\.lockb?|tsconfig[^/]*\.json|turbo\.json|nx\.json|Cargo\.(toml|lock)|Makefile|\.tool-versions|\.nvmrc|\.go-version|ci/.+|\.github/workflows/.+|\.agents/monoflow\.config\.json)$`)
+
+// IsGlobalFile reports whether a repo-relative path is workspace-wide configuration
+// whose change can affect every package.
+func IsGlobalFile(path string) bool {
+	return globalFilePattern.MatchString(strings.TrimPrefix(filepath.ToSlash(path), "./"))
 }

@@ -12,6 +12,7 @@ import (
 
 	"github.com/antigravity/monoflow/pkg/checkpoint"
 	"github.com/antigravity/monoflow/pkg/graph"
+	"github.com/antigravity/monoflow/pkg/runtimestate"
 )
 
 // DepStrategy defines how upstream monorepo dependencies are handled.
@@ -1178,9 +1179,14 @@ func SyncGoWork(repoDir string) error {
 		restoreGoWork(repoDir)
 		return nil
 	}
-	if err := os.WriteFile(filepath.Join(repoDir, "go.work"), []byte(strings.Join(out, "\n")), 0644); err != nil {
+	projected := []byte(strings.Join(out, "\n"))
+	if err := os.WriteFile(filepath.Join(repoDir, "go.work"), projected, 0644); err != nil {
 		return err
 	}
+	// skip-worktree does not survive later sparse-checkout/index operations, so commit,
+	// checkpoint and change detection also recognise the projection by content hash.
+	_ = os.MkdirAll(filepath.Join(repoDir, ".agents"), 0755)
+	_ = os.WriteFile(filepath.Join(repoDir, runtimestate.GoWorkMarker), []byte(runtimestate.HashBytes(projected)), 0644)
 	cmd := exec.Command("git", "update-index", "--skip-worktree", "go.work")
 	cmd.Dir = repoDir
 	return cmd.Run()
@@ -1188,6 +1194,7 @@ func SyncGoWork(repoDir string) error {
 
 // restoreGoWork undoes SyncGoWork, bringing back the committed go.work.
 func restoreGoWork(repoDir string) {
+	_ = os.Remove(filepath.Join(repoDir, runtimestate.GoWorkMarker))
 	cmd := exec.Command("git", "update-index", "--no-skip-worktree", "go.work")
 	cmd.Dir = repoDir
 	if cmd.Run() != nil {
