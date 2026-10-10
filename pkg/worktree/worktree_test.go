@@ -24,7 +24,7 @@ func setupTestRepo(t *testing.T) string {
 		}
 	}
 
-	run("init")
+	run("init", "-b", "main")
 	run("config", "user.name", "Test Agent")
 	run("config", "user.email", "agent@monoflow.dev")
 
@@ -260,7 +260,7 @@ func TestWorktreeSparsePackageSubset(t *testing.T) {
 		}
 	}
 
-	run("init")
+	run("init", "-b", "main")
 	run("config", "user.name", "Test Agent")
 	run("config", "user.email", "agent@monoflow.dev")
 
