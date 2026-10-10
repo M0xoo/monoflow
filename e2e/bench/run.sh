@@ -2,6 +2,7 @@
 # A/B benchmark: the same tasks done by concurrent opencode agents with MonoFlow (A) and
 # with plain git + the repo's own tools (B). Ground truth = ci/run.sh on every pushed branch.
 # Usage: e2e/bench/run.sh <workdir> <monoflow-binary> <out> [model] [runs]
+# AGENT_TIMEOUT (seconds, default 2400) caps each agent: a rate-limited model makes opencode retry forever.
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); SIM="$HERE/../sim"
 WORK=${1:?}; BIN=${2:?}; OUT=${3:?}; MODEL=${4:-opencode/big-pickle}; RUNS=${5:-2}
@@ -40,7 +41,7 @@ run_condition() { # cond run
     else
       prompt="$(cat "$SIM/tasks/_preamble.md" "$HERE/tasks/$a.md")"
     fi
-    ( s=$(date +%s); opencode run --dir "$adir" -m "$MODEL" --auto --format json "$prompt" > "$out/$a.jsonl" 2>/dev/null
+    ( s=$(date +%s); perl -e 'alarm shift; exec @ARGV' "${AGENT_TIMEOUT:-2400}" opencode run --dir "$adir" -m "$MODEL" --auto --format json "$prompt" > "$out/$a.jsonl" 2>/dev/null
       echo $(( $(date +%s) - s )) > "$out/$a.secs" ) &
     sleep 2
   done
