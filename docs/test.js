@@ -7,68 +7,52 @@ const { execSync } = require('child_process');
 
 console.log('Running @monoflow/docs verification suite...');
 
-// 1. Verify app.js syntax
+function fail(msg) {
+  console.error('✗ ' + msg);
+  process.exit(1);
+}
+
+// 1. app.js syntax
 try {
   execSync('node -c ' + path.join(__dirname, 'app.js'), { stdio: 'pipe' });
   console.log('✓ app.js syntax valid');
 } catch (err) {
-  console.error('✗ app.js syntax error:', err.message);
-  process.exit(1);
+  fail('app.js syntax error: ' + err.message);
 }
 
-// 2. Verify index.html existence and integrity
+// 2. index.html structure
 const htmlPath = path.join(__dirname, 'index.html');
-if (!fs.existsSync(htmlPath)) {
-  console.error('✗ index.html missing');
-  process.exit(1);
-}
-const htmlContent = fs.readFileSync(htmlPath, 'utf8');
+if (!fs.existsSync(htmlPath)) fail('index.html missing');
+const html = fs.readFileSync(htmlPath, 'utf8');
 
-if (htmlContent.includes('antigravity/monoflow')) {
-  console.error('✗ index.html contains legacy antigravity repository URL');
-  process.exit(1);
-}
+if (html.includes('antigravity/monoflow')) fail('index.html contains legacy antigravity repository URL');
+if (!html.includes('https://github.com/M0xoo/monoflow')) fail('index.html missing M0xoo/monoflow repository URL');
+if (html.includes('get.monoflow.dev')) fail('index.html references unpublished get.monoflow.dev installer');
 
-if (!htmlContent.includes('https://github.com/M0xoo/monoflow')) {
-  console.error('✗ index.html missing M0xoo/monoflow repository URL');
-  process.exit(1);
+for (const id of ['provides', 'loop', 'install', 'commands']) {
+  if (!html.includes(`id="${id}"`)) fail(`index.html missing #${id} section`);
 }
 
-if (!htmlContent.includes('workbench-viewport')) {
-  console.error('✗ index.html missing workbench viewport');
-  process.exit(1);
+const features = (html.match(/class="feature"/g) || []).length;
+if (features !== 6) fail(`expected 6 capability cards, found ${features}`);
+
+// Every command family the CLI exposes should appear in the reference table.
+const commands = ['init', 'clone', 'graph', 'subset', 'verify', 'checkpoint', 'cache', 'quarantine',
+  'worktree', 'task', 'guard', 'review', 'commit', 'branch', 'sync', 'push', 'events', 'pr',
+  'queue', 'ci check', 'outer', 'deliver', 'app test', 'version', 'scenario'];
+const table = html.slice(html.indexOf('id="cmd-table"'));
+for (const c of commands) {
+  if (!table.includes(`<code>${c}`)) fail(`command reference missing "${c}"`);
 }
+console.log('✓ index.html structure, sections and command reference verified');
 
-if (!htmlContent.includes('demo-video') || !htmlContent.includes('video-terminal-feed')) {
-  console.error('✗ index.html missing 90s programmatic video player component');
-  process.exit(1);
-}
-
-// Verify updated subsystems (07, 08, 09) and new workbench tabs
-if (!htmlContent.includes('07 / PACKAGE CACHE') || !htmlContent.includes('08 / VERSIONING') || !htmlContent.includes('09 / ASYNC EVENT BUS')) {
-  console.error('✗ index.html missing updated subsystems (07, 08, 09)');
-  process.exit(1);
-}
-
-if (!htmlContent.includes('data-target="cache"') || !htmlContent.includes('data-target="version"') || !htmlContent.includes('data-target="scenario"')) {
-  console.error('✗ index.html missing new workbench tabs (cache, version, scenario)');
-  process.exit(1);
-}
-
-console.log('✓ index.html structure, integrity, subsystems, and video player verified');
-
-// 3. Verify styles.css
+// 3. styles.css
 const cssPath = path.join(__dirname, 'styles.css');
-if (!fs.existsSync(cssPath)) {
-  console.error('✗ styles.css missing');
-  process.exit(1);
-}
-const cssContent = fs.readFileSync(cssPath, 'utf8');
-if (cssContent.length < 1000) {
-  console.error('✗ styles.css is truncated');
-  process.exit(1);
-}
-console.log('✓ styles.css verified (' + cssContent.length + ' bytes)');
+if (!fs.existsSync(cssPath)) fail('styles.css missing');
+const css = fs.readFileSync(cssPath, 'utf8');
+if (css.length < 1000) fail('styles.css is truncated');
+if (!css.includes('prefers-color-scheme: dark')) fail('styles.css missing dark mode');
+console.log('✓ styles.css verified (' + css.length + ' bytes)');
 
 console.log('✓ All @monoflow/docs tests passed!');
 process.exit(0);

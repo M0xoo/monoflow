@@ -1,2037 +1,323 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>MonoFlow — Sub-Second Monorepo Engine for Autonomous Coding Agents</title>
-  <meta name="description" content="A Go-native systems engine for multi-agent monorepo collaboration: sub-2s inner loops, 15ms shadow checkpoints, CoW worktrees with AST synthesis, and two-tier CI gates.">
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.85em%22 font-size=%2280%22>⚡</text></svg>">
-  <link rel="stylesheet" href="styles.css?v=20261010-v5">
-  <style>
-/* ==========================================================================
-   MonoFlow — Systems Engineering Design System (2026)
-   Philosophy: Ultra-dense, dark hardware aesthetic, razor-sharp hairline borders,
-   high-contrast monospace typography, and interactive systems tooling.
-   ========================================================================== */
-
-:root {
-  --bg-base: #060709;
-  --bg-surface: #0c0e14;
-  --bg-elevated: #121622;
-  --bg-subtle: #171d2b;
-  --bg-code: #040507;
-
-  --border-hairline: #1c2230;
-  --border-muted: #273042;
-  --border-active: #f59e0b;
-  --border-emerald: #10b981;
-
-  --accent: #f59e0b;
-  --accent-light: #fbbf24;
-  --accent-glow: rgba(245, 158, 11, 0.12);
-  --success: #10b981;
-  --success-glow: rgba(16, 185, 129, 0.12);
-  --info: #06b6d4;
-  --danger: #ef4444;
-
-  --text-primary: #f8fafc;
-  --text-secondary: #94a3b8;
-  --text-muted: #64748b;
-  --text-dim: #475569;
-
-  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", "Segoe UI", Roboto, sans-serif;
-  --font-mono: "JetBrains Mono", "SF Mono", "Fira Code", Menlo, Consolas, monospace;
-
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 10px;
-  --container-max: 1240px;
-}
-
-[data-theme="light"] {
-  --bg-base: #f8fafc;
-  --bg-surface: #ffffff;
-  --bg-elevated: #f1f5f9;
-  --bg-subtle: #e2e8f0;
-  --bg-code: #0f172a;
-
-  --border-hairline: #e2e8f0;
-  --border-muted: #cbd5e1;
-  --border-active: #d97706;
-
-  --accent: #d97706;
-  --accent-light: #f59e0b;
-  --accent-glow: rgba(217, 119, 6, 0.12);
-  --success: #059669;
-
-  --text-primary: #0f172a;
-  --text-secondary: #475569;
-  --text-muted: #64748b;
-  --text-dim: #94a3b8;
-}
-
-/* Reset & Base */
-*, *::before, *::after {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
-}
-
-html {
-  font-size: 15px;
-  scroll-behavior: smooth;
-  background-color: var(--bg-base);
-  color: var(--text-primary);
-  font-family: var(--font-sans);
-  line-height: 1.6;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-}
-
-body {
-  min-height: 100vh;
-  background-color: var(--bg-base);
-  background-image: 
-    radial-gradient(circle at 50% 0%, rgba(245, 158, 11, 0.04) 0%, transparent 60%),
-    linear-gradient(to right, rgba(255, 255, 255, 0.02) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
-  background-size: 100% 100%, 32px 32px, 32px 32px;
-  background-position: top center, 0 0, 0 0;
-  color: var(--text-primary);
-  overflow-x: hidden;
-}
-
-a {
-  color: inherit;
-  text-decoration: none;
-}
-
-button {
-  font-family: inherit;
-  cursor: pointer;
-}
-
-/* Container */
-.container {
-  max-width: var(--container-max);
-  margin: 0 auto;
-  padding: 0 1.5rem;
-}
-
-/* ==========================================================================
-   Header & Sticky Nav
-   ========================================================================== */
-.header {
-  position: sticky;
-  top: 0;
-  z-index: 100;
-  background: rgba(6, 7, 9, 0.85);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border-bottom: 1px solid var(--border-hairline);
-  height: 60px;
-}
-
-.header-inner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  height: 100%;
-}
-
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 0.65rem;
-  font-weight: 700;
-  font-size: 1.15rem;
-  letter-spacing: -0.02em;
-  color: var(--text-primary);
-}
-
-.brand-glyph {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-muted);
-  border-radius: var(--radius-sm);
-  color: var(--accent);
-  font-size: 0.95rem;
-}
-
-.brand-badge {
-  font-family: var(--font-mono);
-  font-size: 0.68rem;
-  font-weight: 600;
-  background: var(--bg-subtle);
-  border: 1px solid var(--border-hairline);
-  color: var(--accent);
-  padding: 2px 7px;
-  border-radius: var(--radius-sm);
-  letter-spacing: 0.02em;
-}
-
-.header-links {
-  display: flex;
-  align-items: center;
-  gap: 1.5rem;
-}
-
-.header-link {
-  font-size: 0.85rem;
-  color: var(--text-secondary);
-  transition: color 0.15s ease;
-}
-
-.header-link:hover {
-  color: var(--text-primary);
-}
-
-.header-actions {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-}
-
-.search-trigger {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  background: var(--bg-surface);
-  border: 1px solid var(--border-hairline);
-  color: var(--text-muted);
-  font-size: 0.8rem;
-  padding: 0.35rem 0.75rem;
-  border-radius: var(--radius-sm);
-  transition: all 0.15s ease;
-}
-
-.search-trigger:hover {
-  border-color: var(--border-muted);
-  color: var(--text-secondary);
-}
-
-.search-trigger kbd {
-  font-family: var(--font-mono);
-  font-size: 0.7rem;
-  background: var(--bg-elevated);
-  padding: 1px 4px;
-  border-radius: 3px;
-  border: 1px solid var(--border-hairline);
-}
-
-.github-btn {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-hairline);
-  padding: 0.35rem 0.8rem;
-  border-radius: var(--radius-sm);
-  font-size: 0.82rem;
-  font-weight: 500;
-  color: var(--text-primary);
-  transition: all 0.15s ease;
-}
-
-.github-btn:hover {
-  border-color: var(--border-muted);
-  background: var(--bg-subtle);
-}
-
-.theme-btn {
-  background: transparent;
-  border: 1px solid var(--border-hairline);
-  color: var(--text-secondary);
-  width: 32px;
-  height: 32px;
-  border-radius: var(--radius-sm);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.15s ease;
-}
-
-.theme-btn:hover {
-  border-color: var(--border-muted);
-  color: var(--text-primary);
-}
-
-/* ==========================================================================
-   Hero Section
-   ========================================================================== */
-.hero {
-  padding: 4.5rem 0 3rem;
-  text-align: center;
-}
-
-.hero-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-  background: var(--bg-surface);
-  border: 1px solid var(--border-hairline);
-  padding: 0.35rem 0.9rem;
-  border-radius: 100px;
-  font-family: var(--font-mono);
-  font-size: 0.78rem;
-  color: var(--text-secondary);
-  margin-bottom: 1.8rem;
-}
-
-.hero-pill .dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--success);
-  box-shadow: 0 0 8px var(--success);
-}
-
-.hero-title {
-  font-size: clamp(2.3rem, 5.5vw, 4.2rem);
-  font-weight: 800;
-  line-height: 1.08;
-  letter-spacing: -0.04em;
-  color: var(--text-primary);
-  max-width: 980px;
-  margin: 0 auto 1.5rem;
-}
-
-.hero-title .highlight {
-  color: var(--accent);
-}
-
-.hero-subtitle {
-  font-size: clamp(1rem, 1.8vw, 1.25rem);
-  color: var(--text-secondary);
-  max-width: 760px;
-  margin: 0 auto 2.5rem;
-  line-height: 1.55;
-}
-
-/* Install Bar */
-.install-bar {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.85rem;
-  background: var(--bg-surface);
-  border: 1px solid var(--border-hairline);
-  padding: 0.6rem 1.2rem;
-  border-radius: var(--radius-md);
-  font-family: var(--font-mono);
-  font-size: 0.92rem;
-  color: var(--text-primary);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-  margin-bottom: 2rem;
-  max-width: 100%;
-}
-
-.install-prompt {
-  color: var(--accent);
-  font-weight: 700;
-  user-select: none;
-}
-
-.install-cmd {
-  user-select: all;
-  overflow-x: auto;
-  white-space: nowrap;
-}
-
-.btn-copy {
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-hairline);
-  color: var(--text-secondary);
-  font-family: var(--font-mono);
-  font-size: 0.72rem;
-  padding: 0.35rem 0.65rem;
-  border-radius: var(--radius-sm);
-  transition: all 0.12s ease;
-}
-
-.btn-copy:hover {
-  background: var(--bg-subtle);
-  color: var(--text-primary);
-  border-color: var(--border-muted);
-}
-
-.btn-copy.copied {
-  background: var(--success);
-  color: #ffffff;
-  border-color: var(--success);
-}
-
-.hero-cta {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 1rem;
-}
-
-.btn-primary {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-  background: var(--accent);
-  color: #000000;
-  font-weight: 600;
-  font-size: 0.9rem;
-  padding: 0.65rem 1.4rem;
-  border-radius: var(--radius-md);
-  transition: all 0.15s ease;
-}
-
-.btn-primary:hover {
-  background: var(--accent-light);
-  transform: translateY(-1px);
-}
-
-.btn-secondary {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-hairline);
-  color: var(--text-primary);
-  font-weight: 500;
-  font-size: 0.9rem;
-  padding: 0.65rem 1.4rem;
-  border-radius: var(--radius-md);
-  transition: all 0.15s ease;
-}
-
-.btn-secondary:hover {
-  border-color: var(--border-muted);
-  background: var(--bg-subtle);
-}
-
-/* ==========================================================================
-   Precision Telemetry Gauges (The Metrics Wall)
-   ========================================================================== */
-.telemetry-row {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 1rem;
-  margin: 3.5rem 0 4rem;
-}
-
-.telemetry-card {
-  background: var(--bg-surface);
-  border: 1px solid var(--border-hairline);
-  border-radius: var(--radius-md);
-  padding: 1.25rem 1.4rem;
-  position: relative;
-  transition: border-color 0.2s ease, transform 0.2s ease;
-}
-
-.telemetry-card:hover {
-  border-color: var(--border-muted);
-  transform: translateY(-2px);
-}
-
-.telemetry-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 0.4rem;
-}
-
-.telemetry-tag {
-  font-family: var(--font-mono);
-  font-size: 0.68rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--text-muted);
-}
-
-.telemetry-val {
-  font-family: var(--font-mono);
-  font-size: 1.85rem;
-  font-weight: 800;
-  color: var(--text-primary);
-  letter-spacing: -0.03em;
-  margin-bottom: 0.2rem;
-  font-variant-numeric: tabular-nums;
-}
-
-.telemetry-val.accent { color: var(--accent); }
-.telemetry-val.emerald { color: var(--success); }
-.telemetry-val.cyan { color: var(--info); }
-
-.telemetry-desc {
-  font-size: 0.82rem;
-  color: var(--text-secondary);
-  line-height: 1.4;
-}
-
-/* ==========================================================================
-   Live Interactive Engine Workbench (Showcase Console)
-   ========================================================================== */
-.workbench-section {
-  margin: 4rem 0 6rem;
-}
-
-.section-label {
-  font-family: var(--font-mono);
-  font-size: 0.72rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--accent);
-  margin-bottom: 0.5rem;
-}
-
-.section-heading {
-  font-size: 2rem;
-  font-weight: 800;
-  letter-spacing: -0.03em;
-  color: var(--text-primary);
-  margin-bottom: 0.75rem;
-}
-
-.section-subtext {
-  font-size: 1.05rem;
-  color: var(--text-secondary);
-  max-width: 720px;
-  margin-bottom: 2rem;
-}
-
-.workbench-card {
-  background: var(--bg-surface);
-  border: 1px solid var(--border-hairline);
-  border-radius: var(--radius-lg);
-  overflow: hidden;
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);
-}
-
-.workbench-nav {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0.75rem 1.25rem;
-  background: var(--bg-elevated);
-  border-bottom: 1px solid var(--border-hairline);
-  flex-wrap: wrap;
-  gap: 0.75rem;
-}
-
-.workbench-tabs {
-  display: flex;
-  gap: 0.35rem;
-}
-
-.wb-tab {
-  background: transparent;
-  border: 1px solid transparent;
-  color: var(--text-secondary);
-  font-family: var(--font-mono);
-  font-size: 0.78rem;
-  padding: 0.4rem 0.85rem;
-  border-radius: var(--radius-sm);
-  transition: all 0.12s ease;
-}
-
-.wb-tab:hover {
-  color: var(--text-primary);
-  background: var(--bg-subtle);
-}
-
-.wb-tab.active {
-  background: var(--bg-surface);
-  color: var(--accent);
-  border-color: var(--border-hairline);
-  font-weight: 600;
-}
-
-.workbench-meta {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-  font-family: var(--font-mono);
-  font-size: 0.72rem;
-  color: var(--text-muted);
-}
-
-.status-indicator {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  color: var(--success);
-}
-
-.status-indicator::before {
-  content: "";
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--success);
-}
-
-.workbench-viewport {
-  padding: 1.5rem;
-  background: var(--bg-code);
-  font-family: var(--font-mono);
-  font-size: 0.85rem;
-  line-height: 1.65;
-  color: #e2e8f0;
-  min-height: 380px;
-  overflow-x: auto;
-}
-
-.wb-panel {
-  display: none;
-}
-
-.wb-panel.active {
-  display: block;
-}
-
-/* Syntax Highlighting Tokens in Workbench */
-.c-cyan { color: #38bdf8; }
-.c-amber { color: #f59e0b; }
-.c-emerald { color: #34d399; }
-.c-rose { color: #fb7185; }
-.c-purple { color: #c084fc; }
-.c-muted { color: #64748b; }
-.c-bold { font-weight: 700; }
-
-/* Interactive Terminal Tab Controls */
-.cli-preset-bar {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  margin-bottom: 1rem;
-  padding-bottom: 0.75rem;
-  border-bottom: 1px solid var(--border-hairline);
-  flex-wrap: wrap;
-}
-
-.cli-label {
-  font-size: 0.72rem;
-  color: var(--text-muted);
-  text-transform: uppercase;
-}
-
-.cli-btn {
-  background: var(--bg-surface);
-  border: 1px solid var(--border-hairline);
-  color: var(--text-secondary);
-  font-family: var(--font-mono);
-  font-size: 0.72rem;
-  padding: 0.25rem 0.6rem;
-  border-radius: var(--radius-sm);
-  transition: all 0.12s ease;
-}
-
-.cli-btn:hover {
-  background: var(--bg-subtle);
-  color: var(--accent);
-  border-color: var(--border-muted);
-}
-
-/* ==========================================================================
-   The Speed Wall (Direct Systems Benchmarks)
-   ========================================================================== */
-.benchmark-section {
-  margin: 5rem 0;
-}
-
-.benchmark-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 1.5rem;
-}
-
-.benchmark-box {
-  background: var(--bg-surface);
-  border: 1px solid var(--border-hairline);
-  border-radius: var(--radius-md);
-  padding: 1.5rem;
-}
-
-.benchmark-box-title {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 1.25rem;
-}
-
-.benchmark-box-title h4 {
-  font-size: 1rem;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.benchmark-box-title span {
-  font-family: var(--font-mono);
-  font-size: 0.72rem;
-  color: var(--text-muted);
-}
-
-.bar-row {
-  margin-bottom: 1rem;
-}
-
-.bar-meta {
-  display: flex;
-  justify-content: space-between;
-  font-family: var(--font-mono);
-  font-size: 0.76rem;
-  margin-bottom: 0.35rem;
-}
-
-.bar-meta .tool-name {
-  color: var(--text-secondary);
-}
-
-.bar-meta .tool-timing {
-  font-weight: 700;
-}
-
-.bar-track {
-  height: 8px;
-  background: var(--bg-elevated);
-  border-radius: 4px;
-  overflow: hidden;
-}
-
-.bar-fill {
-  height: 100%;
-  border-radius: 4px;
-  transition: width 0.6s cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-.bar-fill.monoflow {
-  background: var(--accent);
-}
-
-.bar-fill.legacy {
-  background: var(--border-muted);
-}
-
-/* ==========================================================================
-   Subsystems Architectural Deep Dives
-   ========================================================================== */
-.architecture-section {
-  margin: 5rem 0;
-}
-
-.subsystem-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 1.5rem;
-  margin-top: 2rem;
-}
-
-.subsystem-card {
-  background: var(--bg-surface);
-  border: 1px solid var(--border-hairline);
-  border-radius: var(--radius-md);
-  padding: 1.5rem;
-  transition: all 0.2s ease;
-  display: flex;
-  flex-direction: column;
-}
-
-.subsystem-card:hover {
-  border-color: var(--border-muted);
-  transform: translateY(-2px);
-}
-
-.subsystem-num {
-  font-family: var(--font-mono);
-  font-size: 0.72rem;
-  font-weight: 700;
-  color: var(--accent);
-  margin-bottom: 0.75rem;
-  letter-spacing: 0.05em;
-}
-
-.subsystem-title {
-  font-size: 1.15rem;
-  font-weight: 700;
-  color: var(--text-primary);
-  margin-bottom: 0.65rem;
-  letter-spacing: -0.02em;
-}
-
-.subsystem-body {
-  font-size: 0.88rem;
-  color: var(--text-secondary);
-  line-height: 1.55;
-  margin-bottom: 1.25rem;
-  flex-grow: 1;
-}
-
-.subsystem-chip-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-  margin-top: auto;
-}
-
-.subsystem-chip {
-  font-family: var(--font-mono);
-  font-size: 0.68rem;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-hairline);
-  padding: 2px 6px;
-  border-radius: 3px;
-  color: var(--text-muted);
-}
-
-/* ==========================================================================
-   CLI Command Reference & Tables
-   ========================================================================== */
-.cli-table-card {
-  background: var(--bg-surface);
-  border: 1px solid var(--border-hairline);
-  border-radius: var(--radius-md);
-  overflow: hidden;
-  margin: 2rem 0;
-}
-
-.cli-table {
-  width: 100%;
-  border-collapse: collapse;
-  text-align: left;
-}
-
-.cli-table th {
-  background: var(--bg-elevated);
-  padding: 0.85rem 1.25rem;
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  color: var(--text-muted);
-  letter-spacing: 0.05em;
-  border-bottom: 1px solid var(--border-hairline);
-}
-
-.cli-table td {
-  padding: 0.85rem 1.25rem;
-  font-size: 0.86rem;
-  border-bottom: 1px solid var(--border-hairline);
-  color: var(--text-secondary);
-}
-
-.cli-table tr:last-child td {
-  border-bottom: none;
-}
-
-.cli-table code {
-  font-family: var(--font-mono);
-  font-size: 0.82rem;
-  color: var(--accent);
-  background: var(--bg-elevated);
-  padding: 2px 6px;
-  border-radius: 3px;
-}
-
-/* ==========================================================================
-   ROI Calculator Section
-   ========================================================================== */
-.calculator-card {
-  background: var(--bg-surface);
-  border: 1px solid var(--border-hairline);
-  border-radius: var(--radius-lg);
-  padding: 2rem;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 2.5rem;
-  align-items: center;
-  margin: 2.5rem 0;
-}
-
-.calc-control {
-  margin-bottom: 1.5rem;
-}
-
-.calc-label-row {
-  display: flex;
-  justify-content: space-between;
-  margin-bottom: 0.5rem;
-  font-size: 0.88rem;
-  color: var(--text-secondary);
-}
-
-.calc-val {
-  font-family: var(--font-mono);
-  font-weight: 700;
-  color: var(--accent);
-}
-
-input[type="range"] {
-  width: 100%;
-  height: 6px;
-  background: var(--bg-elevated);
-  border-radius: 3px;
-  outline: none;
-  -webkit-appearance: none;
-}
-
-input[type="range"]::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: var(--accent);
-  cursor: pointer;
-  border: 2px solid var(--bg-surface);
-}
-
-.calc-results {
-  background: var(--bg-code);
-  border: 1px solid var(--border-hairline);
-  border-radius: var(--radius-md);
-  padding: 1.75rem;
-}
-
-.calc-stat-label {
-  font-family: var(--font-mono);
-  font-size: 0.72rem;
-  text-transform: uppercase;
-  color: var(--text-muted);
-  margin-bottom: 0.35rem;
-}
-
-.calc-stat-number {
-  font-family: var(--font-mono);
-  font-size: 2.2rem;
-  font-weight: 800;
-  color: var(--success);
-  margin-bottom: 1rem;
-}
-
-/* ==========================================================================
-   Programmatic 90-Second Systems Video Simulator
-   ========================================================================== */
-.video-section {
-  margin: 5rem 0 6rem;
-}
-
-.video-player-card {
-  background: var(--bg-surface);
-  border: 1px solid var(--border-hairline);
-  border-radius: var(--radius-lg);
-  overflow: hidden;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
-  position: relative;
-}
-
-.video-player-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0.85rem 1.25rem;
-  background: var(--bg-elevated);
-  border-bottom: 1px solid var(--border-hairline);
-}
-
-.video-badge-group {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.video-rec-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  background: rgba(239, 68, 68, 0.15);
-  border: 1px solid rgba(239, 68, 68, 0.4);
-  color: #ef4444;
-  font-family: var(--font-mono);
-  font-size: 0.68rem;
-  font-weight: 700;
-  padding: 2px 8px;
-  border-radius: 3px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-.video-rec-badge .rec-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #ef4444;
-  animation: pulse-rec 1.2s infinite;
-}
-
-@keyframes pulse-rec {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.3; transform: scale(0.85); }
-}
-
-.video-screen {
-  display: grid;
-  grid-template-columns: 1.4fr 1fr;
-  min-height: 480px;
-  background: #020305;
-  border-bottom: 1px solid var(--border-hairline);
-}
-
-.video-feed {
-  padding: 1.5rem;
-  font-family: var(--font-mono);
-  font-size: 0.82rem;
-  line-height: 1.6;
-  color: #e2e8f0;
-  overflow-y: auto;
-  border-right: 1px solid var(--border-hairline);
-  background: #030407;
-  max-height: 480px;
-}
-
-.video-hud-feed {
-  padding: 1.5rem;
-  background: #07090f;
-  display: flex;
-  flex-direction: column;
-  gap: 1.25rem;
-  overflow-y: auto;
-  max-height: 480px;
-}
-
-.hud-panel {
-  background: var(--bg-surface);
-  border: 1px solid var(--border-hairline);
-  border-radius: var(--radius-sm);
-  padding: 1rem;
-}
-
-.hud-panel-title {
-  font-family: var(--font-mono);
-  font-size: 0.68rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  color: var(--text-muted);
-  margin-bottom: 0.75rem;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.hud-swarm-list {
-  display: flex;
-  flex-direction: column;
-  gap: 0.6rem;
-}
-
-.hud-swarm-agent {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-family: var(--font-mono);
-  font-size: 0.76rem;
-  padding: 0.45rem 0.65rem;
-  background: var(--bg-elevated);
-  border-radius: 3px;
-  border-left: 3px solid var(--border-muted);
-}
-
-.hud-swarm-agent.active-1 { border-left-color: var(--accent); }
-.hud-swarm-agent.active-2 { border-left-color: var(--info); }
-.hud-swarm-agent.active-orch { border-left-color: var(--success); }
-
-/* Video Controls Bar */
-.video-controls {
-  padding: 1rem 1.5rem;
-  background: var(--bg-elevated);
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-}
-
-.timeline-row {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-}
-
-.timeline-track-wrap {
-  flex-grow: 1;
-  position: relative;
-  height: 20px;
-  display: flex;
-  align-items: center;
-  cursor: pointer;
-}
-
-.timeline-bar {
-  width: 100%;
-  height: 6px;
-  background: var(--bg-subtle);
-  border-radius: 3px;
-  position: relative;
-  overflow: hidden;
-}
-
-.timeline-fill {
-  height: 100%;
-  width: 0%;
-  background: linear-gradient(90deg, var(--accent) 0%, var(--success) 100%);
-  border-radius: 3px;
-  transition: width 0.1s linear;
-}
-
-.timeline-markers {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  pointer-events: none;
-  display: flex;
-  justify-content: space-between;
-  padding: 0 1px;
-}
-
-.timeline-notch {
-  width: 2px;
-  height: 6px;
-  background: rgba(255, 255, 255, 0.2);
-}
-
-.video-btn-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.video-btn-group {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-}
-
-.v-btn {
-  background: var(--bg-surface);
-  border: 1px solid var(--border-hairline);
-  color: var(--text-primary);
-  font-family: var(--font-mono);
-  font-size: 0.78rem;
-  padding: 0.35rem 0.75rem;
-  border-radius: var(--radius-sm);
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  transition: all 0.12s ease;
-}
-
-.v-btn:hover {
-  background: var(--bg-subtle);
-  border-color: var(--border-muted);
-  color: var(--accent);
-}
-
-.v-btn.active {
-  background: var(--accent);
-  color: #000;
-  border-color: var(--accent);
-  font-weight: 700;
-}
-
-.video-time-display {
-  font-family: var(--font-mono);
-  font-size: 0.82rem;
-  color: var(--text-secondary);
-  font-variant-numeric: tabular-nums;
-}
-
-.video-time-display .current-t {
-  color: var(--text-primary);
-  font-weight: 700;
-}
-
-/* Chapter Navigation Pills */
-.video-chapters-row {
-  display: flex;
-  gap: 0.5rem;
-  overflow-x: auto;
-  margin-top: 1rem;
-  padding-bottom: 0.25rem;
-}
-
-.chapter-pill {
-  background: var(--bg-surface);
-  border: 1px solid var(--border-hairline);
-  color: var(--text-secondary);
-  font-family: var(--font-mono);
-  font-size: 0.72rem;
-  padding: 0.4rem 0.75rem;
-  border-radius: var(--radius-sm);
-  white-space: nowrap;
-  transition: all 0.12s ease;
-  cursor: pointer;
-}
-
-.chapter-pill:hover {
-  border-color: var(--border-muted);
-  color: var(--text-primary);
-}
-
-.chapter-pill.active {
-  background: var(--bg-elevated);
-  border-color: var(--accent);
-  color: var(--accent);
-  font-weight: 600;
-}
-
-@media (max-width: 900px) {
-  .video-screen { grid-template-columns: 1fr; }
-  .video-feed { border-right: none; border-bottom: 1px solid var(--border-hairline); }
-}
-
-/* ==========================================================================
-   Footer
-   ========================================================================== */
-.footer {
-  border-top: 1px solid var(--border-hairline);
-  padding: 3.5rem 0 2rem;
-  background: var(--bg-surface);
-  margin-top: 6rem;
-}
-
-.footer-inner {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 1.5rem;
-  font-size: 0.85rem;
-  color: var(--text-muted);
-}
-
-.footer-nav {
-  display: flex;
-  gap: 1.5rem;
-}
-
-.footer-nav a:hover {
-  color: var(--text-primary);
-}
-
-/* Responsive */
-@media (max-width: 1024px) {
-  .subsystem-grid { grid-template-columns: repeat(2, 1fr); }
-  .telemetry-row { grid-template-columns: repeat(2, 1fr); }
-  .calculator-card { grid-template-columns: 1fr; }
-}
-
-@media (max-width: 768px) {
-  .header-links { display: none; }
-  .telemetry-row { grid-template-columns: 1fr; }
-  .benchmark-grid { grid-template-columns: 1fr; }
-  .subsystem-grid { grid-template-columns: 1fr; }
-  .workbench-nav { flex-direction: column; align-items: flex-start; }
-  .workbench-tabs { overflow-x: auto; width: 100%; }
-}
-
-  </style>
+  <title>MonoFlow: make your monorepo usable by coding agents</title>
+  <meta name="description" content="MonoFlow is a single Go binary that gives coding agents a dependency map, a JSON feedback loop, instant undo, isolated worktrees, guardrails and a shipping path that doesn't involve polling CI.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22><rect width=%2232%22 height=%2232%22 rx=%227%22 fill=%22%23e8590c%22/><path d=%22M8 22V10l8 8 8-8v12%22 stroke=%22white%22 stroke-width=%223%22 fill=%22none%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22/></svg>">
+  <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-
-  <!-- Sticky Header -->
-  <header class="header">
-    <div class="container header-inner">
-      <div style="display: flex; align-items: center; gap: 0.85rem;">
-        <a href="#" class="brand">
-          <span class="brand-glyph">⚡</span>
-          <span>monoflow</span>
-        </a>
-        <span class="brand-badge">v1.0.0 STABLE</span>
-      </div>
-
-      <nav class="header-links">
-        <a href="#demo-video" class="header-link">90s Video</a>
-        <a href="#workbench" class="header-link">Live Console</a>
-        <a href="#benchmarks" class="header-link">Benchmarks</a>
-        <a href="#architecture" class="header-link">Architecture</a>
-        <a href="#calculator" class="header-link">ROI Calculator</a>
-        <a href="#cli" class="header-link">CLI Reference</a>
+  <header class="topbar">
+    <div class="wrap topbar-inner">
+      <a class="brand" href="#top" aria-label="MonoFlow home">
+        <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="currentColor"/><path d="M8 22V10l8 8 8-8v12" stroke="#fff" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>MonoFlow
+      </a>
+      <nav class="topnav" aria-label="Sections">
+        <a href="#provides">What you get</a>
+        <a href="#loop">Agent loop</a>
+        <a href="#install">Install</a>
+        <a href="#commands">Commands</a>
+        <a href="https://github.com/M0xoo/monoflow" class="gh">GitHub</a>
       </nav>
-
-      <div class="header-actions">
-        <button class="search-trigger" title="Command palette">
-          <span>Search</span>
-          <kbd>⌘K</kbd>
-        </button>
-        <a href="https://github.com/M0xoo/monoflow" target="_blank" rel="noopener noreferrer" class="github-btn">
-          <span>GitHub</span>
-          <span style="color: var(--accent); font-family: var(--font-mono);">★</span>
-        </a>
-        <button class="theme-btn" id="theme-toggle" aria-label="Toggle theme">☀</button>
-      </div>
+      <button class="theme-btn" id="theme-toggle" type="button" aria-label="Toggle color theme">◐</button>
     </div>
   </header>
 
-  <!-- Hero Section -->
-  <main>
-    <section class="hero container">
-      <div class="hero-pill">
-        <span class="dot"></span>
-        <span>AGENT-NATIVE MONOREPO ENGINE &bull; ZERO RUNTIME DEPENDENCIES</span>
-      </div>
-
-      <h1 class="hero-title">
-        Stop Stalling AI Agents <br>on <span class="highlight">Human CI</span>.
-      </h1>
-
-      <p class="hero-subtitle">
-        MonoFlow is a Go-native systems engine engineered for swarms of autonomous coding agents (Antigravity, Cursor, Claude Code). Sub-2s test loops, 15ms plumbing snapshots, zero-lock same-file AST synthesis, and machine-signed review receipts.
+  <main id="top">
+    <!-- Hero -->
+    <section class="hero wrap">
+      <p class="eyebrow">One Go binary · Go, TypeScript, Rust, Python, Protobuf</p>
+      <h1>Make your monorepo usable by coding agents.</h1>
+      <p class="lede">
+        MonoFlow gives agents like Claude Code, Cursor and Antigravity what they otherwise have to work out from raw files and noisy terminals:
+        a <strong>map</strong> of the repo, a <strong>fast loop</strong>, an <strong>undo</strong> button,
+        an <strong>isolated place</strong> to work, and a <strong>safe path</strong> to ship. Every answer comes back as compact JSON.
       </p>
-
-      <!-- Instant Install Bar -->
-      <div class="install-bar">
-        <span class="install-prompt">$</span>
-        <span class="install-cmd" id="install-cmd">curl -fsSL https://get.monoflow.dev/install.sh | bash</span>
-        <button class="btn-copy" data-target="install-cmd" title="Copy command">COPY</button>
+      <div class="hero-actions">
+        <a class="btn btn-primary" href="#install">Install</a>
+        <a class="btn" href="https://github.com/M0xoo/monoflow">View source</a>
       </div>
 
-      <div class="hero-cta">
-        <a href="#demo-video" class="btn-primary">
-          <span>Watch 90s Swarm Video</span>
-          <span>&darr;</span>
-        </a>
-        <a href="https://github.com/M0xoo/monoflow" target="_blank" rel="noopener noreferrer" class="btn-secondary">
-          <span>GitHub Repository</span>
-          <span>&nearr;</span>
-        </a>
+      <div class="term" role="group" aria-label="Example: verifying an agent's change">
+        <div class="term-bar"><span></span><span></span><span></span><em>agent session</em></div>
+<pre class="term-body"><span class="p">$</span> monoflow checkpoint save "try new tax rounding"
+<span class="c">{ "id": "chk_001", "status": "saved" }</span>
+
+<span class="p">$</span> monoflow verify --affected
+<span class="c">{
+  "status": <b class="bad">"failed"</b>,
+  "affected_packages": ["packages/core"],
+  "errors": [{ "file": "./core.go", "line": 3, "col": 25,
+    "message": "cannot use \"x\" as int value in return statement" }]
+}</span>
+
+<span class="p">$</span> monoflow checkpoint revert
+<span class="c">{ "status": <b class="ok">"reverted"</b> }</span></pre>
       </div>
+    </section>
 
-      <!-- Precision Telemetry Gauges -->
-      <div class="telemetry-row">
-        <div class="telemetry-card">
-          <div class="telemetry-header">
-            <span class="telemetry-tag">Review Gate</span>
-            <span style="color: var(--success); font-family: var(--font-mono); font-size: 0.75rem;">&bull; Instant</span>
-          </div>
-          <div class="telemetry-val emerald">0.159ms</div>
-          <div class="telemetry-desc">Reviewer PoW cryptographic verification against base tree</div>
+    <!-- Problem -->
+    <section class="wrap band">
+      <div class="contrast">
+        <div>
+          <h3>Without MonoFlow, an agent…</h3>
+          <ul class="x">
+            <li>greps the whole tree to guess what depends on what</li>
+            <li>runs the full test suite and reads pages of colored logs</li>
+            <li>commits every failed attempt, or loses work it can't undo</li>
+            <li>edits the same checkout as you and every other agent</li>
+            <li>"fixes" red tests by deleting assertions</li>
+            <li>polls CI in a loop, spending tokens while it waits</li>
+          </ul>
         </div>
-
-        <div class="telemetry-card">
-          <div class="telemetry-header">
-            <span class="telemetry-tag">Git Plumbing</span>
-            <span style="color: var(--accent); font-family: var(--font-mono); font-size: 0.75rem;">&bull; Zero-Copy</span>
-          </div>
-          <div class="telemetry-val accent">14.2ms</div>
-          <div class="telemetry-desc">Ephemeral shadow snapshot via <code>git write-tree</code></div>
-        </div>
-
-        <div class="telemetry-card">
-          <div class="telemetry-header">
-            <span class="telemetry-tag">Multi-Agent</span>
-            <span style="color: var(--info); font-family: var(--font-mono); font-size: 0.75rem;">&bull; Zero Locks</span>
-          </div>
-          <div class="telemetry-val cyan">25.7ms</div>
-          <div class="telemetry-desc">Same-file semantic AST synthesis for concurrent agents</div>
-        </div>
-
-        <div class="telemetry-card">
-          <div class="telemetry-header">
-            <span class="telemetry-tag">Infrastructure</span>
-            <span style="color: var(--success); font-family: var(--font-mono); font-size: 0.75rem;">&bull; 50 Pkgs</span>
-          </div>
-          <div class="telemetry-val emerald">90%</div>
-          <div class="telemetry-desc">CI runner compute & token cost reduction via DAG gates</div>
+        <div>
+          <h3>With MonoFlow, it…</h3>
+          <ul class="check">
+            <li>asks the dependency graph directly</li>
+            <li>checks only the affected packages and gets errors back as JSON</li>
+            <li>saves and reverts checkpoints without touching history</li>
+            <li>works in its own sparse worktree</li>
+            <li>gets stopped by the test integrity guard</li>
+            <li>pushes, moves on, and is notified when CI finishes</li>
+          </ul>
         </div>
       </div>
     </section>
 
-    <!-- Programmatic 90-Second Systems Video Walkthrough -->
-    <section id="demo-video" class="video-section container">
-      <div class="section-label">Programmatic Video Walkthrough (90 Seconds)</div>
-      <h2 class="section-heading">Watch the Swarm Workflow in Action</h2>
-      <p class="section-subtext">
-        An interactive, programmatic 90-second simulation of autonomous coding agents collaborating across a 14-package monorepo: from CoW worktrees and same-file AST synthesis to sub-2s inner loops and background CI supervision.
-      </p>
+    <!-- What it provides -->
+    <section id="provides" class="wrap">
+      <h2>What MonoFlow provides</h2>
+      <p class="sub">Six capabilities, all in one CLI. Each one replaces something agents are currently bad at.</p>
 
-      <div class="video-player-card">
-        <!-- Player Header -->
-        <div class="video-player-header">
-          <div style="display: flex; align-items: center; gap: 0.75rem;">
-            <div class="video-rec-badge">
-              <span class="rec-dot"></span>
-              <span>LIVE 60FPS</span>
-            </div>
-            <span id="video-chapter-name" style="font-family: var(--font-mono); font-size: 0.82rem; font-weight: 600; color: var(--text-primary);">
-              01 / Monorepo Discovery &amp; DAG Graph Compilation
-            </span>
-          </div>
+      <div class="features">
+        <article class="feature">
+          <span class="num">01</span>
+          <h3>A map of the repo</h3>
+          <p><code>init</code> finds your packages and their dependency graph. Agents can then ask what a package depends on, or what a change to a file affects, without crawling the tree. Large repos can check out just the packages a task needs.</p>
+          <pre><code>monoflow graph query packages/core
+monoflow graph impact packages/core/x.go
+monoflow subset set --packages=billing</code></pre>
+        </article>
 
-          <div class="video-badge-group">
-            <span class="brand-badge" style="color: var(--success); border-color: rgba(16, 185, 129, 0.3);">4K ULTRA-HD</span>
-            <button class="v-btn" id="video-speed-btn" title="Toggle playback speed">1x Speed</button>
-            <button class="v-btn" id="video-record-btn" title="Export WebM Video"><span>⬇</span><span>Export Video</span></button>
-          </div>
-        </div>
+        <article class="feature">
+          <span class="num">02</span>
+          <h3>Feedback in seconds, as JSON</h3>
+          <p><code>verify --affected</code> checks only what the change touches, runs packages in parallel, and uses cached results when inputs haven't changed. Errors are normalized to <code>file · line · col · code · message</code>, with no ANSI codes or spinners.</p>
+          <pre><code>monoflow verify --affected
+monoflow cache status</code></pre>
+        </article>
 
-        <!-- Video Split-Screen (Terminal & HUD) -->
-        <div class="video-screen">
-          <div class="video-feed" id="video-terminal-feed">
-            <!-- Populated programmatically by app.js -->
-          </div>
-          <div class="video-hud-feed" id="video-hud-feed">
-            <!-- Populated programmatically by app.js -->
-          </div>
-        </div>
+        <article class="feature">
+          <span class="num">03</span>
+          <h3>Undo without touching history</h3>
+          <p>Checkpoints snapshot the working tree with Git plumbing. Agents can try an idea, fail, and roll back in milliseconds, without commits in the log or stashes to clean up.</p>
+          <pre><code>monoflow checkpoint save "hypothesis"
+monoflow checkpoint revert</code></pre>
+        </article>
 
-        <!-- Video Timeline Controls -->
-        <div class="video-controls">
-          <div class="timeline-row">
-            <button class="v-btn active" id="video-play-btn" style="min-width: 84px;">
-              <span>▶</span><span>Play</span>
-            </button>
+        <article class="feature">
+          <span class="num">04</span>
+          <h3>An isolated worktree per agent</h3>
+          <p>Each agent gets a sparse worktree that contains only its packages, so parallel agents and humans don't collide. When two agents add code to the same file, MonoFlow merges at the symbol level instead of leaving conflict markers.</p>
+          <pre><code>monoflow worktree create agent-42 --packages=billing
+monoflow worktree sync --to=agent-42 --from=agent-7
+monoflow worktree finish agent-42</code></pre>
+        </article>
 
-            <div class="timeline-track-wrap" id="video-timeline-track" title="Click or drag to scrub timeline">
-              <div class="timeline-bar">
-                <div class="timeline-fill" id="video-timeline-fill"></div>
-                <div class="timeline-markers">
-                  <span class="timeline-notch" style="margin-left: 0%;"></span>
-                  <span class="timeline-notch" style="margin-left: 16.6%;"></span>
-                  <span class="timeline-notch" style="margin-left: 33.3%;"></span>
-                  <span class="timeline-notch" style="margin-left: 50%;"></span>
-                  <span class="timeline-notch" style="margin-left: 66.6%;"></span>
-                  <span class="timeline-notch" style="margin-left: 83.3%;"></span>
-                </div>
-              </div>
-            </div>
+        <article class="feature">
+          <span class="num">05</span>
+          <h3>Guardrails you can trust</h3>
+          <p>Task boundaries say which paths an agent may change. The guard rejects diffs that weaken tests and scans for leaked secrets. Proof-of-work receipts and risk scores tell a reviewer how much attention a change needs.</p>
+          <pre><code>monoflow task check
+monoflow guard check
+monoflow task prove task-42
+monoflow review risk</code></pre>
+        </article>
 
-            <div class="video-time-display">
-              <span class="current-t" id="video-time-current">00:00</span> / <span>01:30</span>
-            </div>
-          </div>
-
-          <!-- Chapter Navigation Pills -->
-          <div class="video-chapters-row">
-            <button class="chapter-pill active" data-chapter="1">0:00 DAG Discovery</button>
-            <button class="chapter-pill" data-chapter="2">0:15 CoW Worktrees</button>
-            <button class="chapter-pill" data-chapter="3">0:30 AST Synthesis</button>
-            <button class="chapter-pill" data-chapter="4">0:45 Sub-2s Inner Loop</button>
-            <button class="chapter-pill" data-chapter="5">1:00 Test Guardrails</button>
-            <button class="chapter-pill" data-chapter="6">1:15 Fire &amp; Forget Push</button>
-          </div>
-        </div>
+        <article class="feature">
+          <span class="num">06</span>
+          <h3>A shipping path built for agents</h3>
+          <p>Commit, sync and push without raw Git, and with <code>main</code> protected. PRs come with a risk tier and the list of affected packages. Pushing returns right away: CI results arrive later in an event inbox, so the agent never has to poll.</p>
+          <pre><code>monoflow commit -m "fix: rounding"
+monoflow pr create --title="fix: rounding"
+monoflow events unread</code></pre>
+        </article>
       </div>
     </section>
 
-    <!-- Interactive Workbench / Telemetry Console -->
-    <section id="workbench" class="workbench-section container">
-      <div class="section-label">Interactive Systems Workbench</div>
-      <h2 class="section-heading">Inspect the Engine in Flight</h2>
-      <p class="section-subtext">
-        Explore live interactive simulations of the Go runtime primitives that coordinate parallel agent execution without conflicts or pipeline stalls.
-      </p>
+    <!-- Loop -->
+    <section id="loop" class="wrap">
+      <h2>The agent loop</h2>
+      <p class="sub"><code>monoflow init</code> writes <code>AGENTS.md</code> and a skill file, so your agent follows this loop without extra prompting.</p>
 
-      <div class="workbench-card">
-        <div class="workbench-nav">
-          <div class="workbench-tabs">
-            <button class="wb-tab active" data-target="cli">⚡ Interactive CLI</button>
-            <button class="wb-tab" data-target="ast">🧬 AST Synthesizer</button>
-            <button class="wb-tab" data-target="cow">📂 CoW Worktrees</button>
-            <button class="wb-tab" data-target="cache">💾 Package Cache</button>
-            <button class="wb-tab" data-target="version">📦 SemVer Changesets</button>
-            <button class="wb-tab" data-target="events">⚡ Async Event Bus</button>
-            <button class="wb-tab" data-target="audit">🛡️ Slop Auditor</button>
-            <button class="wb-tab" data-target="queue">🔀 Speculative Queue</button>
-            <button class="wb-tab" data-target="pow">📜 1s PoW Receipt</button>
-            <button class="wb-tab" data-target="scenario">🏢 Swarm Scenario</button>
-          </div>
-          <div class="workbench-meta">
-            <span class="status-indicator">ENGINE RUNNING</span>
-            <span>DARWIN_APFS</span>
-            <span>GO 1.22</span>
-          </div>
-        </div>
+      <ol class="loop">
+        <li><b>Provision</b><code>worktree create</code></li>
+        <li><b>Look</b><code>graph query · impact</code></li>
+        <li><b>Snapshot</b><code>checkpoint save</code></li>
+        <li class="hot"><b>Edit &amp; verify</b><code>verify --affected</code><small>on failure: <code>checkpoint revert</code></small></li>
+        <li><b>Check</b><code>task check · guard check</code></li>
+        <li><b>Ship</b><code>commit · pr create</code></li>
+        <li><b>Wait for free</b><code>events unread</code></li>
+      </ol>
 
-        <div class="workbench-viewport" id="workbench-viewport">
-          <!-- Populated by app.js -->
+      <div class="tabs" data-tabs>
+        <div class="tab-list" role="tablist" aria-label="Real command output">
+          <button role="tab" aria-selected="true" data-tab="impact">graph impact</button>
+          <button role="tab" aria-selected="false" data-tab="verify">verify --affected</button>
+          <button role="tab" aria-selected="false" data-tab="guard">guard check</button>
+          <button role="tab" aria-selected="false" data-tab="task">task.json</button>
         </div>
+<pre class="tab-panel" data-panel="impact"><span class="p">$</span> monoflow graph impact packages/core/core.go
+{
+  "modified_file": "packages/core/core.go",
+  "owning_package": "packages/core",
+  "direct_dependents": ["packages/api"],
+  "transitive_dependents": ["packages/api"]
+}</pre>
+<pre class="tab-panel" data-panel="verify" hidden><span class="p">$</span> monoflow verify --affected
+{
+  "status": "failed",
+  "duration_ms": 52.5,
+  "affected_packages": ["packages/core"],
+  "results": [{
+    "target": "packages/core",
+    "language": "go",
+    "status": "failed",
+    "errors": [{
+      "file": "./core.go", "line": 3, "col": 25, "code": "go-error",
+      "message": "cannot use \"x\" (untyped string constant) as int value in return statement"
+    }],
+    "command_run": "go build ./..."
+  }]
+}</pre>
+<pre class="tab-panel" data-panel="guard" hidden><span class="p">$</span> monoflow guard check
+{
+  "status": "passed",
+  "secret_scanning": "clean (0 credentials or keys detected)",
+  "test_integrity": "verified (0 assertions deleted or commented out)",
+  "verdict": "All guard checks passed"
+}</pre>
+<pre class="tab-panel" data-panel="task" hidden><span class="p">$</span> cat .agents/task.json
+{
+  "task_id": "task-001",
+  "title": "Example Feature",
+  "acceptance_criteria": ["Affected unit tests pass"],
+  "allowed_paths":   ["services/**", "packages/**"],
+  "read_only_paths": ["contracts/**"]
+}</pre>
       </div>
     </section>
 
-    <!-- The Speed Wall (Benchmarking Matrix) -->
-    <section id="benchmarks" class="benchmark-section container">
-      <div class="section-label">Performance &amp; Scale</div>
-      <h2 class="section-heading">Systems Latency Benchmarks</h2>
-      <p class="section-subtext">
-        Benchmarked on an Apple M3 Max across a polyglot monorepo containing 50 Go packages, 12 TypeScript micro-frontends, and 4 Python ML services.
-      </p>
+    <!-- Install -->
+    <section id="install" class="wrap">
+      <h2>Install</h2>
+      <p class="sub">Requires Go 1.22+ to build. The result is a single static binary with no runtime dependencies.</p>
 
-      <div class="benchmark-grid">
-        <!-- Box 1 -->
-        <div class="benchmark-box">
-          <div class="benchmark-box-title">
-            <h4>Agent Worktree Provisioning</h4>
-            <span>LOWER IS BETTER</span>
-          </div>
-          <div class="bar-row">
-            <div class="bar-meta">
-              <span class="tool-name">⚡ MonoFlow (APFS clonefile CoW)</span>
-              <span class="tool-timing c-amber">58.4 ms</span>
-            </div>
-            <div class="bar-track">
-              <div class="bar-fill monoflow" style="width: 3%;"></div>
-            </div>
-          </div>
-          <div class="bar-row">
-            <div class="bar-meta">
-              <span class="tool-name">Git Native (git worktree add)</span>
-              <span class="tool-timing">4,200 ms</span>
-            </div>
-            <div class="bar-track">
-              <div class="bar-fill legacy" style="width: 25%;"></div>
-            </div>
-          </div>
-          <div class="bar-row">
-            <div class="bar-meta">
-              <span class="tool-name">Full Git Clone (50 Packages)</span>
-              <span class="tool-timing">32,400 ms</span>
-            </div>
-            <div class="bar-track">
-              <div class="bar-fill legacy" style="width: 100%;"></div>
-            </div>
+      <div class="steps">
+        <div class="step">
+          <span class="step-n">1</span>
+          <div>
+            <h3>Build</h3>
+            <div class="code"><pre><code id="cmd-build">git clone https://github.com/M0xoo/monoflow.git
+cd monoflow &amp;&amp; make build</code></pre><button class="copy" data-copy="cmd-build" type="button">Copy</button></div>
           </div>
         </div>
-
-        <!-- Box 2 -->
-        <div class="benchmark-box">
-          <div class="benchmark-box-title">
-            <h4>Inner-Loop Test Feedback</h4>
-            <span>LOWER IS BETTER</span>
-          </div>
-          <div class="bar-row">
-            <div class="bar-meta">
-              <span class="tool-name">⚡ MonoFlow (DAG Affected Scope)</span>
-              <span class="tool-timing c-emerald">1.18 s</span>
-            </div>
-            <div class="bar-track">
-              <div class="bar-fill monoflow" style="width: 4%;"></div>
-            </div>
-          </div>
-          <div class="bar-row">
-            <div class="bar-meta">
-              <span class="tool-name">Turborepo (Cached affected)</span>
-              <span class="tool-timing">48.2 s</span>
-            </div>
-            <div class="bar-track">
-              <div class="bar-fill legacy" style="width: 38%;"></div>
-            </div>
-          </div>
-          <div class="bar-row">
-            <div class="bar-meta">
-              <span class="tool-name">Standard GitHub Actions CI Matrix</span>
-              <span class="tool-timing">280.0 s</span>
-            </div>
-            <div class="bar-track">
-              <div class="bar-fill legacy" style="width: 100%;"></div>
-            </div>
+        <div class="step">
+          <span class="step-n">2</span>
+          <div>
+            <h3>Install into your repo</h3>
+            <div class="code"><pre><code id="cmd-install">cd /path/to/your-repo
+/path/to/monoflow/install.sh</code></pre><button class="copy" data-copy="cmd-install" type="button">Copy</button></div>
+            <p class="note">This copies the binary to <code>.agents/bin/monoflow</code> and runs <code>monoflow init</code>.</p>
           </div>
         </div>
-
-        <!-- Box 3 -->
-        <div class="benchmark-box">
-          <div class="benchmark-box-title">
-            <h4>PR Review Verification Latency</h4>
-            <span>LOWER IS BETTER</span>
-          </div>
-          <div class="bar-row">
-            <div class="bar-meta">
-              <span class="tool-name">⚡ MonoFlow (Reviewer PoW Receipt)</span>
-              <span class="tool-timing c-emerald">0.159 ms</span>
-            </div>
-            <div class="bar-track">
-              <div class="bar-fill monoflow" style="width: 1%;"></div>
-            </div>
-          </div>
-          <div class="bar-row">
-            <div class="bar-meta">
-              <span class="tool-name">Re-running Unit Tests Locally</span>
-              <span class="tool-timing">34,000 ms</span>
-            </div>
-            <div class="bar-track">
-              <div class="bar-fill legacy" style="width: 40%;"></div>
-            </div>
-          </div>
-          <div class="bar-row">
-            <div class="bar-meta">
-              <span class="tool-name">Waiting for Remote CI Cloud Run</span>
-              <span class="tool-timing">720,000 ms</span>
-            </div>
-            <div class="bar-track">
-              <div class="bar-fill legacy" style="width: 100%;"></div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Box 4 -->
-        <div class="benchmark-box">
-          <div class="benchmark-box-title">
-            <h4>LLM Context Token Overhead</h4>
-            <span>LOWER IS BETTER</span>
-          </div>
-          <div class="bar-row">
-            <div class="bar-meta">
-              <span class="tool-name">⚡ MonoFlow (Normalized JSON Schema)</span>
-              <span class="tool-timing c-amber">280 tokens</span>
-            </div>
-            <div class="bar-track">
-              <div class="bar-fill monoflow" style="width: 5%;"></div>
-            </div>
-          </div>
-          <div class="bar-row">
-            <div class="bar-meta">
-              <span class="tool-name">Raw Build & Test Log Dumps</span>
-              <span class="tool-timing">5,480 tokens</span>
-            </div>
-            <div class="bar-track">
-              <div class="bar-fill legacy" style="width: 75%;"></div>
-            </div>
-          </div>
-          <div class="bar-row">
-            <div class="bar-meta">
-              <span class="tool-name">ANSI Terminal Spinners / Matrix Logs</span>
-              <span class="tool-timing">12,200 tokens</span>
-            </div>
-            <div class="bar-track">
-              <div class="bar-fill legacy" style="width: 100%;"></div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Box 5 -->
-        <div class="benchmark-box">
-          <div class="benchmark-box-title">
-            <h4>Package Cache Verification Hit</h4>
-            <span>LOWER IS BETTER</span>
-          </div>
-          <div class="bar-row">
-            <div class="bar-meta">
-              <span class="tool-name">⚡ MonoFlow (Content-Addressable Cache)</span>
-              <span class="tool-timing c-emerald">0.80 ms</span>
-            </div>
-            <div class="bar-track">
-              <div class="bar-fill monoflow" style="width: 1%;"></div>
-            </div>
-          </div>
-          <div class="bar-row">
-            <div class="bar-meta">
-              <span class="tool-name">Turborepo / Nx (Local cache hit)</span>
-              <span class="tool-timing">680 ms</span>
-            </div>
-            <div class="bar-track">
-              <div class="bar-fill legacy" style="width: 25%;"></div>
-            </div>
-          </div>
-          <div class="bar-row">
-            <div class="bar-meta">
-              <span class="tool-name">Full Package Retest Suite</span>
-              <span class="tool-timing">28,400 ms</span>
-            </div>
-            <div class="bar-track">
-              <div class="bar-fill legacy" style="width: 100%;"></div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Box 6 -->
-        <div class="benchmark-box">
-          <div class="benchmark-box-title">
-            <h4>Sparse Remote Subset Sync</h4>
-            <span>LOWER IS BETTER</span>
-          </div>
-          <div class="bar-row">
-            <div class="bar-meta">
-              <span class="tool-name">⚡ MonoFlow (Sparse-aware fast-forward)</span>
-              <span class="tool-timing c-amber">58.2 ms</span>
-            </div>
-            <div class="bar-track">
-              <div class="bar-fill monoflow" style="width: 2%;"></div>
-            </div>
-          </div>
-          <div class="bar-row">
-            <div class="bar-meta">
-              <span class="tool-name">Git Native (fetch + sparse re-cone)</span>
-              <span class="tool-timing">4,500 ms</span>
-            </div>
-            <div class="bar-track">
-              <div class="bar-fill legacy" style="width: 32%;"></div>
-            </div>
-          </div>
-          <div class="bar-row">
-            <div class="bar-meta">
-              <span class="tool-name">Full Monorepo Checkout &amp; Pull</span>
-              <span class="tool-timing">24,800 ms</span>
-            </div>
-            <div class="bar-track">
-              <div class="bar-fill legacy" style="width: 100%;"></div>
-            </div>
+        <div class="step">
+          <span class="step-n">3</span>
+          <div>
+            <h3>Optional: CI integration</h3>
+            <div class="code"><pre><code id="cmd-gh">.agents/bin/monoflow init --setup-gh-actions</code></pre><button class="copy" data-copy="cmd-gh" type="button">Copy</button></div>
+            <p class="note">Adds GitHub Actions workflows for package caching and two-tier CI.</p>
           </div>
         </div>
       </div>
-    </section>
 
-    <!-- Subsystems Architecture Matrix -->
-    <section id="architecture" class="architecture-section container">
-      <div class="section-label">Core Engineering Subsystems</div>
-      <h2 class="section-heading">Architected for Parallel Swarms</h2>
-      <p class="section-subtext">
-        Every component is built in native Go, compiling to a single static binary with zero runtime dependencies.
-      </p>
-
-      <div class="subsystem-grid">
-        <!-- Subsystem 1 -->
-        <div class="subsystem-card">
-          <div class="subsystem-num">01 / DAG GRAPH</div>
-          <h3 class="subsystem-title">Sub-2s Inner Loop</h3>
-          <p class="subsystem-body">
-            Builds an in-memory directed acyclic graph across all workspace packages. Computes exact reverse-dependency sets so agents only compile and test packages directly affected by their changes.
-          </p>
-          <div class="subsystem-chip-row">
-            <span class="subsystem-chip">In-Memory DAG</span>
-            <span class="subsystem-chip">Parallel Worker Pool</span>
-            <span class="subsystem-chip">&lt; 2s Feedback</span>
-          </div>
-        </div>
-
-        <!-- Subsystem 2 -->
-        <div class="subsystem-card">
-          <div class="subsystem-num">02 / GIT PLUMBING</div>
-          <h3 class="subsystem-title">15ms Snapshots</h3>
-          <p class="subsystem-body">
-            Bypasses human-facing Git porcelain commands (<code>stash</code>, <code>commit</code>). Directly invokes low-level <code>git write-tree</code> on shadow indexes, creating atomic commits without polluting the developer index.
-          </p>
-          <div class="subsystem-chip-row">
-            <span class="subsystem-chip">git write-tree</span>
-            <span class="subsystem-chip">Zero Staging Churn</span>
-            <span class="subsystem-chip">Shadow Tree Shas</span>
-          </div>
-        </div>
-
-        <!-- Subsystem 3 -->
-        <div class="subsystem-card">
-          <div class="subsystem-num">03 / ISOLATION</div>
-          <h3 class="subsystem-title">CoW Virtual Worktrees</h3>
-          <p class="subsystem-body">
-            Leverages host APFS (Darwin) and btrfs (Linux) <code>clonefile()</code> primitives to provision isolated agent worktrees in 58ms. Dependencies like <code>node_modules</code> and <code>.venv</code> share physical storage at 0 KB disk cost.
-          </p>
-          <div class="subsystem-chip-row">
-            <span class="subsystem-chip">APFS clonefile</span>
-            <span class="subsystem-chip">Shared .venv</span>
-            <span class="subsystem-chip">Shared node_modules</span>
-          </div>
-        </div>
-
-        <!-- Subsystem 4 -->
-        <div class="subsystem-card">
-          <div class="subsystem-num">04 / ZERO LOCKS</div>
-          <h3 class="subsystem-title">Same-File AST Synthesizer</h3>
-          <p class="subsystem-body">
-            Multiple agents can concurrently modify the exact same source file. Instead of crude line-based git conflicts, MonoFlow parses Go ASTs and synthesizes non-overlapping struct fields, imports, and methods in &lt; 25ms.
-          </p>
-          <div class="subsystem-chip-row">
-            <span class="subsystem-chip">Go AST Parser</span>
-            <span class="subsystem-chip">Semantic 3-Way Merge</span>
-            <span class="subsystem-chip">Lock-Free Swarms</span>
-          </div>
-        </div>
-
-        <!-- Subsystem 5 -->
-        <div class="subsystem-card">
-          <div class="subsystem-num">05 / INTEGRITY</div>
-          <h3 class="subsystem-title">Slop &amp; Scope Auditor</h3>
-          <p class="subsystem-body">
-            Detects prompt-injected hallucinated edits, unprompted file churn, and unauthorized test assertion deletions. Enforces strict task contract boundaries before any code hits the speculative queue.
-          </p>
-          <div class="subsystem-chip-row">
-            <span class="subsystem-chip">Intent Classifier</span>
-            <span class="subsystem-chip">Anti-Cheating Guard</span>
-            <span class="subsystem-chip">Quarantine Sandbox</span>
-          </div>
-        </div>
-
-        <!-- Subsystem 6 -->
-        <div class="subsystem-card">
-          <div class="subsystem-num">06 / VERIFICATION</div>
-          <h3 class="subsystem-title">Speculative Merge &amp; PoW</h3>
-          <p class="subsystem-body">
-            Disjoint PRs are merged speculatively ahead of cloud CI. Generates machine-signed proof-of-work receipts (<code>.monoflow/proofs/receipt.json</code>) that human reviewers and CI gates verify in 0.159ms.
-          </p>
-          <div class="subsystem-chip-row">
-            <span class="subsystem-chip">Topological Rebase</span>
-            <span class="subsystem-chip">SHA-256 Tree Sig</span>
-            <span class="subsystem-chip">Two-Tier Gate</span>
-          </div>
-        </div>
-
-        <!-- Subsystem 7 -->
-        <div class="subsystem-card">
-          <div class="subsystem-num">07 / PACKAGE CACHE</div>
-          <h3 class="subsystem-title">Deterministic Caching &amp; Daemon</h3>
-          <p class="subsystem-body">
-            Content-addressable cache keys computed over source trees, toolchain versions, and dependencies. Delivers sub-millisecond inner loop test verification hits (&lt; 1ms) and provides a zero-dependency HTTP daemon for distributed swarm and CI cache sharing.
-          </p>
-          <div class="subsystem-chip-row">
-            <span class="subsystem-chip">Deterministic Keying</span>
-            <span class="subsystem-chip">Sub-1ms Verify</span>
-            <span class="subsystem-chip">HTTP Cache Server</span>
-          </div>
-        </div>
-
-        <!-- Subsystem 8 -->
-        <div class="subsystem-card">
-          <div class="subsystem-num">08 / VERSIONING</div>
-          <h3 class="subsystem-title">SemVer Changesets &amp; Health</h3>
-          <p class="subsystem-body">
-            Automated multi-package SemVer versioning with declarative changesets. Cascades version increments across topological DAG dependents, syncs polyglot manifests, and verifies transitive dependency integrity in sparse checkouts.
-          </p>
-          <div class="subsystem-chip-row">
-            <span class="subsystem-chip">SemVer Cascade</span>
-            <span class="subsystem-chip">Polyglot Manifests</span>
-            <span class="subsystem-chip">Subset Health Check</span>
-          </div>
-        </div>
-
-        <!-- Subsystem 9 -->
-        <div class="subsystem-card">
-          <div class="subsystem-num">09 / ASYNC EVENT BUS</div>
-          <h3 class="subsystem-title">Fire-and-Forget Push &amp; Supervisor</h3>
-          <p class="subsystem-body">
-            Non-blocking reactive communication model. Agents push code and immediately resume development while autonomous background supervisors track remote GitHub Actions runs and deliver event notifications in &lt; 5ms without polling.
-          </p>
-          <div class="subsystem-chip-row">
-            <span class="subsystem-chip">Fire-and-Forget Push</span>
-            <span class="subsystem-chip">Autonomous CI Watcher</span>
-            <span class="subsystem-chip">Zero-Token Inbox</span>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- ROI Calculator -->
-    <section id="calculator" class="container">
-      <div class="section-label">Engineering ROI</div>
-      <h2 class="section-heading">Calculate Your CI &amp; Token Savings</h2>
-      <p class="section-subtext">
-        Measure the developer time and cloud runner compute reclaimed by replacing human-paced CI with MonoFlow.
-      </p>
-
-      <div class="calculator-card">
-        <div class="calc-controls">
-          <div class="calc-control">
-            <div class="calc-label-row">
-              <span>Concurrent Autonomous Agents</span>
-              <span class="calc-val" id="calc-agents-val">8</span>
-            </div>
-            <input type="range" id="calc-agents" min="1" max="50" value="8">
-          </div>
-
-          <div class="calc-control">
-            <div class="calc-label-row">
-              <span>Agent PRs Generated per Day</span>
-              <span class="calc-val" id="calc-prs-val">30</span>
-            </div>
-            <input type="range" id="calc-prs" min="5" max="200" value="30">
-          </div>
-
-          <p style="font-size: 0.82rem; color: var(--text-muted); line-height: 1.5;">
-            Calculated based on 23.5 minutes saved per PR vs traditional 25-minute monorepo matrix runs ($0.03/min cloud runner compute + agent context stalls).
-          </p>
-        </div>
-
-        <div class="calc-results">
-          <div class="calc-stat-label">Engineering Hours Saved Monthly</div>
-          <div class="calc-stat-number" id="calc-hours-saved">258 hrs</div>
-
-          <div class="calc-stat-label">Estimated Monthly CI &amp; Token Savings</div>
-          <div class="calc-stat-number" id="calc-cost-saved" style="color: var(--accent);">$10,836</div>
-
-          <div style="font-family: var(--font-mono); font-size: 0.72rem; color: var(--text-muted);">
-            ✓ Zero GitHub Actions runner queue congestion
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- CLI Reference Table -->
-    <section id="cli" class="container" style="margin-top: 5rem;">
-      <div class="section-label">Command Line Interface</div>
-      <h2 class="section-heading">CLI Command Reference</h2>
-      <p class="section-subtext">
-        MonoFlow ships as a single statically linked binary with zero dependencies.
-      </p>
-
-      <div class="cli-table-card">
-        <table class="cli-table">
-          <thead>
-            <tr>
-              <th>Command</th>
-              <th>Description</th>
-              <th>Flag Highlights</th>
-            </tr>
-          </thead>
+      <h3 class="files-h">What <code>init</code> writes</h3>
+      <div class="table-wrap">
+        <table>
           <tbody>
-            <tr>
-              <td><code>monoflow init [dir]</code></td>
-              <td>Auto-discovers repository architecture, generates <code>.agents/monoflow.config.json</code> &amp; rules</td>
-              <td><code>--setup-gh-actions</code>, <code>--gh</code>, <code>--no-gh</code></td>
-            </tr>
-            <tr>
-              <td><code>monoflow clone &lt;url&gt; [dest]</code></td>
-              <td>Partial clone of a package subset + transitive dependencies (&lt; 1s partial clone)</td>
-              <td><code>--packages &lt;p1,p2&gt;</code>, <code>--include-deps</code></td>
-            </tr>
-            <tr>
-              <td><code>monoflow subset [set|add|remove|update|deps|list|check|reset]</code></td>
-              <td>Dynamic package subset projection, selective remote update &amp; dependency health</td>
-              <td><code>--packages &lt;p1,p2&gt;</code>, <code>--deps direct|all|none</code>, <code>--force</code></td>
-            </tr>
-            <tr>
-              <td><code>monoflow graph [query|impact]</code></td>
-              <td>Inspect dependency DAG in JSON, query upstream/downstream &amp; compute impact matrix</td>
-              <td><code>query &lt;pkg&gt;</code>, <code>impact &lt;file&gt;</code></td>
-            </tr>
-            <tr>
-              <td><code>monoflow checkpoint [save|revert]</code></td>
-              <td>Ephemeral 15ms in-memory snapshot via low-level <code>git write-tree</code></td>
-              <td><code>save "&lt;msg&gt;"</code>, <code>revert [id]</code></td>
-            </tr>
-            <tr>
-              <td><code>monoflow worktree [create|focus|add|remove|update|isolate|sync|gc|finish]</code></td>
-              <td>APFS/btrfs CoW virtual worktrees with package focus, AST synthesis &amp; heartbeat GC</td>
-              <td><code>--package &lt;p&gt;</code>, <code>--isolated-deps</code>, <code>--to=B --from=A</code></td>
-            </tr>
-            <tr>
-              <td><code>monoflow verify [--affected|--proof]</code></td>
-              <td>Sub-2s inner loop with clean token-compact JSON diagnostics (hits cache in &lt; 1ms)</td>
-              <td><code>--affected</code>, <code>--proof=&lt;id&gt;</code>, <code>--scope all</code></td>
-            </tr>
-            <tr>
-              <td><code>monoflow outer [start|status|wait]</code></td>
-              <td>Async outer loop: transitive verification matrix &amp; remote promotion barrier</td>
-              <td><code>start</code>, <code>status</code>, <code>wait</code></td>
-            </tr>
-            <tr>
-              <td><code>monoflow push [remote] [branch]</code></td>
-              <td>Fire-and-forget push with background autonomous CI watcher &amp; race detector</td>
-              <td><code>--no-watch</code>, <code>[remote]</code>, <code>[branch]</code></td>
-            </tr>
-            <tr>
-              <td><code>monoflow sync [remote] [branch]</code></td>
-              <td>Sub-second remote synchronization preserving sparse package subsets (ff-only/rebase)</td>
-              <td><code>[remote]</code>, <code>[branch]</code></td>
-            </tr>
-            <tr>
-              <td><code>monoflow branch [name|switch]</code></td>
-              <td>List, create, or switch branches without raw Git commands or detached HEADs</td>
-              <td><code>[name]</code>, <code>switch &lt;name&gt;</code></td>
-            </tr>
-            <tr>
-              <td><code>monoflow events [unread|list|ack|clear|watch]</code></td>
-              <td>Asynchronous agent event inbox (check in &lt; 5ms without polling)</td>
-              <td><code>unread</code>, <code>list</code>, <code>ack &lt;id&gt;</code>, <code>clear</code></td>
-            </tr>
-            <tr>
-              <td><code>monoflow review [risk|audit|throttle]</code></td>
-              <td>Machine semantic risk scoring (0–100), anti-hallucination audit &amp; backpressure</td>
-              <td><code>risk</code>, <code>audit --title=... --desc=...</code>, <code>throttle</code></td>
-            </tr>
-            <tr>
-              <td><code>monoflow queue [spec|verify]</code></td>
-              <td>Speculative local merge simulation &amp; pre-flight cryptographic receipt generation</td>
-              <td><code>spec [task-id]</code>, <code>verify</code></td>
-            </tr>
-            <tr>
-              <td><code>monoflow ci check</code></td>
-              <td>Two-tier CI gate: Activate Tier 1 fast-path (&lt; 30s) on verified receipts</td>
-              <td><code>--head &lt;sha&gt;</code></td>
-            </tr>
-            <tr>
-              <td><code>monoflow commit -m "&lt;msg&gt;"</code></td>
-              <td>Sub-50ms verified agent commit bypassing slow interactive hooks</td>
-              <td><code>-m "&lt;msg&gt;"</code></td>
-            </tr>
-            <tr>
-              <td><code>monoflow guard check</code></td>
-              <td>Check test integrity (anti-cheating assertion scanner) &amp; scan for secrets</td>
-              <td><code>check</code></td>
-            </tr>
-            <tr>
-              <td><code>monoflow task [check|prove|slice]</code></td>
-              <td>Enforce task boundaries (<code>allowed_paths</code>), generate PoW receipts &amp; stacked diffs</td>
-              <td><code>check</code>, <code>prove &lt;id&gt;</code>, <code>slice</code></td>
-            </tr>
-            <tr>
-              <td><code>monoflow deliver [--target=&lt;p&gt;]</code></td>
-              <td>Assemble hermetic deliverable artifact &amp; tarballs (<code>.agents/dist</code>)</td>
-              <td><code>--target=&lt;pkg&gt;</code></td>
-            </tr>
-            <tr>
-              <td><code>monoflow cache [status|clean|serve|setup-gh|pull-gh]</code></td>
-              <td>Content-addressable package cache metrics, HTTP daemon &amp; GitHub Actions helper</td>
-              <td><code>status</code>, <code>clean</code>, <code>serve --port=8080</code>, <code>setup-gh</code></td>
-            </tr>
-            <tr>
-              <td><code>monoflow version [list|bump|apply|check]</code></td>
-              <td>SemVer package versioning, declarative changesets &amp; cascade propagation</td>
-              <td><code>list</code>, <code>bump &lt;pkg&gt; [tier] --cascade</code>, <code>apply</code>, <code>check</code></td>
-            </tr>
-            <tr>
-              <td><code>monoflow scenario [run] [--json]</code></td>
-              <td>Real end-to-end multi-agent enterprise monorepo simulation benchmark</td>
-              <td><code>run</code>, <code>--json</code></td>
-            </tr>
-            <tr>
-              <td><code>monoflow app test</code></td>
-              <td>Delta compilation + symlink overlay (&lt; 5s full-app assembly)</td>
-              <td><code>test</code></td>
-            </tr>
-            <tr>
-              <td><code>monoflow pr [create|list|view|local|test|review|merge]</code></td>
-              <td>Full agent-native PR suite: risk scores, local projection, hot-mount test &amp; queue merge</td>
-              <td><code>create --title=... --stack</code>, <code>local &lt;id&gt;</code>, <code>review &lt;id&gt;</code></td>
-            </tr>
-            <tr>
-              <td><code>monoflow quarantine [list|add]</code></td>
-              <td>Isolate flaky tests from agent feedback loops into <code>.agents/quarantine.json</code></td>
-              <td><code>list</code>, <code>add &lt;test-id&gt;</code></td>
-            </tr>
+            <tr><td><code>.agents/monoflow.config.json</code></td><td>Discovered packages and dependency graph</td></tr>
+            <tr><td><code>AGENTS.md</code> · <code>.agents/rules/</code> · <code>.agents/skills/monoflow/</code></td><td>Instructions your agent loads automatically</td></tr>
+            <tr><td><code>.agents/task.json</code></td><td>Task boundaries: <code>allowed_paths</code>, <code>read_only_paths</code></td></tr>
+            <tr><td><code>.agents/quarantine.json</code></td><td>Flaky tests kept out of the feedback loop</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Commands -->
+    <section id="commands" class="wrap">
+      <h2>Commands</h2>
+      <p class="sub">Every command prints JSON. Run <code>monoflow</code> with no arguments for full usage.</p>
+      <input class="filter" id="cmd-filter" type="search" placeholder="Filter commands…" aria-label="Filter commands">
+      <div class="table-wrap">
+        <table class="cmds" id="cmd-table">
+          <thead><tr><th>Command</th><th>What it does</th></tr></thead>
+          <tbody>
+            <tr class="grp"><td colspan="2">Setup &amp; understanding</td></tr>
+            <tr><td><code>init [--setup-gh-actions]</code></td><td>Discover packages, write config and agent instructions, optionally add CI workflows</td></tr>
+            <tr><td><code>clone &lt;url&gt; [dest] --packages=…</code></td><td>Partial clone of the listed packages and their upstream dependencies</td></tr>
+            <tr><td><code>graph</code></td><td>Full dependency graph</td></tr>
+            <tr><td><code>graph query &lt;pkg&gt;</code></td><td>Upstream dependencies and downstream dependents of a package</td></tr>
+            <tr><td><code>graph impact &lt;file&gt;</code></td><td>Packages affected by changing a file</td></tr>
+            <tr><td><code>subset set|add|remove|update|deps|list|check|reset</code></td><td>Narrow the working copy to the packages a task needs, and check that their dependencies are present</td></tr>
+
+            <tr class="grp"><td colspan="2">Inner loop</td></tr>
+            <tr><td><code>verify --affected</code></td><td>Check affected packages in parallel and return JSON diagnostics, using the cache where possible</td></tr>
+            <tr><td><code>checkpoint save "msg" | revert [id] | list</code></td><td>Snapshot and restore the working tree without commits</td></tr>
+            <tr><td><code>cache status|clean|serve</code></td><td>Content-addressed package cache, with an optional HTTP server for shared use</td></tr>
+            <tr><td><code>quarantine list|add</code></td><td>Keep known-flaky tests out of agent feedback</td></tr>
+
+            <tr class="grp"><td colspan="2">Isolation</td></tr>
+            <tr><td><code>worktree create &lt;id&gt; --packages=…</code></td><td>Sparse worktree for one agent</td></tr>
+            <tr><td><code>worktree focus|add|remove|update|isolate</code></td><td>Change which packages a worktree contains, or give it fully isolated copies</td></tr>
+            <tr><td><code>worktree sync --to=B --from=A</code></td><td>Symbol-level merge between agents' worktrees</td></tr>
+            <tr><td><code>worktree finish &lt;id&gt; | gc</code></td><td>Remove a finished worktree, or clean up abandoned ones</td></tr>
+
+            <tr class="grp"><td colspan="2">Guardrails</td></tr>
+            <tr><td><code>task check</code></td><td>Make sure only allowed paths were changed</td></tr>
+            <tr><td><code>task prove &lt;id&gt;</code></td><td>Run definition-of-done checks, build the deliverable and write a proof receipt</td></tr>
+            <tr><td><code>verify --proof=&lt;id&gt;</code></td><td>Verify a proof receipt</td></tr>
+            <tr><td><code>task slice</code></td><td>Split a diff into stacked review tiers</td></tr>
+            <tr><td><code>guard check</code></td><td>Test integrity guard and secret scan</td></tr>
+            <tr><td><code>review risk|audit|throttle</code></td><td>Risk score (0–100), PR-description audit, and limits on PR volume when reviewers are overloaded</td></tr>
+
+            <tr class="grp"><td colspan="2">Git &amp; shipping</td></tr>
+            <tr><td><code>commit -m "…"</code></td><td>Commit after guard checks</td></tr>
+            <tr><td><code>branch [name|switch]</code> · <code>sync</code></td><td>Branch and pull while keeping the sparse checkout intact</td></tr>
+            <tr><td><code>push</code></td><td>Push (direct pushes to main are blocked) and start a background CI watcher</td></tr>
+            <tr><td><code>events unread|list|ack|clear</code></td><td>Inbox of CI results and other events, so agents never poll</td></tr>
+            <tr><td><code>pr create|list|view|test|local|review|merge</code></td><td>PRs with a risk tier, proof receipt and affected-package list</td></tr>
+            <tr><td><code>queue spec</code> · <code>ci check</code></td><td>Speculative local merge, and a signed receipt that lets CI take its fast path</td></tr>
+            <tr><td><code>outer start|status|wait</code></td><td>Run the slower full-dependency checks asynchronously</td></tr>
+
+            <tr class="grp"><td colspan="2">Build &amp; release</td></tr>
+            <tr><td><code>deliver [--target=…]</code></td><td>Build a self-contained deliverable into <code>.agents/dist</code></td></tr>
+            <tr><td><code>app test</code></td><td>Assemble the full app from changed packages plus cached builds</td></tr>
+            <tr><td><code>version list|bump|apply|check</code></td><td>SemVer changesets that cascade through dependents</td></tr>
+            <tr><td><code>scenario run [--json]</code></td><td>End-to-end multi-agent simulation on a temporary repo</td></tr>
           </tbody>
         </table>
       </div>
     </section>
   </main>
 
-  <!-- Footer -->
-  <footer class="footer">
-    <div class="container footer-inner">
-      <div style="display: flex; align-items: center; gap: 0.65rem;">
-        <span class="brand-glyph">⚡</span>
-        <span style="font-weight: 700; color: var(--text-primary);">monoflow</span>
-        <span>&bull; Go Systems Engine for Autonomous Agents</span>
-      </div>
-
-      <nav class="footer-nav">
-        <a href="https://github.com/M0xoo/monoflow" target="_blank" rel="noopener noreferrer">GitHub (M0xoo/monoflow)</a>
-        <a href="#demo-video">90s Video</a>
-        <a href="#workbench">Systems Console</a>
-        <a href="#benchmarks">Benchmarks</a>
-        <a href="#architecture">Architecture</a>
-        <a href="#cli">CLI Reference</a>
-      </nav>
-
-      <div>
-        <span>Apache 2.0 / MIT License &bull; Zero external runtime dependencies</span>
-      </div>
-    </div>
+  <footer class="wrap footer">
+    <span>MonoFlow · MIT License</span>
+    <a href="https://github.com/M0xoo/monoflow">github.com/M0xoo/monoflow</a>
   </footer>
 
-  <script src="app.js?v=20261010-v5"></script>
+  <script src="app.js"></script>
 </body>
 </html>
