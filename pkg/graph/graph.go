@@ -28,6 +28,7 @@ type PackageNode struct {
 	Name          string   `json:"name"`
 	Path          string   `json:"path"` // Relative to root
 	Language      Language `json:"language"`
+	Version       string   `json:"version,omitempty"`
 	Dependencies  []string `json:"dependencies"` // Upstream dependencies
 	TestCmd       string   `json:"test_cmd,omitempty"`
 	LintCmd       string   `json:"lint_cmd,omitempty"`

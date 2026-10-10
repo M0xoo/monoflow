@@ -413,5 +413,73 @@ func TestInspectDeps(t *testing.T) {
 	if report.RecommendedStrategy == "" {
 		t.Errorf("expected recommended strategy, got empty")
 	}
+	if report.Version == "" {
+		t.Errorf("expected version to be populated")
+	}
 }
+
+func TestStatusInNonSparseRepo(t *testing.T) {
+	repoDir := setupTestMonorepo(t)
+	defer os.RemoveAll(repoDir)
+
+	st, err := Status(repoDir)
+	if err != nil {
+		t.Fatalf("Status failed: %v", err)
+	}
+	if st.IsSparse {
+		t.Errorf("expected IsSparse=false in un-subsetted repo")
+	}
+	if st.TotalPackagesCount != 4 {
+		t.Errorf("expected TotalPackagesCount=4, got %d", st.TotalPackagesCount)
+	}
+	if len(st.IncludedPackages) != 4 {
+		t.Errorf("expected 4 included packages, got %d", len(st.IncludedPackages))
+	}
+}
+
+func TestCheckSubsetHealth(t *testing.T) {
+	repoDir := setupTestMonorepo(t)
+	defer os.RemoveAll(repoDir)
+
+	// 1. In full repo: healthy
+	health1, err := CheckSubsetHealth(repoDir)
+	if err != nil {
+		t.Fatalf("CheckSubsetHealth failed: %v", err)
+	}
+	if health1.Status != "healthy" {
+		t.Errorf("expected healthy in full repo, got %s", health1.Status)
+	}
+
+	// 2. In subset with source deps: billing + contracts + proto (healthy)
+	_, err = ApplyWithOptions(repoDir, []string{"billing"}, DepStrategySource)
+	if err != nil {
+		t.Fatalf("ApplyWithOptions failed: %v", err)
+	}
+
+	health2, err := CheckSubsetHealth(repoDir)
+	if err != nil {
+		t.Fatalf("CheckSubsetHealth failed: %v", err)
+	}
+	if health2.Status != "healthy" {
+		t.Errorf("expected healthy with source deps, got %s: %v", health2.Status, health2.MissingDependencies)
+	}
+
+	// 3. In subset with none deps: only billing, missing contracts & proto
+	_, err = ApplyWithOptions(repoDir, []string{"billing"}, DepStrategyNone)
+	if err != nil {
+		t.Fatalf("ApplyWithOptions failed: %v", err)
+	}
+
+	health3, err := CheckSubsetHealth(repoDir)
+	if err != nil {
+		t.Fatalf("CheckSubsetHealth failed: %v", err)
+	}
+	if health3.Status != "error" {
+		t.Errorf("expected error status when upstream dependencies omitted, got %s", health3.Status)
+	}
+	if len(health3.MissingDependencies) == 0 {
+		t.Errorf("expected missing dependencies reported")
+	}
+}
+
 

@@ -35,6 +35,7 @@ func (g *DependencyGraph) AutoDiscover() error {
 
 type npmPackageJSON struct {
 	Name            string            `json:"name"`
+	Version         string            `json:"version,omitempty"`
 	Workspaces      any               `json:"workspaces"`
 	Dependencies    map[string]string `json:"dependencies"`
 	DevDependencies map[string]string `json:"devDependencies"`
@@ -119,11 +120,17 @@ func (g *DependencyGraph) discoverNodeWorkspaces() {
 						}
 					}
 
+					ver := p.Version
+					if ver == "" {
+						ver = "1.0.0"
+					}
+
 					rel, _ := filepath.Rel(g.RootDir, dir)
 					g.AddPackage(&PackageNode{
 						Name:         name,
 						Path:         rel,
 						Language:     LangTypeScript,
+						Version:      ver,
 						Dependencies: deps,
 						TestCmd:      testCmd,
 						LintCmd:      lintCmd,
@@ -169,6 +176,7 @@ func (g *DependencyGraph) discoverCargoWorkspaces() {
 							Name:         name,
 							Path:         rel,
 							Language:     LangRust,
+							Version:      "1.0.0",
 							TestCmd:      "cargo test -p " + name,
 							LintCmd:      "cargo clippy -p " + name,
 							TypecheckCmd: "cargo check -p " + name,
@@ -204,6 +212,7 @@ func (g *DependencyGraph) discoverGoModules() {
 						Name:         name,
 						Path:         rel,
 						Language:     LangGo,
+						Version:      "1.0.0",
 						TestCmd:      "go test -v ./...",
 						LintCmd:      "go vet ./...",
 						TypecheckCmd: "go build ./...",
@@ -241,6 +250,7 @@ func (g *DependencyGraph) discoverPythonPackages() {
 					Name:         name,
 					Path:         rel,
 					Language:     LangPython,
+					Version:      "1.0.0",
 					TestCmd:      "pytest",
 					LintCmd:      "ruff check .",
 					TypecheckCmd: "mypy .",
@@ -258,6 +268,7 @@ func (g *DependencyGraph) discoverContracts() {
 			Name:     "contracts",
 			Path:     rel,
 			Language: LangProto,
+			Version:  "1.0.0",
 		})
 	}
 }
@@ -278,6 +289,7 @@ func (g *DependencyGraph) discoverByDirectoryHeuristic() {
 					Name:     name,
 					Path:     rel,
 					Language: LangGeneric,
+					Version:  "1.0.0",
 				})
 			}
 		}
