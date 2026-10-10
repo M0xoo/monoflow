@@ -12,6 +12,7 @@ import (
 
 	"github.com/antigravity/monoflow/pkg/cache"
 	"github.com/antigravity/monoflow/pkg/checkpoint"
+	"github.com/antigravity/monoflow/pkg/cihealth"
 	"github.com/antigravity/monoflow/pkg/deliver"
 	"github.com/antigravity/monoflow/pkg/events"
 	"github.com/antigravity/monoflow/pkg/graph"
@@ -147,7 +148,7 @@ Usage:
   monoflow events [unread|list|ack]   Asynchronous agent event inbox (check in < 5ms without polling)
   monoflow review [risk|audit|throttle] Machine risk scoring, anti-hallucination & backpressure
   monoflow queue [spec|verify]        Speculative local merge queue with flaky quarantine
-  monoflow ci [check]                 Two-tier CI gate: Tier 1 fast-path (<30s) vs Tier 2 full
+  monoflow ci [check|watch|health]    Two-tier CI gate, CI watcher & CI health history (when/which commit broke a check)
   monoflow commit -m "<msg>"          Sub-50ms verified agent commit bypassing slow hooks
   monoflow guard [check]              Test integrity guard (anti-cheating) & secret scanner
   monoflow task [check|prove|slice]   DoD contracts, Proof of Work receipts, & stacked diffs
@@ -1221,6 +1222,10 @@ func handleQueue(rootDir string) {
 }
 
 func handleCI(rootDir string) {
+	if len(os.Args) > 2 && os.Args[2] == "health" {
+		handleCIHealth(rootDir)
+		return
+	}
 	if len(os.Args) > 2 && os.Args[2] == "watch" {
 		cw := events.NewCIWatcher(rootDir)
 		opts := events.WatchOptions{
@@ -1273,6 +1278,52 @@ func handleCI(rootDir string) {
 		"receipt":            receipt,
 	}, "", "  ")
 	fmt.Println(string(data))
+}
+
+func handleCIHealth(rootDir string) {
+	collectOpts := cihealth.CollectOptions{Limit: 100}
+	checkFilter := ""
+	withLogs := false
+	for _, arg := range os.Args[3:] {
+		switch {
+		case strings.HasPrefix(arg, "--branch="):
+			collectOpts.Branch = strings.TrimPrefix(arg, "--branch=")
+		case strings.HasPrefix(arg, "--workflow="):
+			collectOpts.Workflow = strings.TrimPrefix(arg, "--workflow=")
+		case strings.HasPrefix(arg, "--limit="):
+			if n, err := strconv.Atoi(strings.TrimPrefix(arg, "--limit=")); err == nil && n > 0 {
+				collectOpts.Limit = n
+			}
+		case strings.HasPrefix(arg, "--check="):
+			checkFilter = strings.TrimPrefix(arg, "--check=")
+		case arg == "--logs":
+			withLogs = true
+		}
+	}
+	if collectOpts.Branch == "" {
+		collectOpts.Branch = "main"
+		cmdHead := exec.Command("git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
+		cmdHead.Dir = rootDir
+		if out, err := cmdHead.Output(); err == nil {
+			if b := strings.TrimPrefix(strings.TrimSpace(string(out)), "origin/"); b != "" {
+				collectOpts.Branch = b
+			}
+		}
+	}
+
+	src := cihealth.NewGHSource(rootDir)
+	data, warnings, err := cihealth.Collect(src, collectOpts)
+	if err != nil {
+		errData, _ := json.Marshal(map[string]string{"error": err.Error(), "branch": collectOpts.Branch})
+		fmt.Println(string(errData))
+		os.Exit(1)
+	}
+	rep := cihealth.Analyze(data, cihealth.Options{Branch: collectOpts.Branch, CheckFilter: checkFilter})
+	rep.Warnings = append(warnings, rep.Warnings...)
+	cihealth.Enrich(rep, src, cihealth.EnrichOptions{RootDir: rootDir, Logs: withLogs})
+
+	out, _ := json.MarshalIndent(rep, "", "  ")
+	fmt.Println(string(out))
 }
 
 func handleCommit(rootDir string) {

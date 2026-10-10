@@ -51,6 +51,7 @@ Follow these strict rules to keep execution fast, prevent context blowup, and av
   - After `monoflow push` or `monoflow pr create`, query `.agents/events/` in < 5ms via `monoflow events unread`.
   - **Immediately end your turn** or proceed with other independent work.
   - The runtime messaging system will automatically resume your execution with a high-priority notification when remote CI passes or fails.
+* **When CI is red**, start with `monoflow ci health` (add `--check=<name> --logs` to focus) instead of reading GitHub run/job APIs one by one: it reports when each check started failing, the breaking commit range, the fixing commit of earlier incidents, recurrences and flakiness.
 
 ## 9. Agents Must Default to Isolated Worktrees
 * **STRICT ISOLATION CONTRACT**: Autonomous agents must NEVER develop directly in the shared repository root (`.`) when concurrent agents or humans may be operating.
