@@ -1435,9 +1435,13 @@ input[type="range"]::-webkit-slider-thumb {
             <button class="wb-tab active" data-target="cli">⚡ Interactive CLI</button>
             <button class="wb-tab" data-target="ast">🧬 AST Synthesizer</button>
             <button class="wb-tab" data-target="cow">📂 CoW Worktrees</button>
+            <button class="wb-tab" data-target="cache">💾 Package Cache</button>
+            <button class="wb-tab" data-target="version">📦 SemVer Changesets</button>
+            <button class="wb-tab" data-target="events">⚡ Async Event Bus</button>
             <button class="wb-tab" data-target="audit">🛡️ Slop Auditor</button>
             <button class="wb-tab" data-target="queue">🔀 Speculative Queue</button>
             <button class="wb-tab" data-target="pow">📜 1s PoW Receipt</button>
+            <button class="wb-tab" data-target="scenario">🏢 Swarm Scenario</button>
           </div>
           <div class="workbench-meta">
             <span class="status-indicator">ENGINE RUNNING</span>
@@ -1600,6 +1604,76 @@ input[type="range"]::-webkit-slider-thumb {
             </div>
           </div>
         </div>
+
+        <!-- Box 5 -->
+        <div class="benchmark-box">
+          <div class="benchmark-box-title">
+            <h4>Package Cache Verification Hit</h4>
+            <span>LOWER IS BETTER</span>
+          </div>
+          <div class="bar-row">
+            <div class="bar-meta">
+              <span class="tool-name">⚡ MonoFlow (Content-Addressable Cache)</span>
+              <span class="tool-timing c-emerald">0.80 ms</span>
+            </div>
+            <div class="bar-track">
+              <div class="bar-fill monoflow" style="width: 1%;"></div>
+            </div>
+          </div>
+          <div class="bar-row">
+            <div class="bar-meta">
+              <span class="tool-name">Turborepo / Nx (Local cache hit)</span>
+              <span class="tool-timing">680 ms</span>
+            </div>
+            <div class="bar-track">
+              <div class="bar-fill legacy" style="width: 25%;"></div>
+            </div>
+          </div>
+          <div class="bar-row">
+            <div class="bar-meta">
+              <span class="tool-name">Full Package Retest Suite</span>
+              <span class="tool-timing">28,400 ms</span>
+            </div>
+            <div class="bar-track">
+              <div class="bar-fill legacy" style="width: 100%;"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Box 6 -->
+        <div class="benchmark-box">
+          <div class="benchmark-box-title">
+            <h4>Sparse Remote Subset Sync</h4>
+            <span>LOWER IS BETTER</span>
+          </div>
+          <div class="bar-row">
+            <div class="bar-meta">
+              <span class="tool-name">⚡ MonoFlow (Sparse-aware fast-forward)</span>
+              <span class="tool-timing c-amber">58.2 ms</span>
+            </div>
+            <div class="bar-track">
+              <div class="bar-fill monoflow" style="width: 2%;"></div>
+            </div>
+          </div>
+          <div class="bar-row">
+            <div class="bar-meta">
+              <span class="tool-name">Git Native (fetch + sparse re-cone)</span>
+              <span class="tool-timing">4,500 ms</span>
+            </div>
+            <div class="bar-track">
+              <div class="bar-fill legacy" style="width: 32%;"></div>
+            </div>
+          </div>
+          <div class="bar-row">
+            <div class="bar-meta">
+              <span class="tool-name">Full Monorepo Checkout &amp; Pull</span>
+              <span class="tool-timing">24,800 ms</span>
+            </div>
+            <div class="bar-track">
+              <div class="bar-fill legacy" style="width: 100%;"></div>
+            </div>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -1693,6 +1767,48 @@ input[type="range"]::-webkit-slider-thumb {
             <span class="subsystem-chip">Topological Rebase</span>
             <span class="subsystem-chip">SHA-256 Tree Sig</span>
             <span class="subsystem-chip">Two-Tier Gate</span>
+          </div>
+        </div>
+
+        <!-- Subsystem 7 -->
+        <div class="subsystem-card">
+          <div class="subsystem-num">07 / PACKAGE CACHE</div>
+          <h3 class="subsystem-title">Deterministic Caching &amp; Daemon</h3>
+          <p class="subsystem-body">
+            Content-addressable cache keys computed over source trees, toolchain versions, and dependencies. Delivers sub-millisecond inner loop test verification hits (&lt; 1ms) and provides a zero-dependency HTTP daemon for distributed swarm and CI cache sharing.
+          </p>
+          <div class="subsystem-chip-row">
+            <span class="subsystem-chip">Deterministic Keying</span>
+            <span class="subsystem-chip">Sub-1ms Verify</span>
+            <span class="subsystem-chip">HTTP Cache Server</span>
+          </div>
+        </div>
+
+        <!-- Subsystem 8 -->
+        <div class="subsystem-card">
+          <div class="subsystem-num">08 / VERSIONING</div>
+          <h3 class="subsystem-title">SemVer Changesets &amp; Health</h3>
+          <p class="subsystem-body">
+            Automated multi-package SemVer versioning with declarative changesets. Cascades version increments across topological DAG dependents, syncs polyglot manifests, and verifies transitive dependency integrity in sparse checkouts.
+          </p>
+          <div class="subsystem-chip-row">
+            <span class="subsystem-chip">SemVer Cascade</span>
+            <span class="subsystem-chip">Polyglot Manifests</span>
+            <span class="subsystem-chip">Subset Health Check</span>
+          </div>
+        </div>
+
+        <!-- Subsystem 9 -->
+        <div class="subsystem-card">
+          <div class="subsystem-num">09 / ASYNC EVENT BUS</div>
+          <h3 class="subsystem-title">Fire-and-Forget Push &amp; Supervisor</h3>
+          <p class="subsystem-body">
+            Non-blocking reactive communication model. Agents push code and immediately resume development while autonomous background supervisors track remote GitHub Actions runs and deliver event notifications in &lt; 5ms without polling.
+          </p>
+          <div class="subsystem-chip-row">
+            <span class="subsystem-chip">Fire-and-Forget Push</span>
+            <span class="subsystem-chip">Autonomous CI Watcher</span>
+            <span class="subsystem-chip">Zero-Token Inbox</span>
           </div>
         </div>
       </div>
