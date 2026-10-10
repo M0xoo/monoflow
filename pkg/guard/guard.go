@@ -124,9 +124,9 @@ func CheckTestIntegrity(rootDir string) ([]IntegrityViolation, error) {
 	diffText := string(out)
 	var violations []IntegrityViolation
 
-	deletedAssertRegex := regexp.MustCompile(`^-\s*(expect\(|assert\s+|assert\.|self\.assert|assertEquals|assert_eq!)`)
+	deletedAssertRegex := regexp.MustCompile(`^-\s*(expect\(|assert\s+|assert\.|self\.assert|assertEquals|assert_eq!|t\.(Fatal|Error|Fail))`)
 	tautologicalRegex := regexp.MustCompile(`\+\s*(expect\(true\)\.toBe\(true\)|assert\s+True|assert\s+1\s*==\s*1)`)
-	commentedAssertRegex := regexp.MustCompile(`\+\s*(//|#|/\*)\s*(expect\(|assert|it\(|test\()`)
+	commentedAssertRegex := regexp.MustCompile(`\+\s*(//|#|/\*)\s*(expect\(|assert|it\(|test\(|t\.(Fatal|Error|Fail))`)
 
 	lines := strings.Split(diffText, "\n")
 	currentFile := ""
