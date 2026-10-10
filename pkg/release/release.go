@@ -210,7 +210,7 @@ func Repoint(root string, g *graph.DependencyGraph, consumer, dep, version strin
 		// Go merges the replace directives of all go.work members, so a module that pins a
 		// release cannot stay in the workspace (it builds standalone, GOWORK=off).
 		setGoWorkMember(root, c.Path, version == "")
-		return repointGo(cdir, root, d, rel, version)
+		return repointGo(cdir, root, d, rel)
 	case graph.LangJavaScript, graph.LangTypeScript:
 		return repointNPM(cdir, root, d.Name, rel, version)
 	case graph.LangRust:
@@ -221,7 +221,7 @@ func Repoint(root string, g *graph.DependencyGraph, consumer, dep, version strin
 	return "", fmt.Errorf("pinning is not supported for %s packages", c.Language)
 }
 
-func repointGo(cdir, root string, d *graph.PackageNode, rel, version string) (string, error) {
+func repointGo(cdir, root string, d *graph.PackageNode, rel string) (string, error) {
 	gomod := filepath.Join(cdir, "go.mod")
 	data, err := os.ReadFile(gomod)
 	if err != nil {
@@ -239,10 +239,8 @@ func repointGo(cdir, root string, d *graph.PackageNode, rel, version string) (st
 	} else {
 		s = strings.TrimRight(s, "\n") + "\n\nreplace " + modPath + " => " + rel + "\n"
 	}
-	if version != "" {
-		req := regexp.MustCompile(`(?m)^(\s*(?:require\s+)?` + regexp.QuoteMeta(modPath) + `\s+)v[^\s]+`)
-		s = req.ReplaceAllString(s, "${1}v"+version)
-	}
+	// The require version is left alone: the replace target (…/<slug>@<version>/…) selects
+	// the code, and Go rejects v2+ requires for module paths without a /vN suffix.
 	return gomod, os.WriteFile(gomod, []byte(s), 0644)
 }
 

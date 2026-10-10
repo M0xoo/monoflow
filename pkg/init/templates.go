@@ -36,6 +36,16 @@ remote CI stays green. Run it as ` + "`" + `.agents/bin/monoflow` + "`" + ` (als
 | ` + "`" + `gh pr create` + "`" + ` | ` + "`" + `monoflow pr create` + "`" + ` |
 | polling ` + "`" + `gh run watch` + "`" + ` / ` + "`" + `gh pr checks` + "`" + ` | ` + "`" + `monoflow events unread` + "`" + ` once, then stop |
 
+## Versions between packages
+Each in-repo dependency is ` + "`" + `source` + "`" + ` (builds against the live code) or ` + "`" + `pinned` + "`" + ` (builds against an
+internal release, isolated from later changes): ` + "`" + `monoflow version edges` + "`" + `.
+* Changing a package only re-verifies its ` + "`" + `source` + "`" + ` consumers. If ` + "`" + `verify --affected` + "`" + ` fails in one of them,
+  migrate it in the same change, or add the new API next to the old one (deprecate, migrate later).
+* ` + "`" + `monoflow version suggest <pkg>` + "`" + ` gives the bump your change requires (removed/changed export = major).
+* Pinned consumers are notified of releases (DEPENDENCY_RELEASED). ` + "`" + `monoflow version upgrades` + "`" + ` lists them;
+  ` + "`" + `monoflow version upgrade <consumer> <dep>` + "`" + ` moves the pin and runs the consumer's checks.
+* ` + "`" + `monoflow version pin|unpin <consumer> <dep>` + "`" + ` decouples a consumer from / recouples it to the live code.
+
 Task boundaries: ` + "`" + `.agents/task.json` + "`" + ` (` + "`" + `read_only_paths` + "`" + ` must not be edited); check with ` + "`" + `monoflow task check` + "`" + `.
 `
 
