@@ -8,5 +8,8 @@ build:
 test:
 	go test -v ./...
 
+e2e: build
+	./bin/monoflow scenario run
+
 clean:
 	rm -rf bin/monoflow

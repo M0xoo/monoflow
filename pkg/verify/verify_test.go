@@ -2,7 +2,10 @@ package verify
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
+
+	"github.com/antigravity/monoflow/pkg/graph"
 )
 
 func TestStripANSI(t *testing.T) {
@@ -101,5 +104,53 @@ func TestQuarantineFlakyTest(t *testing.T) {
 
 	if qm.IsQuarantined("services/billing/test_tax.py:test_healthy_calculation") {
 		t.Errorf("unexpected quarantine match for healthy test")
+	}
+}
+
+func TestVerifyCachingFastIterativeLoop(t *testing.T) {
+	temp := t.TempDir()
+	pkgDir := filepath.Join(temp, "services", "billing")
+	_ = os.MkdirAll(pkgDir, 0755)
+	testFile := filepath.Join(pkgDir, "test.sh")
+	_ = os.WriteFile(testFile, []byte("#!/bin/sh\necho 'running unit test'\nexit 0\n"), 0755)
+
+	pkg := &graph.PackageNode{
+		Name:     "services/billing",
+		Path:     "services/billing",
+		Language: graph.LangTypeScript,
+		TestCmd:  "sh test.sh",
+	}
+
+	runner := NewRunner(temp)
+
+	// 1. Initial run: Cache Miss -> Command executed
+	res1 := runner.VerifyTarget(pkg, VerifyOptions{Mode: "test"})
+	if res1.Status != "passed" {
+		t.Fatalf("res1 expected passed, got %s: %+v", res1.Status, res1.Errors)
+	}
+	if res1.Cached {
+		t.Errorf("res1 expected Cached=false on first run")
+	}
+
+	// 2. Second run: Cache HIT -> returns in < 1ms
+	res2 := runner.VerifyTarget(pkg, VerifyOptions{Mode: "test"})
+	if res2.Status != "passed" {
+		t.Fatalf("res2 expected passed")
+	}
+	if !res2.Cached {
+		t.Errorf("res2 expected Cached=true on repeat run with unchanged code")
+	}
+
+	// 3. Force bypass cache: NoCache=true
+	res3 := runner.VerifyTarget(pkg, VerifyOptions{Mode: "test", NoCache: true})
+	if res3.Cached {
+		t.Errorf("res3 expected Cached=false when NoCache is true")
+	}
+
+	// 4. Modify test file -> Cache invalidated!
+	_ = os.WriteFile(testFile, []byte("#!/bin/sh\necho 'running modified unit test'\nexit 0\n"), 0755)
+	res4 := runner.VerifyTarget(pkg, VerifyOptions{Mode: "test"})
+	if res4.Cached {
+		t.Errorf("res4 expected Cached=false after code modification")
 	}
 }

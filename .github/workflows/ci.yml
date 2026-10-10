@@ -33,3 +33,6 @@ jobs:
 
       - name: Build Binary
         run: make build
+
+      - name: Run E2E Multi-Agent Scenario
+        run: ./bin/monoflow scenario run
