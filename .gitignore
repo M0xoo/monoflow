@@ -1,0 +1,26 @@
+# Binaries
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test and coverage artifacts
+*.test
+*.out
+coverage.html
+
+# Ephemeral MonoFlow state
+.agents/worktrees/
+.agents/traces/
+.agents/dist/
+.agents/checkpoints.json
+.agents/proofs/
+.agents/changesets/
+
+# OS and Editor metadata
+.DS_Store
+.idea/
+.vscode/
+*.swp
