@@ -138,6 +138,17 @@ func (m *Manager) CreateWithOpts(agentID string, opts CreateOptions) (*WorktreeI
 
 	_ = copyFile(filepath.Join(agentsSrc, "monoflow.config.json"), filepath.Join(agentsDest, "monoflow.config.json"))
 	_ = copyFile(filepath.Join(agentsSrc, "task.json"), filepath.Join(agentsDest, "task.json"))
+
+	// Propagate local uncommitted environment & config files (.env, .env.local, .env.test)
+	// to prevent agents from hallucinating missing environment variables
+	envCandidates := []string{".env", ".env.local", ".env.test", ".env.development", "local.config.json"}
+	for _, envFile := range envCandidates {
+		srcEnv := filepath.Join(m.RootDir, envFile)
+		dstEnv := filepath.Join(wtPath, envFile)
+		if fileExists(srcEnv) && !fileExists(dstEnv) {
+			_ = copyFile(srcEnv, dstEnv)
+		}
+	}
 	if binSrc := filepath.Join(agentsSrc, "bin", "monoflow"); fileExists(binSrc) {
 		_ = os.MkdirAll(filepath.Join(agentsDest, "bin"), 0755)
 		_ = copyFile(binSrc, filepath.Join(agentsDest, "bin", "monoflow"))

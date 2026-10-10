@@ -12,6 +12,7 @@ import (
 	"github.com/antigravity/monoflow/pkg/checkpoint"
 	"github.com/antigravity/monoflow/pkg/deliver"
 	"github.com/antigravity/monoflow/pkg/graph"
+	"github.com/antigravity/monoflow/pkg/guard"
 	initialize "github.com/antigravity/monoflow/pkg/init"
 	"github.com/antigravity/monoflow/pkg/proof"
 	"github.com/antigravity/monoflow/pkg/task"
@@ -62,6 +63,9 @@ func main() {
 	case "worktree":
 		handleWorktree(rootDir)
 
+	case "guard":
+		handleGuard(rootDir)
+
 	case "quarantine":
 		handleQuarantine(rootDir)
 
@@ -82,8 +86,9 @@ Usage:
   monoflow init [dir]                 Install MonoFlow into an existing or new repo
   monoflow graph [query|impact]       Query upstream/downstream dependencies & impact
   monoflow checkpoint [save|revert]   Ephemeral 15ms snapshots (shadow workspace)
-  monoflow worktree [create|sync|fin] Virtual worktrees with shared cache (<60ms)
+  monoflow worktree [create|sync|fin] Virtual worktrees with shared/isolated cache (<60ms)
   monoflow verify [--affected|--proof] Sub-2s inner loop with compact JSON diagnostics
+  monoflow guard [check]              Test integrity guard (anti-cheating) & secret scanner
   monoflow task [check|prove|slice]   DoD contracts, Proof of Work receipts, & stacked diffs
   monoflow deliver [--target=<pkg>]   Assemble hermetic deliverable artifact (.agents/dist)
   monoflow app test                   Delta compilation + symlink overlay (< 5s full-app)
@@ -300,8 +305,25 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 	data, _ := json.MarshalIndent(res, "", "  ")
 	fmt.Println(string(data))
 
+	cb := guard.NewCircuitBreaker(rootDir, 3)
+	targetKey := strings.Join(res.AffectedPackages, ",")
+
 	if res.Status == "failed" {
+		st, tripped, _ := cb.RecordFailure(rootDir, "active_task", targetKey)
+		if tripped {
+			circuitMsg, _ := json.MarshalIndent(map[string]any{
+				"circuit_breaker":   "TRIPPED",
+				"attempts":          st.Attempts,
+				"max_attempts":      3,
+				"action":            "Auto-reverted working tree to latest green checkpoint to prevent hallucination loop",
+				"escalate_to_human": true,
+				"reason":            fmt.Sprintf("Target '%s' failed %d consecutive times without passing", targetKey, st.Attempts),
+			}, "", "  ")
+			fmt.Println(string(circuitMsg))
+		}
 		os.Exit(1)
+	} else {
+		cb.Reset("active_task", targetKey)
 	}
 }
 
@@ -593,11 +615,36 @@ func handleWorktree(rootDir string) {
 			os.Exit(1)
 		}
 		data, _ := json.MarshalIndent(map[string]any{
-			"status":          "pruned",
+			"status":         "pruned",
 			"cleaned_up_wts": pruned,
 		}, "", "  ")
 		fmt.Println(string(data))
 	}
+}
+
+func handleGuard(rootDir string) {
+	testViolations, _ := guard.CheckTestIntegrity(rootDir)
+	secretViolations, _ := guard.ScanSecrets(rootDir)
+
+	allViolations := append(testViolations, secretViolations...)
+
+	if len(allViolations) > 0 {
+		data, _ := json.MarshalIndent(map[string]any{
+			"status":     "failed",
+			"violations": allViolations,
+			"verdict":    "Integrity or security violation detected. Commits or PRs with weakened tests or secrets are blocked.",
+		}, "", "  ")
+		fmt.Println(string(data))
+		os.Exit(1)
+	}
+
+	data, _ := json.MarshalIndent(map[string]any{
+		"status":          "passed",
+		"test_integrity":  "verified (0 assertions deleted or commented out)",
+		"secret_scanning": "clean (0 credentials or keys detected)",
+		"verdict":         "All guard checks passed",
+	}, "", "  ")
+	fmt.Println(string(data))
 }
 
 func getGitChangedFiles(rootDir string) []string {

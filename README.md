@@ -146,6 +146,16 @@ Test your PR against a rapidly moving master branch in seconds:
   ```
 * Runs the full integration test on top of live master in **~2.4 seconds**.
 
+### 6. Anti-Cheating Test Guard & Secret Scanner
+Agents frequently attempt to make CI green by deleting failing assertions, commenting out tests, or inserting hollow assertions like `expect(true).toBe(true)`.
+* **Test Integrity Guard:** Rejects any diff where existing test assertions were weakened, deleted, or mocked away.
+* **Secret Scanner:** Scans diffs for AWS keys, private keys, or API tokens before creating commits or proof receipts.
+
+### 7. Runaway Loop Circuit Breaker
+Prevents agents from burning $50 in API tokens and spinning in infinite self-healing loops:
+* Caps self-correction attempts at 3 iterations.
+* If attempt 3 fails, MonoFlow **auto-reverts to the latest green checkpoint** and emits a structured Human Escalation payload.
+
 ---
 
 ## 📖 CLI Reference
@@ -164,6 +174,7 @@ Test your PR against a rapidly moving master branch in seconds:
 | `monoflow worktree finish <id>` | Harvest diff, remove worktree & prune Git records | ~27ms |
 | `monoflow verify --affected` | Run affected inner loop with token-compact JSON output | < 300ms |
 | `monoflow verify --proof=<id>` | **1-Second Reviewer Verification** | **< 1ms** |
+| `monoflow guard check` | Check test integrity (anti-cheating) & scan for secrets | ~15ms |
 | `monoflow task check` | Enforce task boundary contracts (`allowed_paths`) | ~5ms |
 | `monoflow task prove <id>` | Run DoD checks, build deliverable, and emit PoW receipt | ~260ms |
 | `monoflow task slice` | Slices worktree diff into stacked PR tiers (Types $\to$ Logic $\to$ Tests) | ~5ms |

@@ -11,6 +11,7 @@ import (
 
 	"github.com/antigravity/monoflow/pkg/deliver"
 	"github.com/antigravity/monoflow/pkg/graph"
+	"github.com/antigravity/monoflow/pkg/guard"
 	"github.com/antigravity/monoflow/pkg/task"
 	"github.com/antigravity/monoflow/pkg/verify"
 )
@@ -71,7 +72,36 @@ func ProveTask(rootDir string, taskID string, g *graph.DependencyGraph, modified
 		})
 	}
 
-	// 2. Affected Inner Loop Verification
+	// 2. Test Integrity & Secret Leak Guard (Anti-Cheating & Security)
+	gStart := time.Now()
+	testViolations, _ := guard.CheckTestIntegrity(rootDir)
+	secretViolations, _ := guard.ScanSecrets(rootDir)
+	guardViolations := append(testViolations, secretViolations...)
+	gDur := float64(time.Since(gStart).Microseconds()) / 1000.0
+
+	if len(guardViolations) == 0 {
+		dodItems = append(dodItems, DoDItem{
+			ID:          "DoD-Guard",
+			Description: "Test Integrity & Secret Scanning",
+			Status:      "PASSED",
+			DurationMs:  gDur,
+			Evidence:    "0 assertions weakened or deleted; 0 secrets or API keys detected",
+		})
+	} else {
+		var msgs []string
+		for _, v := range guardViolations {
+			msgs = append(msgs, fmt.Sprintf("[%s] %s: %s", v.Severity, v.File, v.Message))
+		}
+		dodItems = append(dodItems, DoDItem{
+			ID:          "DoD-Guard",
+			Description: "Test Integrity & Secret Scanning",
+			Status:      "FAILED",
+			DurationMs:  gDur,
+			Evidence:    strings.Join(msgs, "; "),
+		})
+	}
+
+	// 3. Affected Inner Loop Verification
 	vStart := time.Now()
 	runner := verify.NewRunner(rootDir)
 	suiteRes := runner.VerifyAffected(g, modifiedFiles, verify.VerifyOptions{})

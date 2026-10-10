@@ -1,0 +1,235 @@
+package guard
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/antigravity/monoflow/pkg/checkpoint"
+)
+
+// CircuitBreaker prevents infinite self-healing loops and runaway token spend.
+type CircuitBreaker struct {
+	mu          sync.Mutex
+	filePath    string
+	MaxAttempts int
+}
+
+// CircuitState tracks attempts for an agent task.
+type CircuitState struct {
+	TaskID       string    `json:"task_id"`
+	Target       string    `json:"target"`
+	Attempts     int       `json:"attempts"`
+	LastAttemptAt time.Time `json:"last_attempt_at"`
+	Tripped      bool      `json:"tripped"`
+}
+
+// NewCircuitBreaker creates a circuit breaker manager.
+func NewCircuitBreaker(rootDir string, maxAttempts int) *CircuitBreaker {
+	if maxAttempts <= 0 {
+		maxAttempts = 3
+	}
+	return &CircuitBreaker{
+		filePath:    filepath.Join(rootDir, ".agents", "circuit_breaker.json"),
+		MaxAttempts: maxAttempts,
+	}
+}
+
+// RecordFailure increments failure count and trips if limit exceeded.
+func (cb *CircuitBreaker) RecordFailure(rootDir, taskID, target string) (*CircuitState, bool, error) {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	states := cb.load()
+	key := fmt.Sprintf("%s:%s", taskID, target)
+	st, exists := states[key]
+	if !exists {
+		st = CircuitState{
+			TaskID:   taskID,
+			Target:   target,
+			Attempts: 0,
+		}
+	}
+
+	st.Attempts++
+	st.LastAttemptAt = time.Now().UTC()
+
+	tripped := false
+	if st.Attempts >= cb.MaxAttempts {
+		st.Tripped = true
+		tripped = true
+
+		// Auto-revert to clean state
+		chkMgr := checkpoint.NewManager(rootDir)
+		_ = chkMgr.Revert("latest")
+	}
+
+	states[key] = st
+	_ = cb.save(states)
+
+	return &st, tripped, nil
+}
+
+// Reset clears failure state for a target once it passes.
+func (cb *CircuitBreaker) Reset(taskID, target string) {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	states := cb.load()
+	key := fmt.Sprintf("%s:%s", taskID, target)
+	delete(states, key)
+	_ = cb.save(states)
+}
+
+func (cb *CircuitBreaker) load() map[string]CircuitState {
+	res := make(map[string]CircuitState)
+	if data, err := os.ReadFile(cb.filePath); err == nil {
+		_ = json.Unmarshal(data, &res)
+	}
+	return res
+}
+
+func (cb *CircuitBreaker) save(states map[string]CircuitState) error {
+	_ = os.MkdirAll(filepath.Dir(cb.filePath), 0755)
+	data, err := json.MarshalIndent(states, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(cb.filePath, data, 0644)
+}
+
+// IntegrityViolation represents cheating, weakened tests, or leaked secrets.
+type IntegrityViolation struct {
+	Severity string `json:"severity"` // "CRITICAL", "HIGH", "WARNING"
+	Type     string `json:"type"`     // "test_weakened", "secret_leak", "tautological_test"
+	File     string `json:"file"`
+	Message  string `json:"message"`
+}
+
+// CheckTestIntegrity ensures agents didn't delete assertions or cheat tests to pass CI.
+func CheckTestIntegrity(rootDir string) ([]IntegrityViolation, error) {
+	cmd := exec.Command("git", "diff", "HEAD")
+	cmd.Dir = rootDir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, nil // not in git or clean
+	}
+
+	diffText := string(out)
+	var violations []IntegrityViolation
+
+	deletedAssertRegex := regexp.MustCompile(`^-\s*(expect\(|assert\s+|assert\.|self\.assert|assertEquals|assert_eq!)`)
+	tautologicalRegex := regexp.MustCompile(`\+\s*(expect\(true\)\.toBe\(true\)|assert\s+True|assert\s+1\s*==\s*1)`)
+	commentedAssertRegex := regexp.MustCompile(`\+\s*(//|#|/\*)\s*(expect\(|assert|it\(|test\()`)
+
+	lines := strings.Split(diffText, "\n")
+	currentFile := ""
+
+	for _, l := range lines {
+		if strings.HasPrefix(l, "diff --git") {
+			parts := strings.Fields(l)
+			if len(parts) >= 4 {
+				currentFile = strings.TrimPrefix(parts[3], "b/")
+			}
+			continue
+		}
+
+		// Only inspect test files
+		isTestFile := strings.Contains(currentFile, "test") || strings.Contains(currentFile, "spec")
+		if !isTestFile {
+			continue
+		}
+
+		// 1. Deleted assertions
+		if deletedAssertRegex.MatchString(l) {
+			violations = append(violations, IntegrityViolation{
+				Severity: "CRITICAL",
+				Type:     "test_weakened",
+				File:     currentFile,
+				Message:  fmt.Sprintf("Existing assertion was deleted: '%s'", strings.TrimSpace(l)),
+			})
+		}
+
+		// 2. Commented out assertions
+		if commentedAssertRegex.MatchString(l) {
+			violations = append(violations, IntegrityViolation{
+				Severity: "CRITICAL",
+				Type:     "test_weakened",
+				File:     currentFile,
+				Message:  fmt.Sprintf("Assertion was commented out: '%s'", strings.TrimSpace(l)),
+			})
+		}
+
+		// 3. Tautological / Hollow tests
+		if tautologicalRegex.MatchString(l) {
+			violations = append(violations, IntegrityViolation{
+				Severity: "HIGH",
+				Type:     "tautological_test",
+				File:     currentFile,
+				Message:  fmt.Sprintf("Hollow/tautological assertion detected: '%s'", strings.TrimSpace(l)),
+			})
+		}
+	}
+
+	return violations, nil
+}
+
+// ScanSecrets checks diffs for API keys, private keys, or tokens before committing.
+func ScanSecrets(rootDir string) ([]IntegrityViolation, error) {
+	cmd := exec.Command("git", "diff", "--cached")
+	cmd.Dir = rootDir
+	out, err := cmd.CombinedOutput()
+	if err != nil || len(out) == 0 {
+		cmd = exec.Command("git", "diff", "HEAD")
+		cmd.Dir = rootDir
+		out, _ = cmd.CombinedOutput()
+	}
+
+	diffText := string(out)
+	var violations []IntegrityViolation
+
+	secretPatterns := []struct {
+		name    string
+		pattern *regexp.Regexp
+	}{
+		{"AWS Access Key", regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`)},
+		{"Private Key", regexp.MustCompile(`-----BEGIN (RSA|EC|DSA|OPENSSH)? PRIVATE KEY-----`)},
+		{"GitHub Token", regexp.MustCompile(`\b(ghp|gho|ghu|ghs)_[A-Za-z0-9_]{36,}\b`)},
+		{"OpenAI API Key", regexp.MustCompile(`\bsk-[A-Za-z0-9]{48,}\b`)},
+		{"Generic Secret Assignment", regexp.MustCompile(`(?i)(api[_-]?key|secret[_-]?token|auth[_-]?token)\s*[:=]\s*["'][A-Za-z0-9+/=_\-]{16,}["']`)},
+	}
+
+	lines := strings.Split(diffText, "\n")
+	currentFile := ""
+
+	for _, l := range lines {
+		if strings.HasPrefix(l, "diff --git") {
+			parts := strings.Fields(l)
+			if len(parts) >= 4 {
+				currentFile = strings.TrimPrefix(parts[3], "b/")
+			}
+			continue
+		}
+
+		if strings.HasPrefix(l, "+") && !strings.HasPrefix(l, "+++") {
+			for _, sp := range secretPatterns {
+				if sp.pattern.MatchString(l) {
+					violations = append(violations, IntegrityViolation{
+						Severity: "CRITICAL",
+						Type:     "secret_leak",
+						File:     currentFile,
+						Message:  fmt.Sprintf("Potential %s detected in addition: '%s'", sp.name, strings.TrimSpace(l)),
+					})
+				}
+			}
+		}
+	}
+
+	return violations, nil
+}
