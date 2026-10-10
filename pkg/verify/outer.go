@@ -258,6 +258,7 @@ func (om *OuterLoopManager) executeJobInternal(job *OuterJob) error {
 	}
 
 	runner := NewRunner(om.RootDir)
+	runner.SetGraph(g)
 	results := make([]TargetResult, len(packagesToVerify))
 	var wg sync.WaitGroup
 

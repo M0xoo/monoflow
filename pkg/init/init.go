@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/antigravity/monoflow/pkg/graph"
+	"github.com/antigravity/monoflow/pkg/agenthooks"
+	"github.com/antigravity/monoflow/pkg/runtimestate"
 )
 
 // InitResult details what was discovered and initialized.
@@ -125,14 +127,17 @@ func InitRepo(targetDir string, binarySrcPath string) (*InitResult, error) {
 
 	// 9. Update .gitignore
 	gitignorePath := filepath.Join(absTarget, ".gitignore")
-	ignoreBlock := "\n# MonoFlow Agent Sandbox & Ephemeral Checkpoints\n.agents/worktrees/\n.agents/traces/\n.agents/checkpoints.json\n"
+	ignoreBlock := "\n# MonoFlow runtime state (never committed)\n" + strings.Join(runtimestate.IgnorePatterns(), "\n") + "\n"
 	if data, err := os.ReadFile(gitignorePath); err == nil {
-		if !strings.Contains(string(data), ".agents/worktrees/") {
+		if !strings.Contains(string(data), "/.agents/cache") {
 			_ = os.WriteFile(gitignorePath, append(data, []byte(ignoreBlock)...), 0644)
 		}
 	} else {
 		_ = os.WriteFile(gitignorePath, []byte(ignoreBlock), 0644)
 	}
+
+	// 9b. Agent harness hooks: redirect raw build/test/git commands to MonoFlow.
+	_ = InstallAgentHooks(absTarget)
 
 	// 10. Install Git Shield Hooks into the repository's effective hooks directory
 	if _, err := InstallShieldHooks(absTarget); err != nil {
@@ -237,4 +242,44 @@ func HasShieldHooks(dir string) bool {
 		}
 	}
 	return true
+}
+
+// InstallAgentHooks installs harness-level hooks (Claude Code PreToolUse in
+// .claude/settings.json, an opencode plugin) that deny raw build/test/git commands and
+// name the MonoFlow replacement. Existing Claude settings are merged, never overwritten.
+func InstallAgentHooks(repoRoot string) error {
+	settingsPath := filepath.Join(repoRoot, ".claude", "settings.json")
+	settings := map[string]any{}
+	if data, err := os.ReadFile(settingsPath); err == nil {
+		if err := json.Unmarshal(data, &settings); err != nil {
+			return fmt.Errorf("cannot merge into %s: %w", settingsPath, err)
+		}
+	}
+	hooks, _ := settings["hooks"].(map[string]any)
+	if hooks == nil {
+		hooks = map[string]any{}
+	}
+	pre, _ := hooks["PreToolUse"].([]any)
+	installed := false
+	for _, h := range pre {
+		if b, _ := json.Marshal(h); strings.Contains(string(b), "hook pretooluse") {
+			installed = true
+		}
+	}
+	if !installed {
+		hooks["PreToolUse"] = append(pre, agenthooks.ClaudeSettingsHook())
+		settings["hooks"] = hooks
+		data, _ := json.MarshalIndent(settings, "", "  ")
+		_ = os.MkdirAll(filepath.Dir(settingsPath), 0755)
+		if err := os.WriteFile(settingsPath, append(data, '\n'), 0644); err != nil {
+			return err
+		}
+	}
+
+	pluginPath := filepath.Join(repoRoot, ".opencode", "plugin", "monoflow.js")
+	if _, err := os.Stat(pluginPath); os.IsNotExist(err) {
+		_ = os.MkdirAll(filepath.Dir(pluginPath), 0755)
+		return os.WriteFile(pluginPath, []byte(agenthooks.OpencodePlugin), 0644)
+	}
+	return nil
 }

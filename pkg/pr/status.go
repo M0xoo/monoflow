@@ -17,64 +17,64 @@ import (
 
 // PRStatusResult details the unified MonoFlow / GitHub PR bridge.
 type PRStatusResult struct {
-	PRID                 string              `json:"pr_id"`
-	GitHubNumber         int                 `json:"github_number,omitempty"`
-	GitHubURL            string              `json:"github_url,omitempty"`
-	Title                string              `json:"title"`
-	HeadBranch           string              `json:"head_branch"`
-	BaseBranch           string              `json:"base_branch"`
-	Author               string              `json:"author"`
-	LocalState           PRState             `json:"local_state"`
-	RemoteState          string              `json:"remote_state"` // OPEN, MERGED, CLOSED, DRAFT, LOCAL_ONLY
-	BridgeStatus         string              `json:"bridge_status"` // BRIDGED, LOCAL_ONLY, REMOTE_BRIDGED
-	SyncState            string              `json:"sync_state"`    // IN_SYNC, DIVERGED, LOCAL_ONLY, REMOTE_ONLY
+	PRID         string  `json:"pr_id"`
+	GitHubNumber int     `json:"github_number,omitempty"`
+	GitHubURL    string  `json:"github_url,omitempty"`
+	Title        string  `json:"title"`
+	HeadBranch   string  `json:"head_branch"`
+	BaseBranch   string  `json:"base_branch"`
+	Author       string  `json:"author"`
+	LocalState   PRState `json:"local_state"`
+	RemoteState  string  `json:"remote_state"`  // OPEN, MERGED, CLOSED, DRAFT, LOCAL_ONLY
+	BridgeStatus string  `json:"bridge_status"` // BRIDGED, LOCAL_ONLY, REMOTE_BRIDGED
+	SyncState    string  `json:"sync_state"`    // IN_SYNC, DIVERGED, LOCAL_ONLY, REMOTE_ONLY
 
 	// Local Machine Risk & Review Dossier
-	RiskTier             review.RiskTier     `json:"risk_tier"`
-	RiskScore            int                 `json:"risk_score"`
-	RiskVerdict          string              `json:"risk_verdict,omitempty"`
-	BlastRadius          int                 `json:"blast_radius"`
-	ReviewDecision       string              `json:"review_decision,omitempty"`
+	RiskTier       review.RiskTier `json:"risk_tier"`
+	RiskScore      int             `json:"risk_score"`
+	RiskVerdict    string          `json:"risk_verdict,omitempty"`
+	BlastRadius    int             `json:"blast_radius"`
+	ReviewDecision string          `json:"review_decision,omitempty"`
 
 	// Local Proof of Work Receipt (DoD)
-	ProofStatus          string              `json:"proof_status"` // VERIFIED, FAILED, NOT_FOUND
-	ProofDurationMs      float64             `json:"proof_duration_ms,omitempty"`
-	GitTreeSHA           string              `json:"git_tree_sha,omitempty"`
-	DoDTotalChecks       int                 `json:"dod_total_checks"`
-	DoDPassedChecks      int                 `json:"dod_passed_checks"`
-	ProofReceipt         *proof.ProofReceipt `json:"proof_receipt,omitempty"`
-	ReviewCommand        string              `json:"review_command,omitempty"`
+	ProofStatus     string              `json:"proof_status"` // VERIFIED, FAILED, NOT_FOUND
+	ProofDurationMs float64             `json:"proof_duration_ms,omitempty"`
+	GitTreeSHA      string              `json:"git_tree_sha,omitempty"`
+	DoDTotalChecks  int                 `json:"dod_total_checks"`
+	DoDPassedChecks int                 `json:"dod_passed_checks"`
+	ProofReceipt    *proof.ProofReceipt `json:"proof_receipt,omitempty"`
+	ReviewCommand   string              `json:"review_command,omitempty"`
 
 	// Scope & Intent Audit
-	AuditValid           bool                `json:"audit_valid"`
-	AuditVerdict         string              `json:"audit_verdict,omitempty"`
-	AffectedPackages     []string            `json:"affected_packages"`
+	AuditValid       bool     `json:"audit_valid"`
+	AuditVerdict     string   `json:"audit_verdict,omitempty"`
+	AffectedPackages []string `json:"affected_packages"`
 
 	// Remote GitHub Metadata
-	RemoteReviewDecision string              `json:"remote_review_decision,omitempty"`
-	RemoteCIStatus       string              `json:"remote_ci_status,omitempty"`
-	Mergeable            string              `json:"mergeable,omitempty"`
-	RemoteHeadSHA        string              `json:"remote_head_sha,omitempty"`
-	LocalHeadSHA         string              `json:"local_head_sha,omitempty"`
+	RemoteReviewDecision string `json:"remote_review_decision,omitempty"`
+	RemoteCIStatus       string `json:"remote_ci_status,omitempty"`
+	Mergeable            string `json:"mergeable,omitempty"`
+	RemoteHeadSHA        string `json:"remote_head_sha,omitempty"`
+	LocalHeadSHA         string `json:"local_head_sha,omitempty"`
 
-	UnifiedVerdict       string              `json:"unified_verdict"`
-	UpdatedAt            time.Time           `json:"updated_at"`
+	UnifiedVerdict string    `json:"unified_verdict"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 type ghViewPayload struct {
-	Number            int    `json:"number"`
-	Title             string `json:"title"`
-	Body              string `json:"body"`
-	HeadRefName       string `json:"headRefName"`
-	BaseRefName       string `json:"baseRefName"`
-	State             string `json:"state"`
-	URL               string `json:"url"`
-	HeadRefOid        string `json:"headRefOid"`
-	BaseRefOid        string `json:"baseRefOid"`
-	ReviewDecision    string `json:"reviewDecision"`
-	Mergeable         string `json:"mergeable"`
-	IsDraft           bool   `json:"isDraft"`
-	Author            struct {
+	Number         int    `json:"number"`
+	Title          string `json:"title"`
+	Body           string `json:"body"`
+	HeadRefName    string `json:"headRefName"`
+	BaseRefName    string `json:"baseRefName"`
+	State          string `json:"state"`
+	URL            string `json:"url"`
+	HeadRefOid     string `json:"headRefOid"`
+	BaseRefOid     string `json:"baseRefOid"`
+	ReviewDecision string `json:"reviewDecision"`
+	Mergeable      string `json:"mergeable"`
+	IsDraft        bool   `json:"isDraft"`
+	Author         struct {
 		Login string `json:"login"`
 	} `json:"author"`
 	StatusCheckRollup []struct {
@@ -614,6 +614,10 @@ func (m *PRManager) fetchFromGH(target string) (*PRMetadata, error) {
 }
 
 func (m *PRManager) getRemoteOriginRepo() (string, string, bool) {
+	if env := os.Getenv("GITHUB_REPOSITORY"); strings.Count(env, "/") == 1 {
+		parts := strings.SplitN(env, "/", 2)
+		return parts[0], parts[1], true
+	}
 	cmd := exec.Command("git", "config", "--get", "remote.origin.url")
 	cmd.Dir = m.RootDir
 	out, err := cmd.CombinedOutput()
@@ -640,6 +644,14 @@ func extractGitHubRepo(raw string) (string, string, bool) {
 			if len(parts) >= 2 {
 				return parts[0], parts[1], true
 			}
+		}
+	}
+	// Cloud sandboxes (e.g. Claude Code on the web) route git through a local proxy:
+	// http://proxy@127.0.0.1:<port>/git/<owner>/<repo>
+	if idx := strings.Index(raw, "/git/"); idx != -1 && strings.HasPrefix(raw, "http") {
+		parts := strings.Split(strings.Trim(raw[idx+len("/git/"):], "/"), "/")
+		if len(parts) == 2 && parts[0] != "" && parts[1] != "" {
+			return parts[0], parts[1], true
 		}
 	}
 	return "", "", false

@@ -131,3 +131,46 @@ func TestFastAgentCommit(t *testing.T) {
 	}
 }
 
+
+func TestCheckTestIntegrity_AllowsAssertionRewrite(t *testing.T) {
+	repoDir := setupTestGitRepoForGuard(t)
+	defer os.RemoveAll(repoDir)
+
+	run := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repoDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v (%s)", args, err, out)
+		}
+	}
+	testFile := filepath.Join(repoDir, "money_test.go")
+	_ = os.WriteFile(testFile, []byte("package m\n\nfunc TestP(t *testing.T) {\n\tif P(1000, 20) != 200 {\n\t\tt.Fatal(\"Percent broken\")\n\t}\n}\n"), 0644)
+	run("add", "-A")
+	run("commit", "-qm", "base")
+
+	// Rewritten into a table test: one assertion removed, one stronger one added.
+	_ = os.WriteFile(testFile, []byte("package m\n\nfunc TestP(t *testing.T) {\n\tfor _, c := range cases {\n\t\tif got := P(c.in, c.p); got != c.want {\n\t\t\tt.Fatalf(\"P(%d,%d)=%d want %d\", c.in, c.p, got, c.want)\n\t\t}\n\t}\n}\n"), 0644)
+	if v, _ := CheckTestIntegrity(repoDir); len(v) != 0 {
+		t.Fatalf("rewrite with equal assertions flagged: %+v", v)
+	}
+
+	// Pure deletion is still blocked.
+	_ = os.WriteFile(testFile, []byte("package m\n\nfunc TestP(t *testing.T) {}\n"), 0644)
+	if v, _ := CheckTestIntegrity(repoDir); len(v) == 0 || v[0].Type != "test_weakened" {
+		t.Fatalf("expected test_weakened for deleted assertion, got %+v", v)
+	}
+}
+
+func TestCheckTestIntegrity_ProseCommentNotAssertion(t *testing.T) {
+	repoDir := setupTestGitRepoForGuard(t)
+	defer os.RemoveAll(repoDir)
+	testFile := filepath.Join(repoDir, "tax.test.ts")
+	_ = os.WriteFile(testFile, []byte("test('tax', () => {\n  // one assertion removed, a stronger one added\n  expect(calculate(100)).toBe(120);\n});\n"), 0644)
+	if v, _ := CheckTestIntegrity(repoDir); len(v) != 0 {
+		t.Fatalf("prose comment flagged as commented-out assertion: %+v", v)
+	}
+	_ = os.WriteFile(testFile, []byte("test('tax', () => {\n  // expect(calculate(100)).toBe(120);\n});\n"), 0644)
+	if v, _ := CheckTestIntegrity(repoDir); len(v) == 0 {
+		t.Fatalf("commented-out expect() must still be flagged")
+	}
+}

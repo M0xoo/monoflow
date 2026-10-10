@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/antigravity/monoflow/pkg/agenthooks"
 	"github.com/antigravity/monoflow/pkg/cache"
 	"github.com/antigravity/monoflow/pkg/checkpoint"
 	"github.com/antigravity/monoflow/pkg/deliver"
@@ -49,7 +50,10 @@ func main() {
 		}
 		os.Exit(0)
 	}
-	if len(os.Args) > 2 && isHelpArg(os.Args[2]) && printCommandUsage(cmd) {
+	// A help flag anywhere after the command must never execute it: agents probe
+	// `monoflow pr create --help` and would otherwise create PRs, branches or worktrees.
+	if len(os.Args) > 2 && hasHelpArg(os.Args[2:]) {
+		printCommandUsage(cmd)
 		os.Exit(0)
 	}
 
@@ -136,6 +140,9 @@ func main() {
 	case "cache":
 		handleCache(rootDir)
 
+	case "hook":
+		handleHook()
+
 	default:
 		fmt.Printf("Unknown command: %s\n\n", cmd)
 		printUsage()
@@ -176,11 +183,68 @@ Usage:
   monoflow pr [create|list|view|status|review|test|local|merge] Full agent-native PR suite with affected packages
   monoflow quarantine [list|add]      Manage flaky test quarantine
   monoflow version [list|bump|apply|check] SemVer package versioning, changesets & cascade
+  monoflow hook [pretooluse|check]    Agent harness hook: redirect raw build/test/git commands to MonoFlow
   monoflow help [command]             Show this help (also --help, -h)`)
 }
 
 func isHelpArg(arg string) bool {
 	return arg == "--help" || arg == "-h" || arg == "help"
+}
+
+// hasHelpArg reports whether any argument is a help flag. The bare word "help" only
+// counts in subcommand position so it can still be used as a value (e.g. a PR title).
+func hasHelpArg(args []string) bool {
+	for i, a := range args {
+		if a == "--help" || a == "-h" || (a == "help" && i == 0) {
+			return true
+		}
+	}
+	return false
+}
+
+// commandDetails documents subcommands and flags so agents can discover them via --help
+// instead of guessing (guessing previously executed side-effecting commands).
+var commandDetails = map[string]string{
+	"graph": `  graph query <package|path>          Upstream deps, direct & transitive dependents (name or directory path)
+  graph impact <file>                 Owning package and dependents affected by editing <file>
+  graph affected                      Packages affected by the current uncommitted changes`,
+	"checkpoint": `  checkpoint save "<hypothesis>"      Snapshot the working tree (not git history)
+  checkpoint revert [id]              Restore the latest (or given) checkpoint
+  checkpoint list                     List checkpoints`,
+	"verify": `  verify --affected                   Test/lint/typecheck packages affected by your changes (+ dependents)
+  verify --package=<p> | --all        Verify one package / every package
+  verify --test | --lint | --typecheck | --all-checks   Restrict or widen the check kinds
+  verify --no-cache | --force         Ignore cached results
+  verify --proof=<task-id>            Verify a Proof-of-Work receipt`,
+	"worktree": `  worktree create <agent-id> --packages=<p1,p2> [--deps=<strategy>] [--isolated-deps]
+                                      Isolated worktree on branch agent/<agent-id>
+  worktree list                       List registered worktrees
+  worktree focus|update <agent-id> --packages=<...>   Change the projected packages
+  worktree sync <agent-id> [--remote=<r>] [--branch=<b>]   Rebase onto the latest base
+  worktree finish <agent-id> [--force] Remove the worktree and its registry entry
+  worktree isolate <agent-id>         Materialize per-worktree dependencies`,
+	"pr": `  pr create --title="<t>" [--body="<b>"] [--base=<b>] [--head=<b>] [--draft] [--stack] [--no-push]
+                                      Gate-checked PR (blocked unless DoD proof is VERIFIED)
+  pr list [--state=<s>] [--limit=<n>] List PRs
+  pr view <id> | pr status [id] [--json]   Show a PR / bridged local+remote status
+  pr review <id> --approve|--reject|--request-changes [--comment="<c>"]
+  pr test <id> [--base=<b>]           Hot-mount delta test of a PR
+  pr local <id> [--worktree] [--deps=<s>]  Check out a PR's affected packages locally
+  pr merge <id> [--strategy=squash|merge|rebase] [--queue] [--delete-branch]`,
+	"push": `  push [remote] [branch] [--remote=<r>] [--branch=<b>] [--no-watch]
+                                      Push the current branch (main/master blocked) and start the CI watcher`,
+	"events": `  events unread                       Unread events (CI results, regressions, PRs)
+  events list                         All events
+  events ack <id|all>                 Mark events read
+  events watch <sha> [--branch=<b>] [--timeout=<d>]   Background CI watcher (do not poll)`,
+	"outer": `  outer start [--commit=<sha>] [--branch=<b>] [--push] [--revert] [--async]
+  outer status | outer list | outer wait [--timeout=<d>]`,
+	"commit": `  commit -m "<msg>"                   Verified commit of all changes in the current worktree`,
+	"cache":  `  cache status | cache clean | cache serve [--port=<n>] [--dir=<d>] [--token=<t>]`,
+	"task":   `  task check | task slice | task prove [task-id] | task changeset`,
+	"sync":   `  sync [remote] [branch] [--rebase] [--autostash]   Update the current branch from its remote`,
+	"branch": `  branch                              List branches
+  branch <name> [-c|--create]         Switch to (or create) a branch`,
 }
 
 // printCommandUsage prints the usage lines for a single top-level command and reports
@@ -201,6 +265,10 @@ func printCommandUsage(cmd string) bool {
 	}
 	fmt.Println("Usage:")
 	fmt.Println(strings.Join(lines, "\n"))
+	if d, ok := commandDetails[cmd]; ok {
+		fmt.Println("\nSubcommands & flags:")
+		fmt.Println(d)
+	}
 	return true
 }
 
@@ -424,6 +492,7 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 	}
 
 	runner := verify.NewRunner(rootDir)
+	runner.SetGraph(g)
 	start := time.Now()
 
 	var res verify.SuiteResult
@@ -905,7 +974,6 @@ func handlePR(rootDir string) {
 	}
 }
 
-
 func handleQuarantine(rootDir string) {
 	qm := verify.NewQuarantineManager(rootDir)
 	if len(os.Args) < 3 || os.Args[2] == "list" {
@@ -937,7 +1005,12 @@ func handleWorktree(rootDir string) {
 			os.Exit(1)
 		}
 		agentID := os.Args[3]
+		if strings.HasPrefix(agentID, "-") {
+			fmt.Printf(`{"error": "invalid agent-id %q: usage: monoflow worktree create <agent-id> --packages=<p1,p2>"}`+"\n", agentID)
+			os.Exit(1)
+		}
 		isolated := false
+		baseBranch := ""
 		var pkgs []string
 		focusedPkg := ""
 		strategy := subset.DepStrategySource
@@ -959,11 +1032,14 @@ func handleWorktree(rootDir string) {
 			} else if strings.HasPrefix(arg, "--include-deps=") {
 				val := strings.TrimPrefix(arg, "--include-deps=")
 				includeDeps = val != "false" && val != "0"
+			} else if strings.HasPrefix(arg, "--base=") {
+				baseBranch = strings.TrimPrefix(arg, "--base=")
 			}
 		}
 
 		start := time.Now()
 		info, err := mgr.CreateWithOpts(agentID, worktree.CreateOptions{
+			BaseBranch:     baseBranch,
 			IsolatedDeps:   isolated,
 			FocusedPackage: focusedPkg,
 			Packages:       pkgs,
@@ -1511,30 +1587,18 @@ func handlePush(rootDir string) {
 		os.Exit(1)
 	}
 
-	// 1b. Pre-push Concurrency Data Race Gate (< 1.8s)
-	if _, err := os.Stat(filepath.Join(rootDir, "go.mod")); err == nil {
-		cmdRace := exec.Command("go", "test", "-race", "-short", "./pkg/...")
-		cmdRace.Dir = rootDir
-		if raceOut, raceErr := cmdRace.CombinedOutput(); raceErr != nil {
-			data, _ := json.MarshalIndent(map[string]any{
-				"status":  "blocked",
-				"verdict": "Pre-push race detector gate failed: concurrency data race detected in tests. Cannot push racy code to remote.",
-				"output":  strings.TrimSpace(string(raceOut)),
-			}, "", "  ")
-			fmt.Println(string(data))
-			os.Exit(1)
-		}
-	}
-
 	remote := "origin"
 	branch := ""
 	noWatch := false
 	forceDirect := false
 	var positional []string
 
+	skipVerify := false
 	for _, arg := range os.Args[2:] {
 		if arg == "--no-watch" {
 			noWatch = true
+		} else if arg == "--skip-verify" {
+			skipVerify = true
 		} else if arg == "--force" || arg == "--direct" {
 			forceDirect = true
 		} else if strings.HasPrefix(arg, "--remote=") {
@@ -1580,6 +1644,20 @@ func handlePush(rootDir string) {
 		headSHA = strings.TrimSpace(string(out))
 	}
 
+	// 1d. Remote CI protection: everything remote CI would run on the affected packages
+	// (typecheck, lint, tests incl. dependents) must pass locally before the push.
+	if !skipVerify {
+		if res, base, ok := verifyBranchAgainstBase(rootDir); ok && res.Status != "passed" {
+			data, _ := json.MarshalIndent(map[string]any{
+				"status":  "blocked",
+				"verdict": fmt.Sprintf("Pre-push verification failed for %d/%d affected packages (changes vs %s). Remote CI would fail; fix locally first.", res.FailedTargets, res.TotalTargets, base),
+				"results": failedResults(res),
+			}, "", "  ")
+			fmt.Println(string(data))
+			os.Exit(1)
+		}
+	}
+
 	// 2. Perform push
 	start := time.Now()
 	pushArgs := []string{"push", remote, branch}
@@ -1610,6 +1688,7 @@ func handlePush(rootDir string) {
 		job, err := cw.StartWatch(events.WatchOptions{
 			CommitSHA: headSHA,
 			Branch:    branch,
+			Remote:    remote,
 			Async:     true, // Detach in background!
 		})
 		if err == nil {
@@ -1842,9 +1921,15 @@ func handleEvents(rootDir string) {
 	case "watch":
 		commitSHA := ""
 		branch := ""
+		jobID := ""
+		remote := ""
 		timeoutMin := 25
 		for _, arg := range os.Args[3:] {
-			if strings.HasPrefix(arg, "--commit=") {
+			if strings.HasPrefix(arg, "--job=") {
+				jobID = strings.TrimPrefix(arg, "--job=")
+			} else if strings.HasPrefix(arg, "--remote=") {
+				remote = strings.TrimPrefix(arg, "--remote=")
+			} else if strings.HasPrefix(arg, "--commit=") {
 				commitSHA = strings.TrimPrefix(arg, "--commit=")
 			} else if strings.HasPrefix(arg, "--branch=") {
 				branch = strings.TrimPrefix(arg, "--branch=")
@@ -1858,12 +1943,19 @@ func handleEvents(rootDir string) {
 		}
 
 		cw := events.NewCIWatcher(rootDir)
-		job, err := cw.StartWatch(events.WatchOptions{
-			CommitSHA:  commitSHA,
-			Branch:     branch,
-			TimeoutMin: timeoutMin,
-			Async:      false,
-		})
+		var job *events.WatchJob
+		var err error
+		if jobID != "" {
+			job, err = cw.ResumeJob(jobID, events.WatchOptions{Remote: remote, TimeoutMin: timeoutMin})
+		} else {
+			job, err = cw.StartWatch(events.WatchOptions{
+				CommitSHA:  commitSHA,
+				Branch:     branch,
+				TimeoutMin: timeoutMin,
+				Remote:     remote,
+				Async:      false,
+			})
+		}
 		if err != nil {
 			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
 			os.Exit(1)
@@ -2316,3 +2408,78 @@ func handleScenario(rootDir string) {
 	fmt.Printf("📁 Fixture Monorepo: %s\n", report.RepoDir)
 }
 
+// verifyBranchAgainstBase verifies packages affected by the commits on this branch
+// (plus uncommitted changes) relative to its merge-base with the default branch.
+func verifyBranchAgainstBase(rootDir string) (verify.SuiteResult, string, bool) {
+	base := ""
+	for _, cand := range []string{"origin/main", "main", "origin/master", "master"} {
+		if exec.Command("git", "-C", rootDir, "rev-parse", "--verify", "--quiet", cand).Run() == nil {
+			base = cand
+			break
+		}
+	}
+	if base == "" {
+		return verify.SuiteResult{}, "", false
+	}
+	mb, err := exec.Command("git", "-C", rootDir, "merge-base", base, "HEAD").Output()
+	if err != nil {
+		return verify.SuiteResult{}, base, false
+	}
+	out, _ := exec.Command("git", "-C", rootDir, "diff", "--name-only", strings.TrimSpace(string(mb))).Output()
+	var files []string
+	for _, f := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if f != "" {
+			files = append(files, f)
+		}
+	}
+	g, err := graph.LoadOrDiscover(rootDir)
+	if err != nil || len(files) == 0 {
+		return verify.SuiteResult{Status: "passed"}, base, err == nil
+	}
+	runner := verify.NewRunner(rootDir)
+	return runner.VerifyAffected(g, files, verify.VerifyOptions{}), base, true
+}
+
+func failedResults(res verify.SuiteResult) []verify.TargetResult {
+	var failed []verify.TargetResult
+	for _, r := range res.Results {
+		if r.Status == "failed" {
+			failed = append(failed, r)
+		}
+	}
+	return failed
+}
+
+// handleHook implements agent harness hooks. `pretooluse` speaks the Claude Code hook
+// protocol (JSON on stdin/stdout); `check` takes a raw command on stdin and exits 2 with
+// the replacement when it should go through MonoFlow (used by the opencode plugin).
+func handleHook() {
+	sub := ""
+	if len(os.Args) > 2 {
+		sub = os.Args[2]
+	}
+	switch sub {
+	case "pretooluse":
+		if out := agenthooks.ClaudePreToolUse(os.Stdin, hookStateDir()); out != nil {
+			fmt.Println(string(out))
+		}
+	case "check":
+		data, _ := io.ReadAll(os.Stdin)
+		if r := agenthooks.Decide(hookStateDir(), string(data)); r != nil {
+			fmt.Println(r.Reason())
+			os.Exit(2)
+		}
+	default:
+		fmt.Println(`{"error": "usage: monoflow hook pretooluse | check"}`)
+		os.Exit(1)
+	}
+}
+
+// hookStateDir holds per-repo nudge state for agent hooks.
+func hookStateDir() string {
+	root, err := findRepoRoot()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(root, ".agents", "hooks")
+}

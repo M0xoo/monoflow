@@ -14,6 +14,7 @@ import (
 
 	initialize "github.com/antigravity/monoflow/pkg/init"
 	"github.com/antigravity/monoflow/pkg/merge"
+	"github.com/antigravity/monoflow/pkg/runtimestate"
 	"github.com/antigravity/monoflow/pkg/subset"
 )
 
@@ -35,6 +36,7 @@ type WorktreeInfo struct {
 	Strategy        string    `json:"strategy,omitempty"`
 	MonoflowBin     string    `json:"monoflow_bin,omitempty"`
 	ShieldHooks     bool      `json:"shield_hooks"`
+	Branch          string    `json:"branch,omitempty"`
 }
 
 // CreateOptions configures worktree creation.
@@ -44,6 +46,7 @@ type CreateOptions struct {
 	Packages       []string
 	Strategy       subset.DepStrategy
 	IncludeDeps    bool
+	BaseBranch     string // branch to cut agent/<id> from (default: origin/HEAD, main, master)
 }
 
 // IsolateResult details the result of isolating dependencies for an agent worktree.
@@ -103,13 +106,24 @@ func (m *Manager) CreateWithOpts(agentID string, opts CreateOptions) (*WorktreeI
 		return nil, err
 	}
 
-	// 1. git worktree add --detach <path> HEAD
-	_, err := m.runGit("worktree", "add", "--detach", wtPath, "HEAD")
-	if err != nil {
-		return nil, fmt.Errorf("failed to create git worktree: %w", err)
+	// 1. Each agent works on its own branch (agent/<id>) cut from the base branch, never on
+	// a detached copy of whatever the shared root happens to have checked out.
+	branch := "agent/" + agentID
+	if _, err := m.runGit("rev-parse", "--verify", "--quiet", "refs/heads/"+branch); err == nil {
+		if _, err := m.runGit("worktree", "add", wtPath, branch); err != nil {
+			return nil, fmt.Errorf("failed to create git worktree: %w", err)
+		}
+	} else {
+		base := opts.BaseBranch
+		if base == "" {
+			base = m.defaultBaseBranch()
+		}
+		if _, err := m.runGit("worktree", "add", "-b", branch, wtPath, base); err != nil {
+			return nil, fmt.Errorf("failed to create git worktree: %w", err)
+		}
 	}
 
-	// 2. Symlink or Clone dependencies
+	// 2. Symlink or Clone dependencies (go.work is tracked and handled by subset.SyncGoWork)
 	sharedTargets := []string{
 		"node_modules",
 		".pnpm-store",
@@ -117,9 +131,10 @@ func (m *Manager) CreateWithOpts(agentID string, opts CreateOptions) (*WorktreeI
 		".agents/cache",
 		".agents/prs",
 		".agents/proofs",
-		"go.work",
+		".agents/events",
 		".venv",
 	}
+	_ = os.MkdirAll(filepath.Join(m.RootDir, ".agents", "events"), 0755)
 
 	// The package cache is content-addressed, so it is always shared with the root repo:
 	// agents get cache hits for every untouched dependency. Deliverables in .agents/dist
@@ -182,6 +197,7 @@ func (m *Manager) CreateWithOpts(agentID string, opts CreateOptions) (*WorktreeI
 
 	// Path symmetry: ./bin/monoflow must work inside the worktree exactly as at the root.
 	monoflowBin := m.linkMonoflowBinary(wtPath)
+	excludeFromGit(wtPath, runtimestate.IgnorePatterns()...)
 
 	// Git Shield inheritance: if the root repo is shielded, the worktree must be too.
 	if initialize.HasShieldHooks(m.RootDir) && !initialize.HasShieldHooks(wtPath) {
@@ -198,15 +214,11 @@ func (m *Manager) CreateWithOpts(agentID string, opts CreateOptions) (*WorktreeI
 		targetPkgs = []string{opts.FocusedPackage}
 	}
 
+	// Upstream dependencies are always projected unless a strategy is requested
+	// explicitly: a sparse worktree missing them cannot build or verify.
 	strategy := opts.Strategy
 	if strategy == "" {
-		if opts.IncludeDeps {
-			strategy = subset.DepStrategySource
-		} else if len(targetPkgs) > 0 && !opts.IncludeDeps {
-			strategy = subset.DepStrategyNone
-		} else {
-			strategy = subset.DepStrategySource
-		}
+		strategy = subset.DepStrategySource
 	}
 
 	if len(targetPkgs) > 0 {
@@ -218,7 +230,7 @@ func (m *Manager) CreateWithOpts(agentID string, opts CreateOptions) (*WorktreeI
 		}
 	}
 
-	headSHA, _ := m.runGit("rev-parse", "HEAD")
+	headSHA, _ := m.runGit("-C", wtPath, "rev-parse", "HEAD")
 
 	info := WorktreeInfo{
 		AgentID:         agentID,
@@ -236,6 +248,7 @@ func (m *Manager) CreateWithOpts(agentID string, opts CreateOptions) (*WorktreeI
 		Strategy:        string(strategy),
 		MonoflowBin:     monoflowBin,
 		ShieldHooks:     shielded,
+		Branch:          branch,
 	}
 
 	registry, _ := m.loadRegistry()
@@ -243,6 +256,52 @@ func (m *Manager) CreateWithOpts(agentID string, opts CreateOptions) (*WorktreeI
 	_ = m.saveRegistry(registry)
 
 	return &info, nil
+}
+
+// excludeFromGit appends patterns to the worktree's info/exclude (shared by all worktrees).
+func excludeFromGit(wtPath string, patterns ...string) {
+	pathCmd := exec.Command("git", "rev-parse", "--git-path", "info/exclude")
+	pathCmd.Dir = wtPath
+	out, err := pathCmd.Output()
+	if err != nil {
+		return
+	}
+	excludePath := strings.TrimSpace(string(out))
+	if !filepath.IsAbs(excludePath) {
+		excludePath = filepath.Join(wtPath, excludePath)
+	}
+	existing, _ := os.ReadFile(excludePath)
+	var missing []string
+	for _, p := range patterns {
+		if !strings.Contains("\n"+string(existing)+"\n", "\n"+p+"\n") {
+			missing = append(missing, p)
+		}
+	}
+	if len(missing) == 0 {
+		return
+	}
+	_ = os.MkdirAll(filepath.Dir(excludePath), 0755)
+	if f, err := os.OpenFile(excludePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
+		_, _ = f.WriteString("\n# MonoFlow runtime state\n" + strings.Join(missing, "\n") + "\n")
+		_ = f.Close()
+	}
+}
+
+// defaultBaseBranch picks the branch new agent worktrees start from.
+func (m *Manager) defaultBaseBranch() string {
+	if out, err := m.runGit("symbolic-ref", "--short", "refs/remotes/origin/HEAD"); err == nil && out != "" {
+		if b := strings.TrimPrefix(out, "origin/"); b != "" {
+			if _, err := m.runGit("rev-parse", "--verify", "--quiet", "refs/heads/"+b); err == nil {
+				return b
+			}
+		}
+	}
+	for _, b := range []string{"main", "master"} {
+		if _, err := m.runGit("rev-parse", "--verify", "--quiet", "refs/heads/"+b); err == nil {
+			return b
+		}
+	}
+	return "HEAD"
 }
 
 // resolveMonoflowBinary finds the monoflow binary the root repo uses.

@@ -119,21 +119,35 @@ func ProveTask(rootDir string, taskID string, g *graph.DependencyGraph, modified
 	suiteRes := runner.VerifyAffected(g, modifiedFiles, verify.VerifyOptions{})
 	vDur := float64(time.Since(vStart).Microseconds()) / 1000.0
 
+	// Evidence names the exact commands that ran so the receipt cannot overstate coverage.
+	var ran, failures []string
+	for _, r := range suiteRes.Results {
+		if r.CommandRun != "" {
+			ran = append(ran, fmt.Sprintf("%s: %s", r.Target, r.CommandRun))
+		}
+		if r.Status == "failed" {
+			msg := r.Target
+			if len(r.Errors) > 0 {
+				msg = fmt.Sprintf("%s: %s:%d %s", r.Target, r.Errors[0].File, r.Errors[0].Line, r.Errors[0].Message)
+			}
+			failures = append(failures, msg)
+		}
+	}
 	if suiteRes.Status == "passed" {
 		dodItems = append(dodItems, DoDItem{
 			ID:          "DoD-InnerLoop",
-			Description: "Affected Targets Typecheck & Unit Tests",
+			Description: "Affected Targets Typecheck, Lint & Unit Tests",
 			Status:      "PASSED",
 			DurationMs:  vDur,
-			Evidence:    fmt.Sprintf("All %d affected packages passed in %0.1fms with 0 compiler errors", suiteRes.TotalTargets, vDur),
+			Evidence:    fmt.Sprintf("All %d affected packages passed in %0.1fms [%s]", suiteRes.TotalTargets, vDur, strings.Join(ran, "; ")),
 		})
 	} else {
 		dodItems = append(dodItems, DoDItem{
 			ID:          "DoD-InnerLoop",
-			Description: "Affected Targets Typecheck & Unit Tests",
+			Description: "Affected Targets Typecheck, Lint & Unit Tests",
 			Status:      "FAILED",
 			DurationMs:  vDur,
-			Evidence:    fmt.Sprintf("%d out of %d targets failed", suiteRes.FailedTargets, suiteRes.TotalTargets),
+			Evidence:    fmt.Sprintf("%d out of %d targets failed: %s", suiteRes.FailedTargets, suiteRes.TotalTargets, strings.Join(failures, "; ")),
 		})
 	}
 

@@ -25,15 +25,15 @@ const (
 
 // PackageNode represents a hermetic package within the monorepo.
 type PackageNode struct {
-	Name          string   `json:"name"`
-	Path          string   `json:"path"` // Relative to root
-	Language      Language `json:"language"`
-	Version       string   `json:"version,omitempty"`
-	Dependencies  []string `json:"dependencies"` // Upstream dependencies
-	TestCmd       string   `json:"test_cmd,omitempty"`
-	LintCmd       string   `json:"lint_cmd,omitempty"`
-	TypecheckCmd  string   `json:"typecheck_cmd,omitempty"`
-	Visibility    string   `json:"visibility,omitempty"` // "public" or "internal"
+	Name         string   `json:"name"`
+	Path         string   `json:"path"` // Relative to root
+	Language     Language `json:"language"`
+	Version      string   `json:"version,omitempty"`
+	Dependencies []string `json:"dependencies"` // Upstream dependencies
+	TestCmd      string   `json:"test_cmd,omitempty"`
+	LintCmd      string   `json:"lint_cmd,omitempty"`
+	TypecheckCmd string   `json:"typecheck_cmd,omitempty"`
+	Visibility   string   `json:"visibility,omitempty"` // "public" or "internal"
 }
 
 // Config represents .agents/monoflow.config.json
@@ -45,10 +45,10 @@ type Config struct {
 
 // DependencyGraph manages package relations and computes affected targets.
 type DependencyGraph struct {
-	mu           sync.RWMutex
-	RootDir      string
-	packages     map[string]*PackageNode
-	upstreamMap  map[string]map[string]bool // pkg -> set of dependencies
+	mu            sync.RWMutex
+	RootDir       string
+	packages      map[string]*PackageNode
+	upstreamMap   map[string]map[string]bool // pkg -> set of dependencies
 	downstreamMap map[string]map[string]bool // pkg -> set of dependents
 }
 
@@ -72,9 +72,24 @@ func LoadOrDiscover(rootDir string) (*DependencyGraph, error) {
 		if err == nil {
 			var cfg Config
 			if err := json.Unmarshal(data, &cfg); err == nil && len(cfg.Packages) > 0 {
+				var unresolvedGo []*PackageNode
 				for _, p := range cfg.Packages {
 					pCopy := p
+					// Configs written before Go dependency discovery store null deps for
+					// Go modules; derive them from go.mod rather than trusting an empty graph.
+					if pCopy.Language == LangGo && pCopy.Dependencies == nil {
+						unresolvedGo = append(unresolvedGo, &pCopy)
+					}
 					g.AddPackage(&pCopy)
+				}
+				if len(unresolvedGo) > 0 {
+					var goPkgs []*PackageNode
+					for _, p := range g.packages {
+						if p.Language == LangGo {
+							goPkgs = append(goPkgs, p)
+						}
+					}
+					resolveGoDependencies(rootDir, goPkgs, unresolvedGo...)
 				}
 				g.rebuildEdges()
 				return g, nil
@@ -162,12 +177,21 @@ func (g *DependencyGraph) rebuildEdges() {
 	g.RebuildEdges()
 }
 
-// GetPackage retrieves a package by name.
+// GetPackage retrieves a package by name, falling back to its directory path
+// (e.g. "packages/ui" for "@acme/ui") so agents can address packages either way.
 func (g *DependencyGraph) GetPackage(name string) (*PackageNode, bool) {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
-	p, ok := g.packages[name]
-	return p, ok
+	if p, ok := g.packages[name]; ok {
+		return p, true
+	}
+	clean := strings.TrimSuffix(filepath.ToSlash(filepath.Clean(strings.TrimPrefix(name, "./"))), "/")
+	for _, p := range g.packages {
+		if filepath.ToSlash(p.Path) == clean {
+			return p, true
+		}
+	}
+	return nil, false
 }
 
 // GetAllPackages returns a sorted list of all packages.

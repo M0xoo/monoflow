@@ -15,10 +15,10 @@ import (
 type WatchJobStatus string
 
 const (
-	WatchStatusMonitoring     WatchJobStatus = "monitoring"
+	WatchStatusMonitoring      WatchJobStatus = "monitoring"
 	WatchStatusCompletedPassed WatchJobStatus = "completed_passed"
 	WatchStatusCompletedFailed WatchJobStatus = "completed_failed"
-	WatchStatusTimedOut       WatchJobStatus = "timed_out"
+	WatchStatusTimedOut        WatchJobStatus = "timed_out"
 )
 
 // WatchJob represents a detached background CI monitoring task.
@@ -45,6 +45,7 @@ type WatchOptions struct {
 	PollIntervalSec int    `json:"poll_interval_sec"`
 	TimeoutMin      int    `json:"timeout_min"`
 	Async           bool   `json:"async"` // Detach in background; return immediately to agent
+	Remote          string `json:"remote,omitempty"`
 }
 
 // CIWatcher supervises remote CI without burning agent context tokens.
@@ -113,10 +114,12 @@ func (cw *CIWatcher) StartWatch(opts WatchOptions) (*WatchJob, error) {
 	cw.mu.Unlock()
 
 	if opts.Async {
-		// Detach in background goroutine — zero agent blocking!
-		go func(j *WatchJob, o WatchOptions) {
-			cw.supervise(j, o)
-		}(job, opts)
+		// The CLI process exits right after replying, which would kill a goroutine, so
+		// supervise in a detached child process that outlives it.
+		if err := cw.spawnDetached(job, opts); err != nil {
+			cw.finishJob(job, WatchStatusTimedOut, "failed to start background watcher: "+err.Error())
+			return job, err
+		}
 		return job, nil
 	}
 
@@ -127,15 +130,156 @@ func (cw *CIWatcher) StartWatch(opts WatchOptions) (*WatchJob, error) {
 
 type ghRunItem struct {
 	DatabaseID   int64  `json:"databaseId"`
-	Status       string `json:"status"`       // "queued", "in_progress", "completed"
-	Conclusion   string `json:"conclusion"`   // "success", "failure", "cancelled", etc.
+	Status       string `json:"status"`     // "queued", "in_progress", "completed"
+	Conclusion   string `json:"conclusion"` // "success", "failure", "cancelled", etc.
 	Name         string `json:"name"`
 	URL          string `json:"url"`
 	WorkflowName string `json:"workflowName"`
 }
 
+// spawnDetached re-executes this binary as `monoflow events watch --job=<id>` in a new
+// session so it survives the parent CLI process.
+func (cw *CIWatcher) spawnDetached(job *WatchJob, opts WatchOptions) error {
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	args := []string{"events", "watch", job.CommitSHA, "--branch=" + job.Branch, "--job=" + job.ID}
+	if opts.Remote != "" {
+		args = append(args, "--remote="+opts.Remote)
+	}
+	if opts.TimeoutMin > 0 {
+		args = append(args, fmt.Sprintf("--timeout=%d", opts.TimeoutMin))
+	}
+	logFile, err := os.OpenFile(filepath.Join(cw.watchDir, job.ID+".log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return err
+	}
+	defer logFile.Close()
+	cmd := exec.Command(exe, args...)
+	cmd.Dir = cw.RootDir
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	cmd.SysProcAttr = detachedProcAttr()
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	return cmd.Process.Release()
+}
+
+// ResumeJob supervises an existing job record (used by the detached watcher process).
+func (cw *CIWatcher) ResumeJob(jobID string, opts WatchOptions) (*WatchJob, error) {
+	job, err := cw.GetJob(jobID)
+	if err != nil {
+		return nil, err
+	}
+	cw.supervise(job, opts)
+	return job, nil
+}
+
+// remoteIsGitHub reports whether CI results can come from GitHub Actions.
+func (cw *CIWatcher) remoteIsGitHub(remote string) bool {
+	if remote == "" {
+		remote = "origin"
+	}
+	out, err := exec.Command("git", "-C", cw.RootDir, "remote", "get-url", remote).Output()
+	if err != nil {
+		return false
+	}
+	u := strings.TrimSpace(string(out))
+	if strings.Contains(u, "github.com") || (strings.HasPrefix(u, "http") && strings.Contains(u, "/git/")) {
+		_, ghErr := exec.LookPath("gh")
+		return ghErr == nil
+	}
+	return false
+}
+
+// runLocalCI is the CI backend for remotes without GitHub Actions visibility: it clones
+// the pushed commit from the remote and runs the repo's ci_cmd (default: full verify).
+func (cw *CIWatcher) runLocalCI(job *WatchJob, remote string) {
+	if remote == "" {
+		remote = "origin"
+	}
+	tmp, err := os.MkdirTemp("", "monoflow-ci-*")
+	if err != nil {
+		cw.finishJob(job, WatchStatusTimedOut, err.Error())
+		return
+	}
+	defer os.RemoveAll(tmp)
+	url, _ := exec.Command("git", "-C", cw.RootDir, "remote", "get-url", remote).Output()
+	src := strings.TrimSpace(string(url))
+	steps := [][]string{
+		{"git", "clone", "-q", "--no-checkout", src, tmp},
+		{"git", "-C", tmp, "checkout", "-q", job.CommitSHA},
+	}
+	for _, s := range steps {
+		if out, err := exec.Command(s[0], s[1:]...).CombinedOutput(); err != nil {
+			cw.emitCIResult(job, false, "local-ci", "failed to fetch pushed commit: "+strings.TrimSpace(string(out)))
+			return
+		}
+	}
+	ciCmd := readCICommand(tmp)
+	if ciCmd == "" {
+		exe, _ := os.Executable()
+		ciCmd = fmt.Sprintf("%q verify --all --no-cache", exe)
+	}
+	cmd := exec.Command("sh", "-c", ciCmd)
+	cmd.Dir = tmp
+	cmd.Env = append(os.Environ(), "MONOFLOW_INTERNAL=1", "MONOFLOW_CACHE_DIR="+filepath.Join(tmp, ".agents", "ci-cache"))
+	out, err := cmd.CombinedOutput()
+	logs := strings.TrimSpace(string(out))
+	if len(logs) > 4000 {
+		logs = logs[len(logs)-4000:]
+	}
+	cw.emitCIResult(job, err == nil, "local-ci: "+ciCmd, logs)
+}
+
+// readCICommand returns "ci_cmd" from .agents/monoflow.config.json, if set.
+func readCICommand(repoDir string) string {
+	data, err := os.ReadFile(filepath.Join(repoDir, ".agents", "monoflow.config.json"))
+	if err != nil {
+		return ""
+	}
+	var cfg struct {
+		CICmd string `json:"ci_cmd"`
+	}
+	_ = json.Unmarshal(data, &cfg)
+	return cfg.CICmd
+}
+
+func (cw *CIWatcher) emitCIResult(job *WatchJob, passed bool, workflow, logs string) {
+	short := job.CommitSHA[:min(8, len(job.CommitSHA))]
+	evt := &Event{
+		Type:      EventCIPassed,
+		CommitSHA: job.CommitSHA,
+		Branch:    job.Branch,
+		Summary:   fmt.Sprintf("CI (%s) passed for %s on %s", workflow, short, job.Branch),
+		Payload:   map[string]any{"workflow_name": workflow},
+	}
+	status := WatchStatusCompletedPassed
+	if !passed {
+		evt.Type = EventCIFailed
+		evt.RequiresAction = true
+		evt.Summary = fmt.Sprintf("CI (%s) FAILED for %s on %s", workflow, short, job.Branch)
+		evt.SuggestedTask = "Reproduce with 'monoflow verify --affected', fix, commit and push again"
+		evt.Payload["failure_logs"] = logs
+		job.FailureLogs = logs
+		status = WatchStatusCompletedFailed
+	}
+	job.WorkflowName = workflow
+	_ = cw.events.Emit(evt)
+	job.EventEmitted = true
+	job.EventID = evt.ID
+	cw.finishJob(job, status, "")
+}
+
 // supervise runs the background monitoring loop until CI completes or times out.
 func (cw *CIWatcher) supervise(job *WatchJob, opts WatchOptions) {
+	if !cw.remoteIsGitHub(opts.Remote) {
+		cw.runLocalCI(job, opts.Remote)
+		return
+	}
+
 	interval := time.Duration(opts.PollIntervalSec) * time.Second
 	if interval <= 0 {
 		interval = 8 * time.Second
