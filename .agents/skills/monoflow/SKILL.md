@@ -34,6 +34,7 @@ Follow this procedure for all coding tasks:
    - Commit changes cleanly: `.agents/bin/monoflow commit -m "feat/fix: summary"`.
    - Propose changes via PR (direct push to main is blocked):
      `.agents/bin/monoflow pr create --title="feat: my feature"`.
+   - Inspect unified bridged status: `.agents/bin/monoflow pr status [id]`.
    - Run hot-mount delta tests: `.agents/bin/monoflow pr test <id>`.
    - Project locally to worktree: `.agents/bin/monoflow pr local <id> --worktree`.
    - Approve & merge: `.agents/bin/monoflow pr review <id> --approve` followed by `.agents/bin/monoflow pr merge <id> --strategy=squash`.

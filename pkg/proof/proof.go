@@ -223,6 +223,18 @@ func LoadReceipt(rootDir, taskID string) (*ProofReceipt, error) {
 	receiptPath := filepath.Join(rootDir, ".agents", "proofs", fmt.Sprintf("%s.json", taskID))
 	data, err := os.ReadFile(receiptPath)
 	if err != nil {
+		cmd := exec.Command("git", "rev-parse", "--git-common-dir")
+		cmd.Dir = rootDir
+		if out, errG := cmd.CombinedOutput(); errG == nil {
+			commonDir := strings.TrimSpace(string(out))
+			if commonDir != "" {
+				mainRoot := filepath.Dir(commonDir)
+				candidate := filepath.Join(mainRoot, ".agents", "proofs", fmt.Sprintf("%s.json", taskID))
+				data, err = os.ReadFile(candidate)
+			}
+		}
+	}
+	if err != nil {
 		return nil, fmt.Errorf("proof receipt not found for task '%s': %w", taskID, err)
 	}
 	var r ProofReceipt

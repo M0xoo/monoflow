@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -76,5 +77,25 @@ func TestHandleSync(t *testing.T) {
 	// Verify file exists
 	if _, err := os.Stat(filepath.Join(localDir, "feature.txt")); os.IsNotExist(err) {
 		t.Errorf("expected feature.txt to exist after sync")
+	}
+}
+
+func TestHelpFlagsExitZero(t *testing.T) {
+	if os.Getenv("MONOFLOW_HELP_CHILD") == "1" {
+		os.Args = append([]string{"monoflow"}, strings.Fields(os.Getenv("MONOFLOW_HELP_ARGS"))...)
+		main()
+		return
+	}
+
+	for _, args := range []string{"--help", "-h", "help", "help pr", "pr --help", "worktree -h"} {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestHelpFlagsExitZero$")
+		cmd.Env = append(os.Environ(), "MONOFLOW_HELP_CHILD=1", "MONOFLOW_HELP_ARGS="+args)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("monoflow %s: expected exit 0, got %v (%s)", args, err, out)
+		}
+		if strings.Contains(string(out), "Unknown command") || !strings.Contains(string(out), "monoflow") {
+			t.Fatalf("monoflow %s: unexpected output: %s", args, out)
+		}
 	}
 }

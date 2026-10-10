@@ -135,8 +135,9 @@ When two agents add different functions to the same file, MonoFlow merges at the
 ### 6. 🚢 A shipping path built for agents
 
 - **Commits and branches without raw Git.** `commit`, `branch`, `sync` and `push` keep sparse checkouts intact and **refuse direct pushes to `main`**.
-- **PRs.** `pr create | test | local | review | merge` opens PRs with a risk tier, a proof receipt and the list of affected packages.
+- **PRs.** `pr create | test | local | review | merge` opens PRs with a risk tier, a proof receipt and the list of affected packages. `pr status` shows the local proof receipt and the GitHub PR in one view.
 - **No CI polling.** `push` starts a background watcher and returns right away. When CI finishes, the result lands in `.agents/events/`, and the agent reads it with `events unread`.
+- **CI health instead of log spelunking.** When CI is red, `ci health` reports when each check started failing, the breaking and fixing commits, recurrences and flaky checks, in one call instead of dozens of `gh run view` reads.
 - **Two-tier CI.** `queue spec` runs a speculative local merge and signs a receipt. `ci check` lets CI take a fast path for verified commits.
 - **Caching and releases.** A content-addressed package cache with an optional HTTP server (`cache serve`), plus SemVer changesets that cascade through dependents (`version bump --cascade`).
 
@@ -184,7 +185,8 @@ flowchart LR
 | 🧪 **Isolation** | `worktree create\|focus\|add\|remove\|update\|isolate\|sync\|list\|finish\|gc` |
 | 🛡️ **Guardrails** | `task check\|prove\|slice` · `verify --proof=<id>` · `guard check` · `review risk\|audit\|throttle` |
 | 🌿 **Git** | `commit -m` · `branch` · `sync` · `push` |
-| 🚢 **Ship** | `pr create\|list\|view\|test\|local\|review\|merge` · `queue spec` · `ci check` · `outer start\|status\|wait` |
+| 🚢 **Ship** | `pr create\|list\|view\|status\|test\|local\|review\|merge` · `queue spec` · `ci check` · `outer start\|status\|wait` |
+| 🩺 **CI health** | `ci health [--check=<name>] [--logs]` |
 | 📬 **Events** | `events unread\|list\|ack\|clear` |
 | 📦 **Build & release** | `deliver` · `app test` · `version list\|bump\|apply\|check` |
 | 🎬 **Try it** | `scenario run [--json]`: a full multi-agent simulation on a temporary repo |

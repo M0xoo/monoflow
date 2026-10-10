@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/antigravity/monoflow/pkg/cache"
 	"github.com/antigravity/monoflow/pkg/checkpoint"
+	"github.com/antigravity/monoflow/pkg/cihealth"
 	"github.com/antigravity/monoflow/pkg/deliver"
 	"github.com/antigravity/monoflow/pkg/events"
 	"github.com/antigravity/monoflow/pkg/graph"
@@ -39,6 +42,18 @@ func main() {
 	}
 
 	cmd := os.Args[1]
+	if isHelpArg(cmd) {
+		if len(os.Args) > 2 {
+			printCommandUsage(os.Args[2])
+		} else {
+			printUsage()
+		}
+		os.Exit(0)
+	}
+	if len(os.Args) > 2 && isHelpArg(os.Args[2]) && printCommandUsage(cmd) {
+		os.Exit(0)
+	}
+
 	rootDir, err := findRepoRoot()
 	if err != nil && cmd != "init" && cmd != "clone" {
 		rootDir = "."
@@ -130,7 +145,11 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Println(`MonoFlow — The Agent-Native Monorepo & Ultra-Fast CI Engine
+	usageText(os.Stdout)
+}
+
+func usageText(w io.Writer) {
+	fmt.Fprintln(w, `MonoFlow — The Agent-Native Monorepo & Ultra-Fast CI Engine
 
 Usage:
   monoflow init [dir]                 Install MonoFlow into an existing or new repo
@@ -147,7 +166,7 @@ Usage:
   monoflow events [unread|list|ack]   Asynchronous agent event inbox (check in < 5ms without polling)
   monoflow review [risk|audit|throttle] Machine risk scoring, anti-hallucination & backpressure
   monoflow queue [spec|verify]        Speculative local merge queue with flaky quarantine
-  monoflow ci [check]                 Two-tier CI gate: Tier 1 fast-path (<30s) vs Tier 2 full
+  monoflow ci [check|watch|health]    Two-tier CI gate, CI watcher & CI health history (when/which commit broke a check)
   monoflow commit -m "<msg>"          Sub-50ms verified agent commit bypassing slow hooks
   monoflow guard [check]              Test integrity guard (anti-cheating) & secret scanner
   monoflow task [check|prove|slice]   DoD contracts, Proof of Work receipts, & stacked diffs
@@ -155,9 +174,35 @@ Usage:
   monoflow cache [status|clean|serve] Local & remote package cache metrics, hit ratio & built-in HTTP daemon
   monoflow scenario [run] [--json]    Real end-to-end multi-agent enterprise monorepo simulation
   monoflow app test                   Delta compilation + symlink overlay (< 5s full-app)
-  monoflow pr [create|list|view|review|test|local|merge] Full agent-native PR suite with affected packages
+  monoflow pr [create|list|view|status|review|test|local|merge] Full agent-native PR suite with affected packages
   monoflow quarantine [list|add]      Manage flaky test quarantine
-  monoflow version [list|bump|apply|check] SemVer package versioning, changesets & cascade`)
+  monoflow version [list|bump|apply|check] SemVer package versioning, changesets & cascade
+  monoflow help [command]             Show this help (also --help, -h)`)
+}
+
+func isHelpArg(arg string) bool {
+	return arg == "--help" || arg == "-h" || arg == "help"
+}
+
+// printCommandUsage prints the usage lines for a single top-level command and reports
+// whether the command is known. Unknown commands fall back to the full usage text.
+func printCommandUsage(cmd string) bool {
+	var buf strings.Builder
+	usageText(&buf)
+	var lines []string
+	for _, line := range strings.Split(buf.String(), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && fields[0] == "monoflow" && fields[1] == cmd {
+			lines = append(lines, line)
+		}
+	}
+	if len(lines) == 0 {
+		printUsage()
+		return false
+	}
+	fmt.Println("Usage:")
+	fmt.Println(strings.Join(lines, "\n"))
+	return true
 }
 
 func findRepoRoot() (string, error) {
@@ -621,6 +666,7 @@ func handlePR(rootDir string) {
   monoflow pr create [--title="..."] [--body="..."] [--base=main] [--draft] [--stack] [--no-push]
   monoflow pr list [--state=open|closed|merged|all] [--limit=N]
   monoflow pr view <id>
+  monoflow pr status [id] [--json]
   monoflow pr review <id> [--approve] [--comment="..."] [--reject]
   monoflow pr test <id> [--against-master] [--base=main]
   monoflow pr local <id> [--worktree=<id>] [--deps=contracts|source|none]
@@ -659,7 +705,19 @@ func handlePR(rootDir string) {
 
 		res, err := mgr.Create(opts)
 		if err != nil {
-			fmt.Printf(`{"status": "error", "error": "%s"}`+"\n", err)
+			var gateErr *pr.GateError
+			if errors.As(err, &gateErr) {
+				data, _ := json.MarshalIndent(map[string]any{
+					"status":        "blocked",
+					"error":         err.Error(),
+					"proof_status":  gateErr.ProofStatus,
+					"failed_checks": gateErr.FailedChecks,
+					"audit":         gateErr.Audit,
+				}, "", "  ")
+				fmt.Println(string(data))
+				os.Exit(1)
+			}
+			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
 			os.Exit(1)
 		}
 		data, _ := json.MarshalIndent(res, "", "  ")
@@ -700,6 +758,34 @@ func handlePR(rootDir string) {
 		}
 		data, _ := json.MarshalIndent(meta, "", "  ")
 		fmt.Println(string(data))
+
+	case "status":
+		prID := ""
+		asJSON := false
+		for _, arg := range os.Args[3:] {
+			if arg == "--json" {
+				asJSON = true
+			} else if !strings.HasPrefix(arg, "-") && prID == "" {
+				prID = arg
+			}
+		}
+
+		res, err := mgr.Status(prID)
+		if err != nil {
+			if asJSON {
+				fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
+			} else {
+				fmt.Printf("❌ Failed to get PR status: %v\n", err)
+			}
+			os.Exit(1)
+		}
+
+		if asJSON {
+			data, _ := json.MarshalIndent(res, "", "  ")
+			fmt.Println(string(data))
+		} else {
+			fmt.Println(res.FormatView())
+		}
 
 	case "review":
 		if len(os.Args) < 4 {
@@ -812,7 +898,7 @@ func handlePR(rootDir string) {
 		opts := pr.TestOptions{BaseBranch: "main"}
 		res, err := mgr.Test(sub, opts)
 		if err != nil {
-			fmt.Printf(`{"error": "unknown pr subcommand '%s'; usage: monoflow pr [create|list|view|review|test|local|merge]"}`+"\n", sub)
+			fmt.Printf(`{"error": "unknown pr subcommand '%s'; usage: monoflow pr [create|list|view|status|review|test|local|merge]"}`+"\n", sub)
 			os.Exit(1)
 		}
 		data, _ := json.MarshalIndent(res, "", "  ")
@@ -1192,6 +1278,10 @@ func handleQueue(rootDir string) {
 }
 
 func handleCI(rootDir string) {
+	if len(os.Args) > 2 && os.Args[2] == "health" {
+		handleCIHealth(rootDir)
+		return
+	}
 	if len(os.Args) > 2 && os.Args[2] == "watch" {
 		cw := events.NewCIWatcher(rootDir)
 		opts := events.WatchOptions{
@@ -1244,6 +1334,52 @@ func handleCI(rootDir string) {
 		"receipt":            receipt,
 	}, "", "  ")
 	fmt.Println(string(data))
+}
+
+func handleCIHealth(rootDir string) {
+	collectOpts := cihealth.CollectOptions{Limit: 100}
+	checkFilter := ""
+	withLogs := false
+	for _, arg := range os.Args[3:] {
+		switch {
+		case strings.HasPrefix(arg, "--branch="):
+			collectOpts.Branch = strings.TrimPrefix(arg, "--branch=")
+		case strings.HasPrefix(arg, "--workflow="):
+			collectOpts.Workflow = strings.TrimPrefix(arg, "--workflow=")
+		case strings.HasPrefix(arg, "--limit="):
+			if n, err := strconv.Atoi(strings.TrimPrefix(arg, "--limit=")); err == nil && n > 0 {
+				collectOpts.Limit = n
+			}
+		case strings.HasPrefix(arg, "--check="):
+			checkFilter = strings.TrimPrefix(arg, "--check=")
+		case arg == "--logs":
+			withLogs = true
+		}
+	}
+	if collectOpts.Branch == "" {
+		collectOpts.Branch = "main"
+		cmdHead := exec.Command("git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
+		cmdHead.Dir = rootDir
+		if out, err := cmdHead.Output(); err == nil {
+			if b := strings.TrimPrefix(strings.TrimSpace(string(out)), "origin/"); b != "" {
+				collectOpts.Branch = b
+			}
+		}
+	}
+
+	src := cihealth.NewGHSource(rootDir)
+	data, warnings, err := cihealth.Collect(src, collectOpts)
+	if err != nil {
+		errData, _ := json.Marshal(map[string]string{"error": err.Error(), "branch": collectOpts.Branch})
+		fmt.Println(string(errData))
+		os.Exit(1)
+	}
+	rep := cihealth.Analyze(data, cihealth.Options{Branch: collectOpts.Branch, CheckFilter: checkFilter})
+	rep.Warnings = append(warnings, rep.Warnings...)
+	cihealth.Enrich(rep, src, cihealth.EnrichOptions{RootDir: rootDir, Logs: withLogs})
+
+	out, _ := json.MarshalIndent(rep, "", "  ")
+	fmt.Println(string(out))
 }
 
 func handleCommit(rootDir string) {

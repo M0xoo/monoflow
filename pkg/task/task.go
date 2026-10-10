@@ -26,7 +26,21 @@ type BoundaryResult struct {
 	Violations []string `json:"violations,omitempty"`
 }
 
+// IsInternalPath reports whether a path is MonoFlow-generated metadata or VCS plumbing
+// (.agents/**, .git/**, .gitignore) rather than agent-authored source. The task contract
+// itself (.agents/task.json) is never internal, so agents cannot silently widen their scope.
+func IsInternalPath(path string) bool {
+	clean := strings.TrimPrefix(strings.ReplaceAll(filepath.Clean(path), "\\", "/"), "./")
+	clean = strings.TrimPrefix(clean, "/")
+	if clean == ".agents/task.json" {
+		return false
+	}
+	return clean == ".gitignore" || clean == ".git" || clean == ".agents" ||
+		strings.HasPrefix(clean, ".git/") || strings.HasPrefix(clean, ".agents/")
+}
+
 // CheckBoundaries verifies that modified files do not violate AllowedPaths or ReadOnlyPaths.
+// Internal MonoFlow artifacts are exempt from AllowedPaths but explicit ReadOnlyPaths still apply.
 func CheckBoundaries(bundle *TaskBundle, modifiedFiles []string) BoundaryResult {
 	var violations []string
 
@@ -34,6 +48,7 @@ func CheckBoundaries(bundle *TaskBundle, modifiedFiles []string) BoundaryResult 
 		clean := filepath.Clean(file)
 		clean = strings.ReplaceAll(clean, "\\", "/")
 		clean = strings.TrimPrefix(clean, "/")
+		internal := IsInternalPath(clean)
 
 		// Check ReadOnlyPaths
 		for _, ro := range bundle.ReadOnlyPaths {
@@ -43,7 +58,7 @@ func CheckBoundaries(bundle *TaskBundle, modifiedFiles []string) BoundaryResult 
 		}
 
 		// Check AllowedPaths (if defined)
-		if len(bundle.AllowedPaths) > 0 {
+		if len(bundle.AllowedPaths) > 0 && !internal {
 			allowed := false
 			for _, allow := range bundle.AllowedPaths {
 				if matchPattern(allow, clean) {

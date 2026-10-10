@@ -163,12 +163,32 @@ type PRManager struct {
 
 // NewManager creates an instance of PRManager.
 func NewManager(rootDir string) *PRManager {
-	dir := filepath.Join(rootDir, ".agents", "prs")
-	_ = os.MkdirAll(dir, 0755)
+	dir := resolvePRDir(rootDir)
 	return &PRManager{
 		RootDir: rootDir,
 		prsDir:  dir,
 	}
+}
+
+func resolvePRDir(rootDir string) string {
+	dir := filepath.Join(rootDir, ".agents", "prs")
+	if entries, err := os.ReadDir(dir); err == nil && len(entries) > 0 {
+		return dir
+	}
+	cmd := exec.Command("git", "rev-parse", "--git-common-dir")
+	cmd.Dir = rootDir
+	if out, err := cmd.CombinedOutput(); err == nil {
+		commonDir := strings.TrimSpace(string(out))
+		if commonDir != "" {
+			mainRoot := filepath.Dir(commonDir)
+			candidate := filepath.Join(mainRoot, ".agents", "prs")
+			if entries, err := os.ReadDir(candidate); err == nil && len(entries) > 0 {
+				return candidate
+			}
+		}
+	}
+	_ = os.MkdirAll(dir, 0755)
+	return dir
 }
 
 // Create generates a complete PR with machine risk score, proof of work, and GitHub integration.
@@ -267,6 +287,14 @@ func (m *PRManager) Create(opts CreateOptions) (*PRMetadata, error) {
 
 	// 7. Generate DoD & Proof of Work Receipt
 	proofReceipt, _, _ := proof.ProveTask(m.RootDir, headBranch, g, changedFiles)
+
+	// 7b. Strict PR Gate Barrier: never push or open a PR that would fail remote CI.
+	// Drafts are exempt so agents can still share work-in-progress explicitly.
+	if !opts.Draft {
+		if gateErr := checkPRGate(proofReceipt, audit); gateErr != nil {
+			return nil, gateErr
+		}
+	}
 
 	// 8. Stacked Slicing if requested
 	var stackTiers *task.StackedSlice
@@ -373,6 +401,46 @@ func (m *PRManager) Create(opts CreateOptions) (*PRMetadata, error) {
 	})
 
 	return metadata, nil
+}
+
+// GateError reports that a PR was blocked locally because its DoD proof or audit failed.
+type GateError struct {
+	ProofStatus  string              `json:"proof_status"`
+	FailedChecks []proof.DoDItem     `json:"failed_checks,omitempty"`
+	Audit        *review.AuditResult `json:"audit,omitempty"`
+}
+
+func (e *GateError) Error() string {
+	var reasons []string
+	if e.ProofStatus != "VERIFIED" {
+		var ids []string
+		for _, c := range e.FailedChecks {
+			ids = append(ids, c.ID)
+		}
+		reasons = append(reasons, fmt.Sprintf("DoD proof %s (failed: %s)", e.ProofStatus, strings.Join(ids, ", ")))
+	}
+	if e.Audit != nil && !e.Audit.Valid {
+		reasons = append(reasons, fmt.Sprintf("PR audit invalid (%d warning(s))", len(e.Audit.HallucinationWarnings)))
+	}
+	return fmt.Sprintf("PR creation blocked by MonoFlow PR Gate: %s; fix and re-run, or pass --draft", strings.Join(reasons, "; "))
+}
+
+// checkPRGate returns a *GateError unless the proof is VERIFIED and the audit is valid.
+func checkPRGate(p *proof.ProofReceipt, audit *review.AuditResult) error {
+	status := "MISSING"
+	var failed []proof.DoDItem
+	if p != nil {
+		status = p.Status
+		for _, c := range p.DoDChecks {
+			if c.Status != "PASSED" {
+				failed = append(failed, c)
+			}
+		}
+	}
+	if status == "VERIFIED" && (audit == nil || audit.Valid) {
+		return nil
+	}
+	return &GateError{ProofStatus: status, FailedChecks: failed, Audit: audit}
 }
 
 // List returns recorded PRs, optionally merged with GitHub CLI data.

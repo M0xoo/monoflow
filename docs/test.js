@@ -39,7 +39,7 @@ if (features !== 6) fail(`expected 6 capability cards, found ${features}`);
 // Every command family the CLI exposes should appear in the reference table.
 const commands = ['init', 'clone', 'graph', 'subset', 'verify', 'checkpoint', 'cache', 'quarantine',
   'worktree', 'task', 'guard', 'review', 'commit', 'branch', 'sync', 'push', 'events', 'pr',
-  'queue', 'ci check', 'outer', 'deliver', 'app test', 'version', 'scenario'];
+  'queue', 'ci check', 'ci health', 'pr status', 'outer', 'deliver', 'app test', 'version', 'scenario'];
 const table = html.slice(html.indexOf('id="cmd-table"'));
 for (const c of commands) {
   if (!table.includes(`<code>${c}`)) fail(`command reference missing "${c}"`);

@@ -139,10 +139,11 @@ monoflow review risk</code></pre>
         <article class="feature">
           <span class="num">06</span>
           <h3>A shipping path built for agents</h3>
-          <p>Commit, sync and push without raw Git, and with <code>main</code> protected. PRs come with a risk tier and the list of affected packages. Pushing returns right away: CI results arrive later in an event inbox, so the agent never has to poll.</p>
+          <p>Commit, sync and push without raw Git, and with <code>main</code> protected. PRs come with a risk tier and the list of affected packages. Pushing returns right away: CI results arrive later in an event inbox, so the agent never has to poll. When CI is red, <code>ci health</code> shows what broke, when, and which commit did it.</p>
           <pre><code>monoflow commit -m "fix: rounding"
 monoflow pr create --title="fix: rounding"
-monoflow events unread</code></pre>
+monoflow events unread
+monoflow ci health</code></pre>
         </article>
       </div>
     </section>
@@ -299,7 +300,9 @@ cd monoflow &amp;&amp; make build</code></pre><button class="copy" data-copy="cm
             <tr><td><code>push</code></td><td>Push (direct pushes to main are blocked) and start a background CI watcher</td></tr>
             <tr><td><code>events unread|list|ack|clear</code></td><td>Inbox of CI results and other events, so agents never poll</td></tr>
             <tr><td><code>pr create|list|view|test|local|review|merge</code></td><td>PRs with a risk tier, proof receipt and affected-package list</td></tr>
+            <tr><td><code>pr status [id]</code></td><td>Local proof receipt and the GitHub PR in one view</td></tr>
             <tr><td><code>queue spec</code> · <code>ci check</code></td><td>Speculative local merge, and a signed receipt that lets CI take its fast path</td></tr>
+            <tr><td><code>ci health [--check=…] [--logs]</code></td><td>When each check started failing, breaking and fixing commits, recurrences and flaky checks</td></tr>
             <tr><td><code>outer start|status|wait</code></td><td>Run the slower full-dependency checks asynchronously</td></tr>
 
             <tr class="grp"><td colspan="2">Build &amp; release</td></tr>
