@@ -10,9 +10,16 @@ if [ -n "${SIM_GH_REPO:-}" ] && [ -z "${SIM_LINUX_BIN:-}" ] && [ -n "${MONOFLOW_
   (cd "$MONOFLOW_SRC" && GOOS=linux GOARCH=amd64 go build -o "$SIM_LINUX_BIN" ./cmd/monoflow)
 fi
 REPO=$(bash "$HERE/setup.sh" "$WORK" "$BIN" | tail -1)
+# Optional scenario: prepares the repo and selects tasks/<scenario>/.
+TASKS="$HERE/tasks"
+if [ -n "${SIM_SCENARIO:-}" ]; then
+  bash "$HERE/scenarios/$SIM_SCENARIO.sh" "$REPO" >&2
+  TASKS="$HERE/tasks/$SIM_SCENARIO"
+  [ ${#AGENTS[@]} -eq 0 ] || [ "${AGENTS[0]}" != "agent-billing" ] || AGENTS=($(cd "$TASKS" && ls agent-*.md | sed 's/\.md$//'))
+fi
 mkdir -p "$OUT"
 for a in "${AGENTS[@]}"; do
-  prompt="$(cat "$HERE/tasks/_preamble.md" "$HERE/tasks/$a.md")"
+  prompt="$(cat "$TASKS/_preamble.md" "$TASKS/$a.md")"
   ( start=$(date +%s)
     opencode run --dir "$REPO" -m "$MODEL" --auto --format json --title "$a" "$prompt" > "$OUT/$a.jsonl" 2> "$OUT/$a.stderr"
     echo "{\"agent\":\"$a\",\"rc\":$?,\"secs\":$(( $(date +%s)-start ))}" > "$OUT/$a.done" ) &
