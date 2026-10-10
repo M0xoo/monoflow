@@ -1036,7 +1036,7 @@ func (m *Manager) fillLiveState(info *WorktreeInfo) {
 
 // sharedStateDirs are MonoFlow state directories every worktree shares with the root so
 // PRs, proofs, CI events and the package cache are visible from anywhere in the repo.
-var sharedStateDirs = []string{".agents/cache", ".agents/prs", ".agents/proofs", ".agents/events"}
+var sharedStateDirs = []string{".agents/cache", ".agents/prs", ".agents/proofs", ".agents/events", ".agents/releases"}
 
 // ensureSharedState makes each shared state dir in wtPath a symlink to the root's,
 // migrating anything already written to a private copy.

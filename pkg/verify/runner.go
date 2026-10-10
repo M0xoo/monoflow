@@ -11,6 +11,7 @@ import (
 
 	"github.com/antigravity/monoflow/pkg/cache"
 	"github.com/antigravity/monoflow/pkg/graph"
+	"github.com/antigravity/monoflow/pkg/release"
 )
 
 // VerifyOptions configures the inner loop runner.
@@ -91,6 +92,16 @@ func (r *Runner) VerifyTarget(pkg *graph.PackageNode, opt VerifyOptions) TargetR
 	if len(cmds) == 0 {
 		res.DurationMs = float64(time.Since(start).Microseconds()) / 1000.0
 		return res
+	}
+	// A Go module consuming pinned internal releases must build standalone: inside a
+	// go.work workspace every module resolves workspace members at HEAD, ignoring its
+	// replace directives into release snapshots.
+	if pkg.Language == graph.LangGo && len(pkg.PinnedDependencies) > 0 {
+		if _, err := os.Stat(filepath.Join(r.RootDir, "go.work")); err == nil {
+			for i, c := range cmds {
+				cmds[i] = "GOWORK=off " + c
+			}
+		}
 	}
 	cmdStr := strings.Join(cmds, " && ")
 
@@ -262,6 +273,7 @@ func (r *Runner) VerifyAffected(g *graph.DependencyGraph, changedFiles []string,
 	if r.graph == nil {
 		r.graph = g
 	}
+	_ = release.EnsurePinned(r.RootDir, g)
 	affected := g.ComputeAffected(changedFiles)
 
 	if len(affected.AllAffected) == 0 {

@@ -30,11 +30,14 @@ type PackageNode struct {
 	Path         string   `json:"path"` // Relative to root
 	Language     Language `json:"language"`
 	Version      string   `json:"version,omitempty"`
-	Dependencies []string `json:"dependencies"` // Upstream dependencies
-	TestCmd      string   `json:"test_cmd,omitempty"`
-	LintCmd      string   `json:"lint_cmd,omitempty"`
-	TypecheckCmd string   `json:"typecheck_cmd,omitempty"`
-	Visibility   string   `json:"visibility,omitempty"` // "public" or "internal"
+	Dependencies []string `json:"dependencies"` // Upstream source dependencies (live code)
+	// PinnedDependencies are in-repo packages consumed at an internal release; changes to
+	// them do not affect this package until it upgrades.
+	PinnedDependencies []string `json:"pinned_dependencies,omitempty"`
+	TestCmd            string   `json:"test_cmd,omitempty"`
+	LintCmd            string   `json:"lint_cmd,omitempty"`
+	TypecheckCmd       string   `json:"typecheck_cmd,omitempty"`
+	Visibility         string   `json:"visibility,omitempty"` // "public" or "internal"
 }
 
 // Config represents .agents/monoflow.config.json
@@ -93,6 +96,8 @@ func LoadOrDiscover(rootDir string) (*DependencyGraph, error) {
 					resolveGoDependencies(rootDir, goPkgs, unresolvedGo...)
 				}
 				g.rebuildEdges()
+				// Manifests are the source of truth for how each edge is consumed.
+				g.ApplyEdgeModes()
 				return g, nil
 			}
 		}

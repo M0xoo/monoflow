@@ -12,6 +12,7 @@ import (
 	"github.com/antigravity/monoflow/pkg/deliver"
 	"github.com/antigravity/monoflow/pkg/graph"
 	"github.com/antigravity/monoflow/pkg/guard"
+	"github.com/antigravity/monoflow/pkg/release"
 	"github.com/antigravity/monoflow/pkg/task"
 	"github.com/antigravity/monoflow/pkg/verify"
 )
@@ -151,6 +152,10 @@ func ProveTask(rootDir string, taskID string, g *graph.DependencyGraph, modified
 		})
 	}
 
+	// 3b. Versioning: edges must resolve, and a declared changeset may not understate the
+	// exported-API change (consumers rely on SemVer to upgrade safely at their own pace).
+	dodItems = append(dodItems, versioningDoD(rootDir, g, modifiedFiles))
+
 	// 3. Build Deliverable for Affected Packages
 	var lastDeliverableSHA string
 	for _, pkgName := range suiteRes.AffectedPackages {
@@ -256,4 +261,71 @@ func LoadReceipt(rootDir, taskID string) (*ProofReceipt, error) {
 		return nil, err
 	}
 	return &r, nil
+}
+
+func versioningDoD(rootDir string, g *graph.DependencyGraph, modifiedFiles []string) DoDItem {
+	start := time.Now()
+	item := DoDItem{ID: "DoD-Versioning", Description: "Internal dependency ranges & SemVer honesty", Status: "PASSED"}
+	var problems, notes []string
+	for _, e := range g.ScanEdges() {
+		if e.Problem != "" {
+			problems = append(problems, fmt.Sprintf("%s -> %s: %s", e.Consumer, e.Dependency, e.Problem))
+		}
+	}
+	declared := pendingBumps(rootDir)
+	seen := map[string]bool{}
+	for _, f := range modifiedFiles {
+		p := g.MapFileToPackage(f)
+		if p == nil || seen[p.Name] || graph.IsNonCodeFile(f) {
+			continue
+		}
+		seen[p.Name] = true
+		s, err := release.Suggest(rootDir, g, p.Name, "main")
+		if err != nil || s.Required == "" {
+			continue
+		}
+		if d, ok := declared[p.Name]; ok && bumpRank(d) < bumpRank(s.Required) {
+			problems = append(problems, fmt.Sprintf("%s: changeset declares %s but the API diff requires %s (%d breaking/added symbols)", p.Name, d, s.Required, len(s.Changes)))
+		} else if s.Required == "major" {
+			notes = append(notes, fmt.Sprintf("%s has breaking API changes (requires a major bump on release)", p.Name))
+		}
+	}
+	item.DurationMs = float64(time.Since(start).Microseconds()) / 1000.0
+	if len(problems) > 0 {
+		item.Status = "FAILED"
+		item.Evidence = strings.Join(problems, "; ")
+	} else if len(notes) > 0 {
+		item.Evidence = strings.Join(notes, "; ")
+	} else {
+		item.Evidence = "All internal ranges resolve; no undeclared breaking changes"
+	}
+	return item
+}
+
+func pendingBumps(rootDir string) map[string]string {
+	out := map[string]string{}
+	entries, _ := os.ReadDir(filepath.Join(rootDir, ".agents", "changesets"))
+	for _, e := range entries {
+		data, err := os.ReadFile(filepath.Join(rootDir, ".agents", "changesets", e.Name()))
+		if err != nil {
+			continue
+		}
+		var cs task.Changeset
+		if json.Unmarshal(data, &cs) == nil && cs.Package != "" && bumpRank(cs.BumpType) > bumpRank(out[cs.Package]) {
+			out[cs.Package] = cs.BumpType
+		}
+	}
+	return out
+}
+
+func bumpRank(b string) int {
+	switch strings.ToLower(b) {
+	case "major":
+		return 3
+	case "minor":
+		return 2
+	case "patch":
+		return 1
+	}
+	return 0
 }

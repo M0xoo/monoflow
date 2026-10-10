@@ -26,6 +26,7 @@ func (g *DependencyGraph) AutoDiscover() error {
 	}
 
 	g.rebuildEdges()
+	g.ApplyEdgeModes()
 	return nil
 }
 

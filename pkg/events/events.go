@@ -16,18 +16,19 @@ import (
 type EventType string
 
 const (
-	EventCIPassed         EventType = "CI_PASSED"
-	EventCIFailed         EventType = "CI_FAILED"
-	EventOuterRegression  EventType = "OUTER_LOOP_REGRESSION"
-	EventSpeculativePass  EventType = "SPECULATIVE_MERGE_PASS"
-	EventSpeculativeFail  EventType = "SPECULATIVE_MERGE_FAIL"
-	EventCircuitTripped   EventType = "CIRCUIT_BREAKER_TRIPPED"
-	EventPRCreated        EventType = "PR_CREATED"
-	EventPRMerged         EventType = "PR_MERGED"
-	EventPRReviewed       EventType = "PR_REVIEWED"
-	EventPRTested         EventType = "PR_TESTED"
-	EventPRConflict       EventType = "PR_CONFLICT"
-	EventCISkipped        EventType = "CI_SKIPPED"
+	EventCIPassed           EventType = "CI_PASSED"
+	EventCIFailed           EventType = "CI_FAILED"
+	EventOuterRegression    EventType = "OUTER_LOOP_REGRESSION"
+	EventSpeculativePass    EventType = "SPECULATIVE_MERGE_PASS"
+	EventSpeculativeFail    EventType = "SPECULATIVE_MERGE_FAIL"
+	EventCircuitTripped     EventType = "CIRCUIT_BREAKER_TRIPPED"
+	EventPRCreated          EventType = "PR_CREATED"
+	EventPRMerged           EventType = "PR_MERGED"
+	EventPRReviewed         EventType = "PR_REVIEWED"
+	EventPRTested           EventType = "PR_TESTED"
+	EventPRConflict         EventType = "PR_CONFLICT"
+	EventCISkipped          EventType = "CI_SKIPPED"
+	EventDependencyReleased EventType = "DEPENDENCY_RELEASED"
 )
 
 // Event represents a machine-readable asynchronous event dispatched to agents.
