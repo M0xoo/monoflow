@@ -185,10 +185,15 @@ var (
 	cjsExportObj  = regexp.MustCompile(`module\.exports\s*=\s*\{([^}]*)\}`)
 	cjsExportProp = regexp.MustCompile(`(?m)(?:module\.)?exports\.([A-Za-z_$][\w$]*)\s*=`)
 	jsFuncParams  = regexp.MustCompile(`(?m)function\s+([A-Za-z_$][\w$]*)\s*\(([^)]*)\)`)
+	// TS-typed signatures: function f(a: T): R and const f = (a: T): R =>
+	tsFuncSig  = regexp.MustCompile(`(?m)^\s*export\s+(?:default\s+)?(?:async\s+)?function\*?\s+([A-Za-z_$][\w$]*)\s*(<[^>(]*>)?\s*\(([^)]*)\)\s*(:\s*[^{;]+)?`)
+	tsArrowSig = regexp.MustCompile(`(?m)^\s*export\s+const\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*(?:async\s+)?(<[^>(]*>)?\s*\(([^)]*)\)\s*(:\s*[^=]+)?=>`)
 )
 
 // jsSurface records exports of a module (keyed module-relative so different entry
 // points don't collide). Function signatures are parameter counts, since JS has no types.
+var tsInterfaceBody = regexp.MustCompile(`(?s)export\s+interface\s+([A-Za-z_$][\w$]*)[^{]*\{([^}]*)\}`)
+
 func jsSurface(api API, file, pkgDir, src string) {
 	mod := strings.TrimPrefix(file, pkgDir+"/")
 	params := map[string]string{}
@@ -208,6 +213,19 @@ func jsSurface(api API, file, pkgDir, src string) {
 			sig += " " + strings.Join(strings.Fields(m[3]), " ")
 		}
 		add(m[2], sig)
+	}
+	for _, m := range tsInterfaceBody.FindAllStringSubmatch(src, -1) {
+		api[strings.TrimPrefix(file, pkgDir+"/")+":"+m[1]] = "interface {" + strings.Join(strings.Fields(m[2]), " ") + "}"
+	}
+	// Typed signatures (TypeScript) replace parameter counts: a changed parameter or return
+	// type is a breaking change even when the arity is the same.
+	norm := func(s string) string { return strings.Join(strings.Fields(s), " ") }
+	for _, re := range []*regexp.Regexp{tsFuncSig, tsArrowSig} {
+		for _, m := range re.FindAllStringSubmatch(src, -1) {
+			if strings.Contains(m[3], ":") || m[4] != "" {
+				api[mod+":"+m[1]] = "function" + norm(m[2]) + "(" + norm(m[3]) + ")" + norm(m[4])
+			}
+		}
 	}
 	for _, re := range []*regexp.Regexp{jsExportList, cjsExportObj} {
 		for _, m := range re.FindAllStringSubmatch(src, -1) {

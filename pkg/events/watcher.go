@@ -590,7 +590,17 @@ func (cw *CIWatcher) saveJob(job *WatchJob) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0644)
+	return writeAtomic(path, data)
+}
+
+// writeAtomic writes via a temp file + rename so concurrent readers (hooks, waiters in
+// other processes) never see a partial JSON file.
+func writeAtomic(path string, data []byte) error {
+	tmp := fmt.Sprintf("%s.%d.tmp", path, os.Getpid())
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 func min(a, b int) int {
