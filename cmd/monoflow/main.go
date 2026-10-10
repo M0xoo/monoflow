@@ -595,6 +595,7 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 	}
 
 	if res.TotalTargets == 0 {
+		res.Hint = "No package is affected by the current changes (docs/config-only or no changes): nothing to verify."
 		if entries, err := os.ReadDir(filepath.Join(rootDir, ".agents", "worktrees")); err == nil {
 			var ids []string
 			for _, e := range entries {
@@ -1954,9 +1955,33 @@ func handleEvents(rootDir string) {
 			fmt.Printf(`{"error": "%s"}`+"\n", err)
 			os.Exit(1)
 		}
+		showAll := false
+		for _, a := range os.Args[3:] {
+			if a == "--all" {
+				showAll = true
+			}
+		}
+		// On an agent/feature branch the inbox is that agent's: its branch's events plus
+		// repo-wide ones. Other agents' events only cost context (--all shows them).
+		scope := "all"
+		others := 0
+		if branch := currentBranch(rootDir); !showAll && branch != "" && branch != "main" && branch != "master" && branch != "HEAD" {
+			scope = branch
+			mine := list[:0]
+			for _, e := range list {
+				if e.Branch == "" || e.Branch == branch {
+					mine = append(mine, e)
+				} else {
+					others++
+				}
+			}
+			list = mine
+		}
 		data, _ := json.MarshalIndent(map[string]any{
-			"unread_count": len(list),
-			"events":       list,
+			"scope":                scope,
+			"unread_count":         len(list),
+			"other_branches_count": others,
+			"events":               list,
 		}, "", "  ")
 		fmt.Println(string(data))
 
@@ -2590,4 +2615,12 @@ func changedFilesSince(rootDir, base string) []string {
 		add(out)
 	}
 	return files
+}
+
+func currentBranch(rootDir string) string {
+	out, err := exec.Command("git", "-C", rootDir, "rev-parse", "--abbrev-ref", "HEAD").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
