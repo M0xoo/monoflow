@@ -263,6 +263,7 @@ var commandDetails = map[string]string{
 	"sync": `  sync                                On an agent/feature branch: rebase onto origin/<base> (aborts cleanly on conflict)
                                       On the base branch: fast-forward from the remote
   sync --merge                        Merge the base instead (resolve conflicts once, then 'monoflow commit')
+  sync --stacked-on=<parent-branch>   Stacked PR whose parent was squash-merged: replay only this branch's commits
   sync [remote] [branch] [--rebase] [--autostash]   Explicit remote/branch`,
 	"branch": `  branch                              List branches
   branch <name> [-c|--create]         Switch to (or create) a branch`,
@@ -1869,6 +1870,7 @@ func handleSync(rootDir string) {
 	rebase := false
 	autostash := false
 	mergeMode := false
+	stackedOn := ""
 
 	var positional []string
 	for _, arg := range os.Args[2:] {
@@ -1876,6 +1878,10 @@ func handleSync(rootDir string) {
 			rebase = true
 		} else if arg == "--merge" {
 			mergeMode = true
+		} else if strings.HasPrefix(arg, "--stacked-on=") {
+			// After the parent branch of a stacked PR was squash-merged, replay only this
+			// branch's own commits onto the base.
+			stackedOn = strings.TrimPrefix(arg, "--stacked-on=")
 		} else if arg == "--autostash" {
 			autostash = true
 		} else if strings.HasPrefix(arg, "--remote=") {
@@ -1930,6 +1936,10 @@ func handleSync(rootDir string) {
 	if mergeMode {
 		strategy = "merge"
 		mergeArgs = []string{"merge", "--no-edit", "FETCH_HEAD"}
+	} else if stackedOn != "" {
+		strategy = "rebase-onto"
+		rebase = true
+		mergeArgs = []string{"rebase", "--autostash", "--onto", "FETCH_HEAD", stackedOn}
 	} else if rebase {
 		strategy = "rebase"
 		mergeArgs = []string{"rebase"}
