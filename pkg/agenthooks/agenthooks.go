@@ -190,6 +190,9 @@ export const MonoflowGuard = async ({ client, directory }) => {
       } catch {}
     },
     event: async ({ event }) => {
+      // Headless 'opencode run' exits when the session goes idle; prompting it then hangs
+      // the process. Idle wake-up is for interactive sessions.
+      if (process.argv.includes("run")) return;
       if (event.type !== "session.idle" || idleWatch) return;
       const sessionID = event.properties?.sessionID;
       idleWatch = execFile(bin, ["hook", "stop", "--format=text"], { cwd: directory, encoding: "utf8" }, async (err, stdout) => {

@@ -317,11 +317,11 @@ func (om *OuterLoopManager) executeJobInternal(job *OuterJob) error {
 		job.E2ECheck = e2eRes
 		if e2eErr != nil || (e2eRes != nil && e2eRes.Status != "passed" && e2eRes.Status != "success") {
 			failedCount++
-			errMsg := "E2E multi-agent scenario verification failed"
+			errMsg := "repository CI command failed"
 			if e2eErr != nil {
-				errMsg = fmt.Sprintf("E2E multi-agent scenario failed: %v", e2eErr)
+				errMsg = fmt.Sprintf("repository CI command failed: %v", e2eErr)
 			} else if e2eRes != nil && e2eRes.Error != "" {
-				errMsg = fmt.Sprintf("E2E multi-agent scenario failed: %s", e2eRes.Error)
+				errMsg = fmt.Sprintf("repository CI command failed: %s", e2eRes.Error)
 			}
 			failureMessages = append(failureMessages, errMsg)
 		}
@@ -735,10 +735,17 @@ func (om *OuterLoopManager) checkoutCommit(job *OuterJob) (string, func(), error
 		_, _ = om.runGit("worktree", "remove", "--force", dir)
 		_ = os.RemoveAll(dir)
 	}
-	if patterns, err := om.runGit("sparse-checkout", "list"); err == nil && strings.TrimSpace(patterns) != "" {
+	// The repo's own CI command (ci_cmd) needs the whole repository, exactly like remote
+	// CI; only without it does the outer loop reuse the worktree's sparse projection.
+	// (git worktree add copies the current worktree's sparse settings: disable explicitly.)
+	if patterns, err := om.runGit("sparse-checkout", "list"); err == nil && strings.TrimSpace(patterns) != "" && !om.hasCICommand() {
 		set := exec.Command("git", append([]string{"sparse-checkout", "set"}, strings.Fields(patterns)...)...)
 		set.Dir = dir
 		_ = set.Run()
+	} else {
+		off := exec.Command("git", "sparse-checkout", "disable")
+		off.Dir = dir
+		_ = off.Run()
 	}
 	co := exec.Command("git", "checkout", "--quiet", "--detach", job.CommitSHA)
 	co.Dir = dir
@@ -856,4 +863,16 @@ func spawnOuterProcess(root, jobID string) error {
 		return err
 	}
 	return cmd.Process.Release()
+}
+
+// hasCICommand reports whether the repository configures ci_cmd.
+func (om *OuterLoopManager) hasCICommand() bool {
+	data, err := os.ReadFile(filepath.Join(om.RootDir, ".agents", "monoflow.config.json"))
+	if err != nil {
+		return false
+	}
+	var cfg struct {
+		CICmd string `json:"ci_cmd"`
+	}
+	return json.Unmarshal(data, &cfg) == nil && cfg.CICmd != ""
 }
