@@ -124,9 +124,9 @@ func CheckTestIntegrity(rootDir string) ([]IntegrityViolation, error) {
 	diffText := string(out)
 	var violations []IntegrityViolation
 
-	deletedAssertRegex := regexp.MustCompile(`^-\s*(expect\(|assert\s+|assert\.|self\.assert|assertEquals|assert_eq!|t\.(Fatal|Error|Fail))`)
+	deletedAssertRegex := regexp.MustCompile(`^-\s*(.*[{\s;])?(expect\(|assert\s+|assert\.|self\.assert|assertEquals|assert_eq!|t\.(Fatal|Fatalf|Error|Errorf|Fail|FailNow))`)
 	tautologicalRegex := regexp.MustCompile(`\+\s*(expect\(true\)\.toBe\(true\)|assert\s+True|assert\s+1\s*==\s*1)`)
-	commentedAssertRegex := regexp.MustCompile(`\+\s*(//|#|/\*)\s*(expect\(|assert|it\(|test\(|t\.(Fatal|Error|Fail))`)
+	commentedAssertRegex := regexp.MustCompile(`\+\s*(//|#|/\*)\s*(.*[{\s;])?(expect\(|assert|it\(|test\(|t\.(Fatal|Fatalf|Error|Errorf|Fail|FailNow))`)
 
 	lines := strings.Split(diffText, "\n")
 	currentFile := ""
@@ -199,10 +199,11 @@ func ScanSecrets(rootDir string) ([]IntegrityViolation, error) {
 		pattern *regexp.Regexp
 	}{
 		{"AWS Access Key", regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`)},
+		{"Stripe API Key", regexp.MustCompile(`\bsk_(live|test)_[0-9a-zA-Z]{20,}\b`)},
 		{"Private Key", regexp.MustCompile(`-----BEGIN (RSA|EC|DSA|OPENSSH)? PRIVATE KEY-----`)},
 		{"GitHub Token", regexp.MustCompile(`\b(ghp|gho|ghu|ghs)_[A-Za-z0-9_]{36,}\b`)},
 		{"OpenAI API Key", regexp.MustCompile(`\bsk-[A-Za-z0-9]{48,}\b`)},
-		{"Generic Secret Assignment", regexp.MustCompile(`(?i)(api[_-]?key|secret[_-]?token|auth[_-]?token)\s*[:=]\s*["'][A-Za-z0-9+/=_\-]{16,}["']`)},
+		{"Generic Secret Assignment", regexp.MustCompile(`(?i)(api[_-]?key|secret[_-]?token|auth[_-]?token|stripe[_-]?secret)\s*[:=]\s*["']?[A-Za-z0-9+/=_\-]{16,}["']?`)},
 	}
 
 	lines := strings.Split(diffText, "\n")
@@ -226,6 +227,33 @@ func ScanSecrets(rootDir string) ([]IntegrityViolation, error) {
 						File:     currentFile,
 						Message:  fmt.Sprintf("Potential %s detected in addition: '%s'", sp.name, strings.TrimSpace(l)),
 					})
+				}
+			}
+		}
+	}
+
+	// Also inspect untracked files (??) for leaked secrets before they are staged
+	cmdUntracked := exec.Command("git", "status", "--porcelain")
+	cmdUntracked.Dir = rootDir
+	if outUn, errUn := cmdUntracked.CombinedOutput(); errUn == nil {
+		lines := strings.Split(string(outUn), "\n")
+		for _, l := range lines {
+			if strings.HasPrefix(l, "?? ") {
+				untrackedPath := strings.TrimSpace(strings.TrimPrefix(l, "?? "))
+				fullPath := filepath.Join(rootDir, untrackedPath)
+				if data, err := os.ReadFile(fullPath); err == nil && len(data) < 1024*1024 {
+					for _, line := range strings.Split(string(data), "\n") {
+						for _, sp := range secretPatterns {
+							if sp.pattern.MatchString(line) {
+								violations = append(violations, IntegrityViolation{
+									Severity: "CRITICAL",
+									Type:     "secret_leak",
+									File:     untrackedPath,
+									Message:  fmt.Sprintf("Potential %s detected in untracked file: '%s'", sp.name, strings.TrimSpace(line)),
+								})
+							}
+						}
+					}
 				}
 			}
 		}
