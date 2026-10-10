@@ -653,6 +653,16 @@ func (m *PRManager) Test(id string, opts TestOptions) (*PRTestResult, error) {
 		verdict = fmt.Sprintf("PR Delta failed verification against %s in %.2fs", baseBranch, durMs/1000.0)
 	}
 
+	// 3. Concurrency data race detector gate
+	if _, err := os.Stat(filepath.Join(m.RootDir, "go.mod")); err == nil {
+		cmdRace := exec.Command("go", "test", "-race", "-short", "./pkg/...")
+		cmdRace.Dir = m.RootDir
+		if raceOut, raceErr := cmdRace.CombinedOutput(); raceErr != nil {
+			status = "failed"
+			verdict = fmt.Sprintf("PR Delta failed: data race detected: %s", strings.TrimSpace(string(raceOut)))
+		}
+	}
+
 	totalCount := 0
 	if g != nil {
 		totalCount = len(g.GetAllPackages())
@@ -703,6 +713,16 @@ func (m *PRManager) Merge(id string, opts MergeOptions) (*PRMergeResult, error) 
 	strategy := opts.Strategy
 	if strategy == "" {
 		strategy = "squash"
+	}
+
+	// 0. Pre-merge gate: verify PR before merging
+	tRes, tErr := m.Test(id, TestOptions{BaseBranch: pr.BaseBranch})
+	if tErr != nil || (tRes != nil && tRes.Status != "passed") {
+		verdict := "verification failed"
+		if tRes != nil {
+			verdict = tRes.Verdict
+		}
+		return nil, fmt.Errorf("cannot merge PR '%s': pre-merge gate blocked (%s)", id, verdict)
 	}
 
 	// If speculative queue requested

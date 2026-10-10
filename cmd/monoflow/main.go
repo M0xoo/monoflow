@@ -1288,14 +1288,32 @@ func handlePush(rootDir string) {
 		os.Exit(1)
 	}
 
+	// 1b. Pre-push Concurrency Data Race Gate (< 1.8s)
+	if _, err := os.Stat(filepath.Join(rootDir, "go.mod")); err == nil {
+		cmdRace := exec.Command("go", "test", "-race", "-short", "./pkg/...")
+		cmdRace.Dir = rootDir
+		if raceOut, raceErr := cmdRace.CombinedOutput(); raceErr != nil {
+			data, _ := json.MarshalIndent(map[string]any{
+				"status":  "blocked",
+				"verdict": "Pre-push race detector gate failed: concurrency data race detected in tests. Cannot push racy code to remote.",
+				"output":  strings.TrimSpace(string(raceOut)),
+			}, "", "  ")
+			fmt.Println(string(data))
+			os.Exit(1)
+		}
+	}
+
 	remote := "origin"
 	branch := ""
 	noWatch := false
+	forceDirect := false
 	var positional []string
 
 	for _, arg := range os.Args[2:] {
 		if arg == "--no-watch" {
 			noWatch = true
+		} else if arg == "--force" || arg == "--direct" {
+			forceDirect = true
 		} else if strings.HasPrefix(arg, "--remote=") {
 			remote = strings.TrimPrefix(arg, "--remote=")
 		} else if strings.HasPrefix(arg, "--branch=") {
@@ -1320,6 +1338,16 @@ func handlePush(rootDir string) {
 		} else {
 			branch = "main"
 		}
+	}
+
+	// 1c. Protected Branch Shield: Block unverified direct pushes to main/master
+	if (branch == "main" || branch == "master") && !forceDirect {
+		data, _ := json.MarshalIndent(map[string]any{
+			"status":  "blocked",
+			"verdict": fmt.Sprintf("Direct push to protected branch '%s' blocked. MonoFlow requires proposing changes via Pull Request to guarantee zero remote CI breakage. Use 'monoflow pr create' instead (or pass --force to bypass).", branch),
+		}, "", "  ")
+		fmt.Println(string(data))
+		os.Exit(1)
 	}
 
 	headSHA := ""
