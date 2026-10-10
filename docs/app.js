@@ -16,7 +16,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function updateThemeIcon(theme) {
     if (themeToggleBtn) {
-      themeToggleBtn.textContent = theme === 'dark' ? '☀️' : '🌙';
+      themeToggleBtn.textContent = theme === 'dark' ? '☀' : '☾';
     }
   }
 
@@ -44,11 +44,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
       if (textToCopy) {
         navigator.clipboard.writeText(textToCopy.trim()).then(() => {
-          const originalText = btn.innerHTML;
-          btn.innerHTML = '✓ Copied!';
+          const originalText = btn.textContent;
+          btn.textContent = 'Copied';
           setTimeout(() => {
-            btn.innerHTML = originalText;
-          }, 2000);
+            btn.textContent = originalText;
+          }, 1800);
         });
       }
     });
@@ -84,7 +84,7 @@ document.addEventListener('DOMContentLoaded', () => {
   window.addEventListener('scroll', () => {
     let current = '';
     sections.forEach(section => {
-      const sectionTop = section.offsetTop - 120;
+      const sectionTop = section.offsetTop - 100;
       if (window.pageYOffset >= sectionTop) {
         current = section.getAttribute('id');
       }
@@ -98,14 +98,18 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // Interactive HUD Simulator
-  const simOutput = document.getElementById('sim-output');
-  const simTabs = document.querySelectorAll('.hud-tab');
+  // Interactive Blueprint Inspector
+  const blueprintCanvas = document.getElementById('blueprint-canvas');
+  const segmentedBtns = document.querySelectorAll('.segmented-btn');
 
-  const scenarios = {
-    ast: {
-      cmd: "monoflow worktree sync --to=agent-alpha --from=agent-beta",
-      json: `{
+  const models = {
+    ast: `// Same-File Multi-Agent AST Synthesis (packages/shared-go/logger/logger.go)
+// Agent Alpha added LogAuthSecurityEvent() in worktree alpha
+// Agent Beta added LogBillingTransaction() in worktree beta
+
+$ monoflow worktree sync --to=agent-alpha --from=agent-beta
+
+{
   "status": "synced",
   "from_agent": "agent-beta",
   "to_agent": "agent-alpha",
@@ -113,26 +117,32 @@ document.addEventListener('DOMContentLoaded', () => {
     "packages/shared-go/logger/logger.go (synthesized AST)"
   ],
   "duration_ms": 25.766,
-  "verdict": "Semantic AST synthesis united both function declarations with 0 conflict markers."
-}`
-    },
-    slop: {
-      cmd: 'monoflow review audit --title="docs: fix typo" --desc="minor doc update"',
-      json: `{
+  "verdict": "AST parsed, declarations united, imports deduplicated. Zero conflict markers."
+}`,
+
+    audit: `// PR Intent & Scope Auditor (Catching undeclared database migration)
+// Agent PR claims: "docs: update readme" but modified SQL migration in git
+
+$ monoflow review audit --title="docs: update readme" --desc="minor doc fixes"
+
+{
   "valid": false,
   "undeclared_files": [
     "packages/database-schemas/migrations/003_stripe_customer.sql"
   ],
   "hallucination_warnings": [
-    "PR claims trivial change ('docs: fix typo') but modifies non-doc file: jwt.go",
+    "PR claims trivial change ('docs: update readme') but modifies non-doc file: jwt.go",
     "Undisclosed critical blast radius: 003_stripe_customer.sql modified in Git but omitted from PR description"
   ],
   "verdict": "PR intent audit failed: unmentioned critical files or misleading claims detected"
-}`
-    },
-    queue: {
-      cmd: "monoflow queue spec task-enterprise-007",
-      json: `{
+}`,
+
+    queue: `// Speculative Local Merge Queue (Bypassing quarantined flaky tests)
+// Simulates landing on main in 36ms before hitting remote CI runners
+
+$ monoflow queue spec task-enterprise-007
+
+{
   "task_id": "task-enterprise-007",
   "speculative_merge_sha": "37bc26d587aa3e51e456a51125ddfc54a7b9bbced5d1ab8587aba299fbfbd84c",
   "affected_packages": ["services/billing-service"],
@@ -143,22 +153,14 @@ document.addEventListener('DOMContentLoaded', () => {
   "status": "speculatively_verified",
   "signature": "32ccd419d1817687bfa0083ce879cd0b6c5bcd2692e2227a27abe56ea3d148e1",
   "verdict": "Eligible for GitHub Actions Tier 1 Fast-Path Merge (< 30s)"
-}`
-    },
-    circuit: {
-      cmd: "monoflow verify --affected (Attempt 3/3)",
-      json: `{
-  "circuit_breaker": "TRIPPED",
-  "attempts": 3,
-  "max_attempts": 3,
-  "action": "Auto-reverted working tree to latest green checkpoint to prevent hallucination loop",
-  "escalate_to_human": true,
-  "reason": "Target 'services/billing-service' failed 3 consecutive times without passing"
-}`
-    },
-    proof: {
-      cmd: "monoflow verify --proof=task-billing-discount",
-      json: `{
+}`,
+
+    pow: `// 1-Second Reviewer Verification via Cryptographic Proof Receipt
+// Replaces 15-minute human checkout and rebuild cycle
+
+$ monoflow verify --proof=task-billing-discount
+
+{
   "status": "VERIFIED",
   "task_id": "task-billing-discount",
   "verified_in_ms": 0.159,
@@ -167,67 +169,22 @@ document.addEventListener('DOMContentLoaded', () => {
   "deliverable_sha": "8221286bcc8982acc0dd5827536a32d6a63e5a19cf6782c55118371344c42f0e",
   "confidence_verdict": "APPROVED (1-Second Instant Verification Passed)"
 }`
-    }
   };
 
-  simTabs.forEach(tab => {
-    tab.addEventListener('click', () => {
-      simTabs.forEach(t => t.classList.remove('active'));
-      tab.classList.add('active');
-      const scenarioKey = tab.getAttribute('data-scenario');
-      const data = scenarios[scenarioKey];
-      if (data && simOutput) {
-        simOutput.innerHTML = `<span style="color: var(--neon-cyan)">$ ${data.cmd}</span>\n\n${syntaxHighlightJSON(data.json)}`;
+  segmentedBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      segmentedBtns.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const key = btn.getAttribute('data-model');
+      if (models[key] && blueprintCanvas) {
+        blueprintCanvas.textContent = models[key];
       }
     });
   });
 
-  function syntaxHighlightJSON(jsonStr) {
-    return jsonStr.replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, match => {
-      let cls = 'color: #00f0ff;';
-      if (/^"/.test(match)) {
-        if (/:$/.test(match)) {
-          cls = 'color: #93c5fd; font-weight: 600;';
-        } else {
-          cls = 'color: #00ff88;';
-        }
-      } else if (/true|false/.test(match)) {
-        cls = 'color: #ffb703;';
-      } else if (/null/.test(match)) {
-        cls = 'color: #ff3366;';
-      }
-      return `<span style="${cls}">${match}</span>`;
-    });
-  }
-
   // Default trigger
-  const defaultTab = document.querySelector('.hud-tab[data-scenario="ast"]');
-  if (defaultTab) {
-    defaultTab.click();
-  }
-
-  // Interactive CI Latency & Cost Calculator
-  const pkgInput = document.getElementById('calc-pkg-count');
-  const ciTimeOutput = document.getElementById('calc-ci-time');
-  const mfTimeOutput = document.getElementById('calc-mf-time');
-  const speedupOutput = document.getElementById('calc-speedup');
-  const savingsOutput = document.getElementById('calc-savings');
-
-  if (pkgInput) {
-    const updateCalculator = () => {
-      const count = Math.max(2, parseInt(pkgInput.value || 12, 10));
-      const tradTimeMins = Math.round(count * 2.8);
-      const mfTimeSecs = (0.2 + (count * 0.12)).toFixed(1);
-      const speedup = Math.round((tradTimeMins * 60) / mfTimeSecs);
-      const monthlySavings = Math.round(count * 115);
-
-      if (ciTimeOutput) ciTimeOutput.textContent = `${tradTimeMins} mins`;
-      if (mfTimeOutput) mfTimeOutput.textContent = `${mfTimeSecs}s`;
-      if (speedupOutput) speedupOutput.textContent = `${speedup}x`;
-      if (savingsOutput) savingsOutput.textContent = `$${monthlySavings.toLocaleString()}/mo`;
-    };
-
-    pkgInput.addEventListener('input', updateCalculator);
-    updateCalculator();
+  const defaultBtn = document.querySelector('.segmented-btn[data-model="ast"]');
+  if (defaultBtn) {
+    defaultBtn.click();
   }
 });
