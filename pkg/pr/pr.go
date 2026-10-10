@@ -15,11 +15,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/antigravity/monoflow/pkg/cache"
 	"github.com/antigravity/monoflow/pkg/checkpoint"
 	"github.com/antigravity/monoflow/pkg/events"
 	"github.com/antigravity/monoflow/pkg/graph"
 	"github.com/antigravity/monoflow/pkg/guard"
 	"github.com/antigravity/monoflow/pkg/proof"
+	"github.com/antigravity/monoflow/pkg/proofs"
 	"github.com/antigravity/monoflow/pkg/queue"
 	"github.com/antigravity/monoflow/pkg/review"
 	"github.com/antigravity/monoflow/pkg/subset"
@@ -326,13 +328,17 @@ func (m *PRManager) Create(opts CreateOptions) (*PRMetadata, error) {
 	pushed := false
 	var pushErr string
 	if opts.AutoPush {
-		if err := requireOuterGreen(m.RootDir, headSHA, headBranch); err != nil {
+		outerJob, err := requireOuterGreen(m.RootDir, headSHA, headBranch)
+		if err != nil {
 			return nil, err
 		}
 		cmdPush := exec.Command("git", "push", "-u", remote, headBranch+":"+headBranch)
 		cmdPush.Dir = m.RootDir
 		if out, err := cmdPush.CombinedOutput(); err == nil {
 			pushed = true
+			if outerJob != nil {
+				_, _ = proofs.Publish(m.RootDir, remote, headSHA, cache.NewManager(m.RootDir, cache.DefaultConfig(m.RootDir)), verify.PassedKeys(outerJob.TargetResults))
+			}
 		} else {
 			pushErr = strings.TrimSpace(string(out))
 		}
@@ -1342,7 +1348,7 @@ func (m *PRManager) freshestBase(base string) string {
 }
 
 // requireOuterGreen reuses, waits for, or runs the outer loop for sha and fails when it is red.
-func requireOuterGreen(root, sha, branch string) error {
+func requireOuterGreen(root, sha, branch string) (*verify.OuterJob, error) {
 	om := verify.NewOuterLoopManager(root)
 	job := om.LatestForCommit(sha)
 	var err error
@@ -1350,11 +1356,11 @@ func requireOuterGreen(root, sha, branch string) error {
 	case job == nil:
 		job, err = om.StartJob(verify.OuterLoopOptions{CommitSHA: sha, Branch: branch, IncludeE2E: true})
 		if job == nil {
-			return fmt.Errorf("outer loop could not run: %v", err)
+			return nil, fmt.Errorf("outer loop could not run: %v", err)
 		}
 	case job.Status == verify.JobQueued || job.Status == verify.JobRunning:
 		if job, err = om.WaitJob(job.ID, 30*time.Minute); err != nil {
-			return fmt.Errorf("outer loop did not finish: %w", err)
+			return nil, fmt.Errorf("outer loop did not finish: %w", err)
 		}
 	}
 	if job.Status == verify.JobRegressed || job.Status == verify.JobRolledBack {
@@ -1362,7 +1368,7 @@ func requireOuterGreen(root, sha, branch string) error {
 		if len(summary) > 1200 {
 			summary = summary[:1200] + " …"
 		}
-		return fmt.Errorf("PR blocked: outer loop is red for %s (remote CI would fail): %s", sha[:min(8, len(sha))], summary)
+		return nil, fmt.Errorf("PR blocked: outer loop is red for %s (remote CI would fail): %s", sha[:min(8, len(sha))], summary)
 	}
-	return nil
+	return job, nil
 }

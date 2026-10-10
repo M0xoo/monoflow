@@ -12,10 +12,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/antigravity/monoflow/pkg/cache"
 	"github.com/antigravity/monoflow/pkg/checkpoint"
 	"github.com/antigravity/monoflow/pkg/events"
 	"github.com/antigravity/monoflow/pkg/graph"
 	"github.com/antigravity/monoflow/pkg/guard"
+	"github.com/antigravity/monoflow/pkg/proofs"
 )
 
 // OuterJobStatus defines the lifecycle of an asynchronous outer-loop execution.
@@ -386,6 +388,8 @@ func (om *OuterLoopManager) executeJobInternal(job *OuterJob) error {
 		} else {
 			job.Promoted = true
 			job.Status = JobPromoted
+			// Let remote CI reuse what was just verified for the identical inputs.
+			_, _ = proofs.Publish(om.RootDir, job.Remote, job.CommitSHA, cache.NewManager(om.RootDir, cache.DefaultConfig(om.RootDir)), PassedKeys(job.TargetResults))
 			// Remote CI now runs on the pushed commit: watch it like `monoflow push` does.
 			_, _ = events.NewCIWatcher(om.RootDir).StartWatch(events.WatchOptions{CommitSHA: job.CommitSHA, Branch: job.RemoteBranch, Remote: job.Remote, Async: true})
 		}

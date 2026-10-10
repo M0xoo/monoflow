@@ -23,6 +23,7 @@ import (
 	initialize "github.com/antigravity/monoflow/pkg/init"
 	"github.com/antigravity/monoflow/pkg/pr"
 	"github.com/antigravity/monoflow/pkg/proof"
+	"github.com/antigravity/monoflow/pkg/proofs"
 	"github.com/antigravity/monoflow/pkg/queue"
 	"github.com/antigravity/monoflow/pkg/release"
 	"github.com/antigravity/monoflow/pkg/review"
@@ -1422,6 +1423,10 @@ func handleQueue(rootDir string) {
 }
 
 func handleCI(rootDir string) {
+	if len(os.Args) > 3 && os.Args[2] == "proofs" {
+		handleCIProofs(rootDir, os.Args[3])
+		return
+	}
 	if len(os.Args) > 2 && os.Args[2] == "health" {
 		handleCIHealth(rootDir)
 		return
@@ -1840,6 +1845,11 @@ func handlePush(rootDir string) {
 		})
 		if err == nil {
 			res["status"] = "pushed_and_watching"
+			if job := verify.NewOuterLoopManager(rootDir).LatestForCommit(headSHA); job != nil {
+				if n, err := proofs.Publish(rootDir, remote, headSHA, cache.NewManager(rootDir, cache.DefaultConfig(rootDir)), verify.PassedKeys(job.TargetResults)); err == nil && n > 0 {
+					res["proofs_published"] = n
+				}
+			}
 			res["watcher_id"] = job.ID
 			res["ci_watcher_command"] = fmt.Sprintf("./bin/monoflow events watch %s --branch=%s", headSHA, branch)
 			res["agent_action_required"] = "DO_NOT_WAIT"
@@ -3275,4 +3285,54 @@ func readHookStdin() []byte {
 	case <-time.After(300 * time.Millisecond):
 		return nil
 	}
+}
+
+// handleCIProofs: `ci proofs import --commit=<sha>` (run by the generated workflow on PRs)
+// and `ci proofs publish` (normally done automatically after a gated push).
+func handleCIProofs(rootDir, sub string) {
+	sha, remote := "", "origin"
+	for _, a := range os.Args[4:] {
+		if strings.HasPrefix(a, "--commit=") {
+			sha = strings.TrimPrefix(a, "--commit=")
+		} else if strings.HasPrefix(a, "--remote=") {
+			remote = strings.TrimPrefix(a, "--remote=")
+		}
+	}
+	if sha == "" {
+		sha = strings.TrimSpace(gitOut(rootDir, "rev-parse", "HEAD"))
+	}
+	mgr := cache.NewManager(rootDir, cache.DefaultConfig(rootDir))
+	switch sub {
+	case "import":
+		if !proofs.Trusted(rootDir) {
+			fmt.Println(`{"status": "disabled", "reason": "ci.trust_local_proofs is false"}`)
+			return
+		}
+		n, err := proofs.Import(rootDir, remote, sha, mgr)
+		if err != nil {
+			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
+			return // never fail CI because proofs are missing: it just verifies everything
+		}
+		fmt.Printf(`{"status": "imported", "commit": %q, "records": %d}`+"\n", sha, n)
+	case "publish":
+		job := verify.NewOuterLoopManager(rootDir).LatestForCommit(sha)
+		if job == nil || (job.Status != verify.JobPassed && job.Status != verify.JobPromoted) {
+			fmt.Println(`{"status": "refused", "reason": "only a green outer loop for this commit can be published"}`)
+			os.Exit(1)
+		}
+		n, err := proofs.Publish(rootDir, remote, sha, mgr, verify.PassedKeys(job.TargetResults))
+		if err != nil {
+			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
+			os.Exit(1)
+		}
+		fmt.Printf(`{"status": "published", "commit": %q, "records": %d}`+"\n", sha, n)
+	default:
+		fmt.Println(`{"error": "usage: monoflow ci proofs import|publish [--commit=<sha>] [--remote=<r>]"}`)
+		os.Exit(1)
+	}
+}
+
+func gitOut(dir string, args ...string) string {
+	out, _ := exec.Command("git", append([]string{"-C", dir}, args...)...).Output()
+	return string(out)
 }

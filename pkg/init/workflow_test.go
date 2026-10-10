@@ -17,6 +17,7 @@ func TestGitHubWorkflowContract(t *testing.T) {
 		"pull_request:", "branches: [main, master]", "cancel-in-progress: true",
 		"github.event.pull_request.draft == false", `"**/*.md"`, "actions/setup-node",
 		"actions/setup-go", "monoflow verify --affected --base=",
+		"if: github.event_name == 'pull_request'\n        run: monoflow ci proofs import",
 	} {
 		if !strings.Contains(wf, want) {
 			t.Errorf("workflow missing %q", want)

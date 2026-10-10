@@ -95,6 +95,9 @@ jobs:
             git clone -q --depth 1 ` + MonoflowSourceRepo + ` /tmp/monoflow-src
             (cd /tmp/monoflow-src && go build -o /usr/local/bin/monoflow ./cmd/monoflow)
           fi
+      - name: Reuse agent-verified results (PRs only; main always verifies for real)
+        if: github.event_name == 'pull_request'
+        run: monoflow ci proofs import --commit=${{ github.event.pull_request.head.sha }} || true
       - name: Verify affected packages
         env:
           BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before }}
