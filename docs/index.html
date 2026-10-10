@@ -1435,9 +1435,13 @@ input[type="range"]::-webkit-slider-thumb {
             <button class="wb-tab active" data-target="cli">⚡ Interactive CLI</button>
             <button class="wb-tab" data-target="ast">🧬 AST Synthesizer</button>
             <button class="wb-tab" data-target="cow">📂 CoW Worktrees</button>
+            <button class="wb-tab" data-target="cache">💾 Package Cache</button>
+            <button class="wb-tab" data-target="version">📦 SemVer Changesets</button>
+            <button class="wb-tab" data-target="events">⚡ Async Event Bus</button>
             <button class="wb-tab" data-target="audit">🛡️ Slop Auditor</button>
             <button class="wb-tab" data-target="queue">🔀 Speculative Queue</button>
             <button class="wb-tab" data-target="pow">📜 1s PoW Receipt</button>
+            <button class="wb-tab" data-target="scenario">🏢 Swarm Scenario</button>
           </div>
           <div class="workbench-meta">
             <span class="status-indicator">ENGINE RUNNING</span>
@@ -1600,6 +1604,76 @@ input[type="range"]::-webkit-slider-thumb {
             </div>
           </div>
         </div>
+
+        <!-- Box 5 -->
+        <div class="benchmark-box">
+          <div class="benchmark-box-title">
+            <h4>Package Cache Verification Hit</h4>
+            <span>LOWER IS BETTER</span>
+          </div>
+          <div class="bar-row">
+            <div class="bar-meta">
+              <span class="tool-name">⚡ MonoFlow (Content-Addressable Cache)</span>
+              <span class="tool-timing c-emerald">0.80 ms</span>
+            </div>
+            <div class="bar-track">
+              <div class="bar-fill monoflow" style="width: 1%;"></div>
+            </div>
+          </div>
+          <div class="bar-row">
+            <div class="bar-meta">
+              <span class="tool-name">Turborepo / Nx (Local cache hit)</span>
+              <span class="tool-timing">680 ms</span>
+            </div>
+            <div class="bar-track">
+              <div class="bar-fill legacy" style="width: 25%;"></div>
+            </div>
+          </div>
+          <div class="bar-row">
+            <div class="bar-meta">
+              <span class="tool-name">Full Package Retest Suite</span>
+              <span class="tool-timing">28,400 ms</span>
+            </div>
+            <div class="bar-track">
+              <div class="bar-fill legacy" style="width: 100%;"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Box 6 -->
+        <div class="benchmark-box">
+          <div class="benchmark-box-title">
+            <h4>Sparse Remote Subset Sync</h4>
+            <span>LOWER IS BETTER</span>
+          </div>
+          <div class="bar-row">
+            <div class="bar-meta">
+              <span class="tool-name">⚡ MonoFlow (Sparse-aware fast-forward)</span>
+              <span class="tool-timing c-amber">58.2 ms</span>
+            </div>
+            <div class="bar-track">
+              <div class="bar-fill monoflow" style="width: 2%;"></div>
+            </div>
+          </div>
+          <div class="bar-row">
+            <div class="bar-meta">
+              <span class="tool-name">Git Native (fetch + sparse re-cone)</span>
+              <span class="tool-timing">4,500 ms</span>
+            </div>
+            <div class="bar-track">
+              <div class="bar-fill legacy" style="width: 32%;"></div>
+            </div>
+          </div>
+          <div class="bar-row">
+            <div class="bar-meta">
+              <span class="tool-name">Full Monorepo Checkout &amp; Pull</span>
+              <span class="tool-timing">24,800 ms</span>
+            </div>
+            <div class="bar-track">
+              <div class="bar-fill legacy" style="width: 100%;"></div>
+            </div>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -1695,6 +1769,48 @@ input[type="range"]::-webkit-slider-thumb {
             <span class="subsystem-chip">Two-Tier Gate</span>
           </div>
         </div>
+
+        <!-- Subsystem 7 -->
+        <div class="subsystem-card">
+          <div class="subsystem-num">07 / PACKAGE CACHE</div>
+          <h3 class="subsystem-title">Deterministic Caching &amp; Daemon</h3>
+          <p class="subsystem-body">
+            Content-addressable cache keys computed over source trees, toolchain versions, and dependencies. Delivers sub-millisecond inner loop test verification hits (&lt; 1ms) and provides a zero-dependency HTTP daemon for distributed swarm and CI cache sharing.
+          </p>
+          <div class="subsystem-chip-row">
+            <span class="subsystem-chip">Deterministic Keying</span>
+            <span class="subsystem-chip">Sub-1ms Verify</span>
+            <span class="subsystem-chip">HTTP Cache Server</span>
+          </div>
+        </div>
+
+        <!-- Subsystem 8 -->
+        <div class="subsystem-card">
+          <div class="subsystem-num">08 / VERSIONING</div>
+          <h3 class="subsystem-title">SemVer Changesets &amp; Health</h3>
+          <p class="subsystem-body">
+            Automated multi-package SemVer versioning with declarative changesets. Cascades version increments across topological DAG dependents, syncs polyglot manifests, and verifies transitive dependency integrity in sparse checkouts.
+          </p>
+          <div class="subsystem-chip-row">
+            <span class="subsystem-chip">SemVer Cascade</span>
+            <span class="subsystem-chip">Polyglot Manifests</span>
+            <span class="subsystem-chip">Subset Health Check</span>
+          </div>
+        </div>
+
+        <!-- Subsystem 9 -->
+        <div class="subsystem-card">
+          <div class="subsystem-num">09 / ASYNC EVENT BUS</div>
+          <h3 class="subsystem-title">Fire-and-Forget Push &amp; Supervisor</h3>
+          <p class="subsystem-body">
+            Non-blocking reactive communication model. Agents push code and immediately resume development while autonomous background supervisors track remote GitHub Actions runs and deliver event notifications in &lt; 5ms without polling.
+          </p>
+          <div class="subsystem-chip-row">
+            <span class="subsystem-chip">Fire-and-Forget Push</span>
+            <span class="subsystem-chip">Autonomous CI Watcher</span>
+            <span class="subsystem-chip">Zero-Token Inbox</span>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -1762,79 +1878,129 @@ input[type="range"]::-webkit-slider-thumb {
           </thead>
           <tbody>
             <tr>
-              <td><code>monoflow init</code></td>
-              <td>Auto-discovers workspace topology and packages</td>
-              <td><code>--json</code>, <code>--config &lt;path&gt;</code></td>
+              <td><code>monoflow init [dir]</code></td>
+              <td>Auto-discovers repository architecture, generates <code>.agents/monoflow.config.json</code> &amp; rules</td>
+              <td><code>--setup-gh-actions</code>, <code>--gh</code>, <code>--no-gh</code></td>
             </tr>
             <tr>
-              <td><code>monoflow clone &lt;url&gt;</code></td>
-              <td>Partial clone of a package subset + transitive dependencies (omits rest)</td>
+              <td><code>monoflow clone &lt;url&gt; [dest]</code></td>
+              <td>Partial clone of a package subset + transitive dependencies (&lt; 1s partial clone)</td>
               <td><code>--packages &lt;p1,p2&gt;</code>, <code>--include-deps</code></td>
             </tr>
             <tr>
-              <td><code>monoflow subset [set|add|remove|update|deps|list|reset]</code></td>
-              <td>Dynamic package subset management: add/remove packages, update from remote &lt; 50ms</td>
-              <td><code>--packages &lt;p1,p2&gt;</code>, <code>--deps &lt;mode&gt;</code>, <code>--force</code></td>
+              <td><code>monoflow subset [set|add|remove|update|deps|list|check|reset]</code></td>
+              <td>Dynamic package subset projection, selective remote update &amp; dependency health</td>
+              <td><code>--packages &lt;p1,p2&gt;</code>, <code>--deps direct|all|none</code>, <code>--force</code></td>
             </tr>
             <tr>
-              <td><code>monoflow run &lt;task&gt;</code></td>
-              <td>Executes tasks only on affected DAG dependencies</td>
-              <td><code>--scope affected|all</code>, <code>--parallel &lt;n&gt;</code></td>
+              <td><code>monoflow graph [query|impact]</code></td>
+              <td>Inspect dependency DAG in JSON, query upstream/downstream &amp; compute impact matrix</td>
+              <td><code>query &lt;pkg&gt;</code>, <code>impact &lt;file&gt;</code></td>
             </tr>
             <tr>
-              <td><code>monoflow checkpoint</code></td>
-              <td>Creates a 15ms shadow snapshot via <code>git write-tree</code></td>
-              <td><code>--message &lt;msg&gt;</code>, <code>--tag &lt;name&gt;</code></td>
+              <td><code>monoflow checkpoint [save|revert]</code></td>
+              <td>Ephemeral 15ms in-memory snapshot via low-level <code>git write-tree</code></td>
+              <td><code>save "&lt;msg&gt;"</code>, <code>revert [id]</code></td>
             </tr>
             <tr>
-              <td><code>monoflow worktree create / focus</code></td>
-              <td>Provisions or focuses a virtual worktree on a package or subset</td>
-              <td><code>--package &lt;name&gt;</code>, <code>--deps &lt;mode&gt;</code>, <code>--isolated-deps</code></td>
+              <td><code>monoflow worktree [create|focus|add|remove|update|isolate|sync|gc|finish]</code></td>
+              <td>APFS/btrfs CoW virtual worktrees with package focus, AST synthesis &amp; heartbeat GC</td>
+              <td><code>--package &lt;p&gt;</code>, <code>--isolated-deps</code>, <code>--to=B --from=A</code></td>
             </tr>
             <tr>
-              <td><code>monoflow synthesize &lt;file&gt;</code></td>
-              <td>Synthesizes parallel AST modifications across agent branches</td>
-              <td><code>--base &lt;ref&gt;</code>, <code>--branches &lt;b1,b2&gt;</code></td>
+              <td><code>monoflow verify [--affected|--proof]</code></td>
+              <td>Sub-2s inner loop with clean token-compact JSON diagnostics (hits cache in &lt; 1ms)</td>
+              <td><code>--affected</code>, <code>--proof=&lt;id&gt;</code>, <code>--scope all</code></td>
             </tr>
             <tr>
-              <td><code>monoflow audit --pr &lt;id&gt;</code></td>
-              <td>Audits agent PR for intent adherence and prompt slop</td>
-              <td><code>--strict</code>, <code>--quarantine-hallucinations</code></td>
+              <td><code>monoflow outer [start|status|wait]</code></td>
+              <td>Async outer loop: transitive verification matrix &amp; remote promotion barrier</td>
+              <td><code>start</code>, <code>status</code>, <code>wait</code></td>
             </tr>
             <tr>
-              <td><code>monoflow push &lt;remote&gt; &lt;branch&gt;</code></td>
-              <td>Fire-and-forget push with background autonomous CI watcher</td>
-              <td><code>--no-watch</code>, <code>--branch &lt;b&gt;</code></td>
+              <td><code>monoflow push [remote] [branch]</code></td>
+              <td>Fire-and-forget push with background autonomous CI watcher &amp; race detector</td>
+              <td><code>--no-watch</code>, <code>[remote]</code>, <code>[branch]</code></td>
             </tr>
             <tr>
-              <td><code>monoflow pr create</code></td>
-              <td>Creates PR with machine risk scoring, PoW receipt, and affected manifest</td>
-              <td><code>--title</code>, <code>--base</code>, <code>--stack</code>, <code>--draft</code></td>
+              <td><code>monoflow sync [remote] [branch]</code></td>
+              <td>Sub-second remote synchronization preserving sparse package subsets (ff-only/rebase)</td>
+              <td><code>[remote]</code>, <code>[branch]</code></td>
             </tr>
             <tr>
-              <td><code>monoflow pr local &lt;id&gt;</code></td>
-              <td>Projects workspace or worktree to <strong>only</strong> the PR's affected packages</td>
-              <td><code>--worktree=&lt;id&gt;</code>, <code>--deps=contracts|source|none</code></td>
+              <td><code>monoflow branch [name|switch]</code></td>
+              <td>List, create, or switch branches without raw Git commands or detached HEADs</td>
+              <td><code>[name]</code>, <code>switch &lt;name&gt;</code></td>
             </tr>
             <tr>
-              <td><code>monoflow pr [list|view|review|test|merge]</code></td>
-              <td>Full agent-native PR suite: view, machine sign-off, hot-mount testing &amp; queue merge</td>
-              <td><code>--approve</code>, <code>--strategy</code>, <code>--queue</code></td>
-            </tr>
-            <tr>
-              <td><code>monoflow events unread</code></td>
+              <td><code>monoflow events [unread|list|ack|clear|watch]</code></td>
               <td>Asynchronous agent event inbox (check in &lt; 5ms without polling)</td>
-              <td><code>--ack &lt;id&gt;</code>, <code>--clear</code></td>
+              <td><code>unread</code>, <code>list</code>, <code>ack &lt;id&gt;</code>, <code>clear</code></td>
             </tr>
             <tr>
-              <td><code>monoflow queue merge</code></td>
-              <td>Enqueues PR into speculative DAG merge queue</td>
-              <td><code>--speculative</code>, <code>--auto-rebase</code></td>
+              <td><code>monoflow review [risk|audit|throttle]</code></td>
+              <td>Machine semantic risk scoring (0–100), anti-hallucination audit &amp; backpressure</td>
+              <td><code>risk</code>, <code>audit --title=... --desc=...</code>, <code>throttle</code></td>
             </tr>
             <tr>
-              <td><code>monoflow receipt sign</code></td>
-              <td>Emits machine-signed 1-second reviewer proof receipt</td>
-              <td><code>--pr &lt;id&gt;</code>, <code>--output receipt.json</code></td>
+              <td><code>monoflow queue [spec|verify]</code></td>
+              <td>Speculative local merge simulation &amp; pre-flight cryptographic receipt generation</td>
+              <td><code>spec [task-id]</code>, <code>verify</code></td>
+            </tr>
+            <tr>
+              <td><code>monoflow ci check</code></td>
+              <td>Two-tier CI gate: Activate Tier 1 fast-path (&lt; 30s) on verified receipts</td>
+              <td><code>--head &lt;sha&gt;</code></td>
+            </tr>
+            <tr>
+              <td><code>monoflow commit -m "&lt;msg&gt;"</code></td>
+              <td>Sub-50ms verified agent commit bypassing slow interactive hooks</td>
+              <td><code>-m "&lt;msg&gt;"</code></td>
+            </tr>
+            <tr>
+              <td><code>monoflow guard check</code></td>
+              <td>Check test integrity (anti-cheating assertion scanner) &amp; scan for secrets</td>
+              <td><code>check</code></td>
+            </tr>
+            <tr>
+              <td><code>monoflow task [check|prove|slice]</code></td>
+              <td>Enforce task boundaries (<code>allowed_paths</code>), generate PoW receipts &amp; stacked diffs</td>
+              <td><code>check</code>, <code>prove &lt;id&gt;</code>, <code>slice</code></td>
+            </tr>
+            <tr>
+              <td><code>monoflow deliver [--target=&lt;p&gt;]</code></td>
+              <td>Assemble hermetic deliverable artifact &amp; tarballs (<code>.agents/dist</code>)</td>
+              <td><code>--target=&lt;pkg&gt;</code></td>
+            </tr>
+            <tr>
+              <td><code>monoflow cache [status|clean|serve|setup-gh|pull-gh]</code></td>
+              <td>Content-addressable package cache metrics, HTTP daemon &amp; GitHub Actions helper</td>
+              <td><code>status</code>, <code>clean</code>, <code>serve --port=8080</code>, <code>setup-gh</code></td>
+            </tr>
+            <tr>
+              <td><code>monoflow version [list|bump|apply|check]</code></td>
+              <td>SemVer package versioning, declarative changesets &amp; cascade propagation</td>
+              <td><code>list</code>, <code>bump &lt;pkg&gt; [tier] --cascade</code>, <code>apply</code>, <code>check</code></td>
+            </tr>
+            <tr>
+              <td><code>monoflow scenario [run] [--json]</code></td>
+              <td>Real end-to-end multi-agent enterprise monorepo simulation benchmark</td>
+              <td><code>run</code>, <code>--json</code></td>
+            </tr>
+            <tr>
+              <td><code>monoflow app test</code></td>
+              <td>Delta compilation + symlink overlay (&lt; 5s full-app assembly)</td>
+              <td><code>test</code></td>
+            </tr>
+            <tr>
+              <td><code>monoflow pr [create|list|view|local|test|review|merge]</code></td>
+              <td>Full agent-native PR suite: risk scores, local projection, hot-mount test &amp; queue merge</td>
+              <td><code>create --title=... --stack</code>, <code>local &lt;id&gt;</code>, <code>review &lt;id&gt;</code></td>
+            </tr>
+            <tr>
+              <td><code>monoflow quarantine [list|add]</code></td>
+              <td>Isolate flaky tests from agent feedback loops into <code>.agents/quarantine.json</code></td>
+              <td><code>list</code>, <code>add &lt;test-id&gt;</code></td>
             </tr>
           </tbody>
         </table>

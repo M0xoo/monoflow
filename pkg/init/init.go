@@ -134,6 +134,55 @@ func InitRepo(targetDir string, binarySrcPath string) (*InitResult, error) {
 		_ = os.WriteFile(gitignorePath, []byte(ignoreBlock), 0644)
 	}
 
+	// 10. Install Git Shield Hooks into .git/hooks/
+	gitDir = filepath.Join(absTarget, ".git")
+	if info, err := os.Stat(gitDir); err == nil && info.IsDir() {
+		hooksDir := filepath.Join(gitDir, "hooks")
+		_ = os.MkdirAll(hooksDir, 0755)
+
+		prePushHook := `#!/bin/sh
+# MonoFlow Shield: Intercept direct git push
+if [ "$MONOFLOW_INTERNAL" != "1" ]; then
+    echo "🛑 MONOFLOW SHIELD: Direct 'git push' is disabled in this monorepo!" >&2
+    echo "👉 Please use: ./bin/monoflow push" >&2
+    echo "   (Guarantees Protected Branch Shield, pre-push race detection, and async CI watcher)" >&2
+    exit 1
+fi
+`
+		_ = os.WriteFile(filepath.Join(hooksDir, "pre-push"), []byte(prePushHook), 0755)
+
+		preCommitHook := `#!/bin/sh
+# MonoFlow Shield: Intercept direct git commit
+if [ "$MONOFLOW_INTERNAL" != "1" ]; then
+    echo "🛑 MONOFLOW SHIELD: Direct 'git commit' is disabled in this monorepo!" >&2
+    echo "👉 Please use: ./bin/monoflow commit -m \"...\"" >&2
+    echo "   (Guarantees sub-50ms test integrity checks and secret scanning)" >&2
+    exit 1
+fi
+`
+		_ = os.WriteFile(filepath.Join(hooksDir, "pre-commit"), []byte(preCommitHook), 0755)
+	}
+
+	// 11. Install Git Interception Shim into .agents/bin/git
+	gitShimPath := filepath.Join(agentsDir, "bin", "git")
+	gitShim := `#!/bin/sh
+# MonoFlow Git Interception Shim
+case "$1" in
+    push)
+        shift
+        exec ./bin/monoflow push "$@"
+        ;;
+    commit)
+        shift
+        exec ./bin/monoflow commit "$@"
+        ;;
+    *)
+        exec /usr/bin/git "$@"
+        ;;
+esac
+`
+	_ = os.WriteFile(gitShimPath, []byte(gitShim), 0755)
+
 	return &InitResult{
 		RepoRoot:       absTarget,
 		PackageCount:   len(pkgNodes),

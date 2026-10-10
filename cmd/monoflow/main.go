@@ -31,6 +31,8 @@ import (
 )
 
 func main() {
+	_ = os.Setenv("MONOFLOW_INTERNAL", "1")
+
 	if len(os.Args) < 2 {
 		printUsage()
 		os.Exit(0)
@@ -1495,7 +1497,11 @@ func handlePush(rootDir string) {
 
 	// 2. Perform push
 	start := time.Now()
-	cmdPush := exec.Command("git", "push", remote, branch)
+	pushArgs := []string{"push", remote, branch}
+	if forceDirect && branch != "main" && branch != "master" {
+		pushArgs = []string{"push", "--force-with-lease", remote, branch}
+	}
+	cmdPush := exec.Command("git", pushArgs...)
 	cmdPush.Dir = rootDir
 	out, err := cmdPush.CombinedOutput()
 	durMs := float64(time.Since(start).Microseconds()) / 1000.0

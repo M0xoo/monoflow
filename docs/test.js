@@ -43,7 +43,19 @@ if (!htmlContent.includes('demo-video') || !htmlContent.includes('video-terminal
   console.error('✗ index.html missing 90s programmatic video player component');
   process.exit(1);
 }
-console.log('✓ index.html structure, integrity, and video player verified');
+
+// Verify updated subsystems (07, 08, 09) and new workbench tabs
+if (!htmlContent.includes('07 / PACKAGE CACHE') || !htmlContent.includes('08 / VERSIONING') || !htmlContent.includes('09 / ASYNC EVENT BUS')) {
+  console.error('✗ index.html missing updated subsystems (07, 08, 09)');
+  process.exit(1);
+}
+
+if (!htmlContent.includes('data-target="cache"') || !htmlContent.includes('data-target="version"') || !htmlContent.includes('data-target="scenario"')) {
+  console.error('✗ index.html missing new workbench tabs (cache, version, scenario)');
+  process.exit(1);
+}
+
+console.log('✓ index.html structure, integrity, subsystems, and video player verified');
 
 // 3. Verify styles.css
 const cssPath = path.join(__dirname, 'styles.css');
