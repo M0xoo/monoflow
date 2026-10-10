@@ -204,6 +204,9 @@ if [ -n "${SIM_GH_REPO:-}" ]; then
     for b in $(gh api "repos/$SIM_GH_REPO/branches" --paginate -q '.[].name' | grep -v '^main$' || true); do
       gh api -X DELETE "repos/$SIM_GH_REPO/git/refs/heads/$b" >/dev/null 2>&1 || true
     done
+    for tg in $(gh api "repos/$SIM_GH_REPO/tags" --paginate -q '.[].name' || true); do
+      gh api -X DELETE "repos/$SIM_GH_REPO/git/refs/tags/$tg" >/dev/null 2>&1 || true
+    done
   fi
   git remote add origin "https://github.com/$SIM_GH_REPO.git"
   MONOFLOW_INTERNAL=1 git push -q --force origin main
