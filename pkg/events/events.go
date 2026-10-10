@@ -25,6 +25,7 @@ const (
 	EventPRMerged         EventType = "PR_MERGED"
 	EventPRReviewed       EventType = "PR_REVIEWED"
 	EventPRTested         EventType = "PR_TESTED"
+	EventPRConflict       EventType = "PR_CONFLICT"
 )
 
 // Event represents a machine-readable asynchronous event dispatched to agents.
