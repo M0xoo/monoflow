@@ -58,6 +58,12 @@ const workbenchContent = {
   <button class="cli-btn" onclick="runCliCmd('checkpoint')">$ monoflow checkpoint</button>
   <button class="cli-btn" onclick="runCliCmd('worktree')">$ monoflow worktree spawn</button>
   <button class="cli-btn" onclick="runCliCmd('verify')">$ monoflow verify</button>
+  <button class="cli-btn" onclick="runCliCmd('cache')">$ monoflow cache status</button>
+  <button class="cli-btn" onclick="runCliCmd('version')">$ monoflow version bump</button>
+  <button class="cli-btn" onclick="runCliCmd('subset')">$ monoflow subset check</button>
+  <button class="cli-btn" onclick="runCliCmd('sync')">$ monoflow sync</button>
+  <button class="cli-btn" onclick="runCliCmd('events')">$ monoflow events unread</button>
+  <button class="cli-btn" onclick="runCliCmd('scenario')">$ monoflow scenario run</button>
   <button class="cli-btn" onclick="runCliCmd('receipt')">$ monoflow receipt sign</button>
 </div>
 <div id="terminal-stream">
@@ -166,7 +172,64 @@ const workbenchContent = {
     <span class="c-cyan">"verification_cost"</span>: <span class="c-emerald">"0.159ms"</span>,
     <span class="c-cyan">"gate_verdict"</span>: <span class="c-emerald c-bold">"PROVEN_PASS"</span>
   }
-}`
+}`,
+
+  cache: `
+<span class="c-cyan">// === Deterministic Content-Addressable Package Cache & Daemon ===</span>
+<span class="c-muted">Storage Engine:</span> .agents/cache (Local LevelDB + Artifact Tarballs)
+<span class="c-muted">Daemon Service:</span> monoflow cache serve --port=8080 (Zero-dependency HTTP Daemon)
+
+<span class="c-muted">[00:00:00.001]</span> <span class="c-cyan">KEYGEN</span> Computing deterministic cache key for target "pkg/billing"...
+<span class="c-muted">[00:00:00.003]</span> <span class="c-purple">HASH</span> SHA-256 Digest: <span class="c-amber">5a580c3951e7a7cf560dede4d7c1a875...</span> (Source + Toolchain + Config)
+<span class="c-muted">[00:00:00.004]</span> <span class="c-cyan">CACHE-QUERY</span> Inspecting local store (.agents/cache/verify/)...
+<span class="c-muted">[00:00:00.005]</span> <span class="c-emerald c-bold">CACHE HIT (0.8ms)</span> Verified via cryptographic match! Zero test re-execution required.
+<span class="c-muted">[00:00:00.008]</span> <span class="c-cyan">HTTP-DAEMON</span> Active endpoints:
+  • GET  /v1/cache/{key}     <span class="c-emerald">200 OK (0.24ms)</span>
+  • PUT  /v1/cache/{key}     <span class="c-emerald">201 Created (1.12ms)</span>
+  • GET  /v1/metrics         <span class="c-purple">hit_ratio=94.2% entries=18 total_size=14.2MB</span>
+  • GET  /health             <span class="c-emerald">{"status": "healthy"}</span>
+<span class="c-muted">Cache Health:</span> <span class="c-emerald">Hit Ratio: 94.2%</span> | <span class="c-amber">Local Entries: 18</span> | <span class="c-cyan">Storage: 14.2 MB</span>`,
+
+  version: `
+<span class="c-cyan">// === SemVer Versioning, Changeset Cascade & Subset Health ===</span>
+<span class="c-muted">Command:</span> monoflow version bump billing minor --cascade --reason="Add stripe webhook support"
+
+<span class="c-muted">[00:00:00.002]</span> <span class="c-cyan">VERSION</span> Bumping package "billing": 1.4.0 ──> <span class="c-emerald">1.5.0 (minor)</span>
+<span class="c-muted">[00:00:00.005]</span> <span class="c-cyan">CHANGESET</span> Recorded changeset: <span class="c-purple">.agents/changesets/cs-billing-17916480.json</span>
+<span class="c-muted">[00:00:00.008]</span> <span class="c-amber">DAG-CASCADE</span> Resolving downstream dependents across topological graph:
+  └── <span class="c-purple">pkg/gateway</span> depends on billing (>= 1.4.0) ──> Cascading bump: 2.1.3 ──> <span class="c-emerald">2.1.4 (patch)</span>
+<span class="c-muted">[00:00:00.012]</span> <span class="c-emerald c-bold">CASCADE RESOLVED:</span> 2 packages queued for manifest update in 4.8ms.
+<span class="c-muted">[00:00:00.015]</span> <span class="c-cyan">SUBSET-HEALTH</span> Verifying active sparse subset cone integrity...
+  [✓] All 2 upstream dependencies present in cone. 0 missing packages.
+<span class="c-muted">Status:</span> <span class="c-emerald">Ready for atomic manifest application (monoflow version apply)</span>`,
+
+  events: `
+<span class="c-cyan">// === Asynchronous Reactive Event Inbox & CI Watcher ===</span>
+<span class="c-muted">Repository:</span> origin/main (Commit: 82009be2)
+<span class="c-muted">Supervision Mode:</span> Autonomous background watcher (Zero context tokens burned)
+
+<span class="c-muted">[00:00:00.001]</span> <span class="c-cyan">EVENT-QUERY</span> Reading .agents/events/ directory in <span class="c-emerald">3.4ms</span>:
+<span class="c-muted">Active Events:</span>
+  • <span class="c-purple">evt_ci_passed_82009be2</span>: type=ci_run status=<span class="c-emerald">SUCCESS</span> duration=73s (Workflow: monoflow-ci.yml)
+  • <span class="c-purple">evt_pr_reviewed_pr-2</span>:   type=pr_review verdict=<span class="c-emerald">APPROVED</span> tier=TIER_1 (Auto-Approvable)
+  • <span class="c-purple">evt_pr_merged_pr-2</span>:     type=pr_merge status=<span class="c-emerald">MERGED</span> strategy=squash (Speculative Queue Pass)
+<span class="c-muted">[00:00:00.004]</span> <span class="c-cyan">STATUS</span> 0 unread alerts requiring agent intervention.
+<span class="c-muted">Reactive Directive:</span> <span class="c-emerald c-bold">Agent remains unblocked. Zero polling loops required.</span>`,
+
+  scenario: `
+<span class="c-cyan">// === Enterprise Multi-Agent Monorepo Scenario Simulator ===</span>
+<span class="c-muted">Command:</span> monoflow scenario run --json
+
+<span class="c-muted">[00:00:00.002]</span> <span class="c-cyan">SCENARIO</span> Provisioning ephemeral enterprise monorepo workspace (Go, TS, Python)...
+<span class="c-muted">[00:00:00.045]</span> <span class="c-cyan">AGENT-1</span> Provisioned CoW worktree "agent-billing" (<span class="c-emerald">52ms</span>). Target: pkg/billing.
+<span class="c-muted">[00:00:00.098]</span> <span class="c-cyan">AGENT-2</span> Provisioned CoW worktree "agent-analytics" (<span class="c-emerald">48ms</span>). Target: pkg/analytics.
+<span class="c-muted">[00:00:00.320]</span> <span class="c-amber">AST-SYNTH</span> Concurrent edits detected on shared models.go ──> <span class="c-emerald">AST Synthesized in 18ms</span>.
+<span class="c-muted">[00:00:00.560]</span> <span class="c-cyan">RISK-AUDIT</span> Machine risk evaluated: Tier 1 (Auto-Approvable, blast radius: 2 pkgs).
+<span class="c-muted">[00:00:00.820]</span> <span class="c-cyan">SPEC-QUEUE</span> Speculative local rebase onto main simulated in <span class="c-emerald">21ms</span>.
+<span class="c-muted">[00:00:01.120]</span> <span class="c-emerald">CI-GATE</span> Two-tier CI gate validated signed PoW receipt. Tier 1 Fast-Path passed.
+<span class="c-muted">[00:00:01.340]</span> <span class="c-purple">DELIVER</span> Hermetic production deliverable built at .agents/dist/full-app.
+<span class="c-muted">[00:00:01.345]</span> <span class="c-emerald c-bold">SCENARIO PASSED:</span> 10-step multi-agent enterprise workflow verified in 1.34s!
+`
 };
 
 function initWorkbench() {
@@ -228,7 +291,54 @@ window.runCliCmd = function(cmd) {
 <span class="c-amber c-bold">$ monoflow receipt sign --pr 208</span>
 <span class="c-muted">[00:00:00.001]</span> <span class="c-cyan">CRYPTO</span> Signing affected package test digests with repository key...
 <span class="c-muted">[00:00:00.003]</span> <span class="c-emerald">RECEIPT GENERATED</span> Written to .monoflow/proofs/pr-208.json
-<span class="c-muted">[00:00:00.004]</span> <span class="c-emerald c-bold">VERIFICATION PROOF:</span> SHA-256 e3b0c44298fc1c14... Reviewers verify in 0.159ms.`
+<span class="c-muted">[00:00:00.004]</span> <span class="c-emerald c-bold">VERIFICATION PROOF:</span> SHA-256 e3b0c44298fc1c14... Reviewers verify in 0.159ms.`,
+
+    cache: `
+<span class="c-amber c-bold">$ monoflow cache status</span>
+<span class="c-muted">[00:00:00.001]</span> <span class="c-cyan">CACHE</span> Cache directory: .agents/cache
+<span class="c-muted">[00:00:00.003]</span> <span class="c-cyan">METRICS</span> Verification entries: 18 | Artifact tarballs: 8
+<span class="c-muted">[00:00:00.005]</span> <span class="c-emerald">HIT-RATIO</span> 94.2% (148 hits, 9 misses)
+<span class="c-muted">[00:00:00.006]</span> <span class="c-purple">STORAGE</span> Total size on disk: 14.2 MB
+<span class="c-muted">[00:00:00.008]</span> <span class="c-emerald c-bold">STATUS: OK</span> Local and remote cache synchronized.`,
+
+    version: `
+<span class="c-amber c-bold">$ monoflow version bump billing minor --cascade</span>
+<span class="c-muted">[00:00:00.002]</span> <span class="c-cyan">VERSION</span> Bumping "billing" from 1.4.0 to <span class="c-emerald">1.5.0</span>
+<span class="c-muted">[00:00:00.004]</span> <span class="c-purple">CHANGESET</span> Saved changeset to .agents/changesets/cs-billing.json
+<span class="c-muted">[00:00:00.007]</span> <span class="c-cyan">CASCADE</span> Found downstream dependent: "gateway"
+<span class="c-muted">[00:00:00.009]</span> <span class="c-amber">CASCADED</span> Bumping "gateway" from 2.1.3 to <span class="c-emerald">2.1.4</span>
+<span class="c-muted">[00:00:00.012]</span> <span class="c-emerald c-bold">SUCCESS</span> 2 packages bumped and recorded in 4.8ms.`,
+
+    subset: `
+<span class="c-amber c-bold">$ monoflow subset check</span>
+<span class="c-muted">[00:00:00.002]</span> <span class="c-cyan">SUBSET</span> Active cone packages: [billing, gateway]
+<span class="c-muted">[00:00:00.005]</span> <span class="c-cyan">HEALTH</span> Inspecting transitive dependencies in DAG...
+<span class="c-muted">[00:00:00.007]</span> <span class="c-emerald">PASS</span> billing: all dependencies present (contracts, auth)
+<span class="c-muted">[00:00:00.008]</span> <span class="c-emerald">PASS</span> gateway: all dependencies present (billing, contracts)
+<span class="c-muted">[00:00:00.009]</span> <span class="c-emerald c-bold">HEALTHY</span> Active sparse subset cone is 100% complete and compilable.`,
+
+    sync: `
+<span class="c-amber c-bold">$ monoflow sync origin main</span>
+<span class="c-muted">[00:00:00.015]</span> <span class="c-cyan">FETCH</span> Fetching latest refs from origin/main (sparse cone preserved)...
+<span class="c-muted">[00:00:00.042]</span> <span class="c-cyan">FAST-FORWARD</span> Fast-forwarding local branch to 82009be2...
+<span class="c-muted">[00:00:00.058]</span> <span class="c-emerald c-bold">SYNC COMPLETE</span> Synchronized with remote in 58.2ms without raw Git commands.`,
+
+    events: `
+<span class="c-amber c-bold">$ monoflow events unread</span>
+<span class="c-muted">[00:00:00.001]</span> <span class="c-cyan">INBOX</span> Querying .agents/events/ in 3.4ms...
+<span class="c-muted">[00:00:00.003]</span> <span class="c-emerald">EVENT</span> evt_ci_passed_82009be2: GitHub Actions Run #3805374 <span class="c-emerald">PASSED</span> (73s)
+<span class="c-muted">[00:00:00.004]</span> <span class="c-cyan">EVENT</span> evt_pr_reviewed_pr-2: Reviewer approved PR #2 (TIER_1)
+<span class="c-muted">[00:00:00.005]</span> <span class="c-emerald c-bold">DIRECTIVE:</span> All remote tasks succeeded. 0 blocking errors.`,
+
+    scenario: `
+<span class="c-amber c-bold">$ monoflow scenario run --json</span>
+<span class="c-muted">[00:00:00.004]</span> <span class="c-cyan">START</span> Initializing multi-agent enterprise monorepo benchmark...
+<span class="c-muted">[00:00:00.052]</span> <span class="c-emerald">AGENT-1</span> Provisioned CoW worktree agent-1 (52ms)
+<span class="c-muted">[00:00:00.098]</span> <span class="c-emerald">AGENT-2</span> Provisioned CoW worktree agent-2 (48ms)
+<span class="c-muted">[00:00:00.340]</span> <span class="c-emerald">AST-MERGE</span> Synthesized concurrent modifications on shared models in 18ms
+<span class="c-muted">[00:00:00.580]</span> <span class="c-emerald">RISK</span> Machine evaluated risk: Tier 1 (Auto-Approvable)
+<span class="c-muted">[00:00:00.810]</span> <span class="c-emerald">QUEUE</span> Speculative pre-flight rebase passed in 21ms
+<span class="c-muted">[00:00:01.345]</span> <span class="c-emerald c-bold">SCENARIO COMPLETE:</span> Full swarm pipeline executed in 1.34s with zero conflicts!`
   };
 
   if (commands[cmd]) {
@@ -309,10 +419,26 @@ function initSearch() {
   const searchTrigger = document.querySelector('.search-trigger');
   if (searchTrigger) {
     searchTrigger.addEventListener('click', () => {
-      const query = prompt('Quick jump: Type a topic (e.g., ast, cow, checkpoints, cli, pow, benchmarks):');
+      const query = prompt('Quick jump: Type a topic (e.g., cache, version, ast, cow, scenario, events, cli, pow, benchmarks):');
       if (!query) return;
       const q = query.toLowerCase();
-      if (q.includes('ast') || q.includes('synth')) {
+      if (q.includes('cache')) {
+        document.getElementById('workbench')?.scrollIntoView({ behavior: 'smooth' });
+        const tab = document.querySelector('[data-target="cache"]');
+        if (tab) tab.click();
+      } else if (q.includes('version') || q.includes('changeset') || q.includes('bump')) {
+        document.getElementById('workbench')?.scrollIntoView({ behavior: 'smooth' });
+        const tab = document.querySelector('[data-target="version"]');
+        if (tab) tab.click();
+      } else if (q.includes('event') || q.includes('push') || q.includes('inbox') || q.includes('watcher')) {
+        document.getElementById('workbench')?.scrollIntoView({ behavior: 'smooth' });
+        const tab = document.querySelector('[data-target="events"]');
+        if (tab) tab.click();
+      } else if (q.includes('scenario') || q.includes('swarm') || q.includes('sim')) {
+        document.getElementById('workbench')?.scrollIntoView({ behavior: 'smooth' });
+        const tab = document.querySelector('[data-target="scenario"]');
+        if (tab) tab.click();
+      } else if (q.includes('ast') || q.includes('synth')) {
         document.getElementById('workbench')?.scrollIntoView({ behavior: 'smooth' });
         const astTab = document.querySelector('[data-target="ast"]');
         if (astTab) astTab.click();
@@ -320,6 +446,14 @@ function initSearch() {
         document.getElementById('workbench')?.scrollIntoView({ behavior: 'smooth' });
         const cowTab = document.querySelector('[data-target="cow"]');
         if (cowTab) cowTab.click();
+      } else if (q.includes('queue') || q.includes('spec')) {
+        document.getElementById('workbench')?.scrollIntoView({ behavior: 'smooth' });
+        const queueTab = document.querySelector('[data-target="queue"]');
+        if (queueTab) queueTab.click();
+      } else if (q.includes('audit') || q.includes('slop')) {
+        document.getElementById('workbench')?.scrollIntoView({ behavior: 'smooth' });
+        const auditTab = document.querySelector('[data-target="audit"]');
+        if (auditTab) auditTab.click();
       } else if (q.includes('bench') || q.includes('perf')) {
         document.getElementById('benchmarks')?.scrollIntoView({ behavior: 'smooth' });
       } else if (q.includes('cli') || q.includes('command')) {

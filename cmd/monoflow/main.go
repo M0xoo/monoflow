@@ -31,6 +31,8 @@ import (
 )
 
 func main() {
+	_ = os.Setenv("MONOFLOW_INTERNAL", "1")
+
 	if len(os.Args) < 2 {
 		printUsage()
 		os.Exit(0)
