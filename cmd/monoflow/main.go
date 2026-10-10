@@ -589,22 +589,35 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 		res.DurationMs = float64(time.Since(start).Microseconds()) / 1000.0
 	}
 
+	if res.TotalTargets == 0 {
+		if entries, err := os.ReadDir(filepath.Join(rootDir, ".agents", "worktrees")); err == nil {
+			var ids []string
+			for _, e := range entries {
+				if e.IsDir() {
+					ids = append(ids, e.Name())
+				}
+			}
+			if len(ids) > 0 {
+				res.Hint = fmt.Sprintf("No changes in %s. Agent work lives in worktrees (%s): run verify inside .agents/worktrees/<id>.", rootDir, strings.Join(ids, ", "))
+			}
+		}
+	}
+
 	data, _ := json.MarshalIndent(res, "", "  ")
 	fmt.Println(string(data))
 
-	cb := guard.NewCircuitBreaker(rootDir, 3)
+	cb := guard.NewCircuitBreaker(rootDir, 5)
 	targetKey := strings.Join(res.AffectedPackages, ",")
 
 	if res.Status == "failed" {
 		st, tripped, _ := cb.RecordFailure(rootDir, "active_task", targetKey)
 		if tripped {
 			circuitMsg, _ := json.MarshalIndent(map[string]any{
-				"circuit_breaker":   "TRIPPED",
-				"attempts":          st.Attempts,
-				"max_attempts":      3,
-				"action":            "Auto-reverted working tree to latest green checkpoint to prevent hallucination loop",
-				"escalate_to_human": true,
-				"reason":            fmt.Sprintf("Target '%s' failed %d consecutive times without passing", targetKey, st.Attempts),
+				"circuit_breaker": "TRIPPED",
+				"attempts":        st.Attempts,
+				"snapshot":        st.SnapshotID,
+				"advice":          "Same targets failed repeatedly. Step back: re-read the first error, check 'monoflow graph impact <file>', or 'monoflow checkpoint list' / 'checkpoint revert <id>' to restart from a known state. Your current work is saved as the snapshot above and was NOT reverted.",
+				"reason":          fmt.Sprintf("Target '%s' failed %d consecutive times without passing", targetKey, st.Attempts),
 			}, "", "  ")
 			fmt.Println(string(circuitMsg))
 		}

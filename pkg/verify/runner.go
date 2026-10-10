@@ -45,6 +45,7 @@ type SuiteResult struct {
 	CachedTargets    int            `json:"cached_targets"`
 	AffectedPackages []string       `json:"affected_packages"`
 	Results          []TargetResult `json:"results"`
+	Hint             string         `json:"hint,omitempty"`
 }
 
 // Runner executes verification tasks with maximum parallelism, caching, and minimal latency.

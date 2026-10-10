@@ -29,6 +29,7 @@ type CircuitState struct {
 	Attempts      int       `json:"attempts"`
 	LastAttemptAt time.Time `json:"last_attempt_at"`
 	Tripped       bool      `json:"tripped"`
+	SnapshotID    string    `json:"snapshot_id,omitempty"`
 }
 
 // NewCircuitBreaker creates a circuit breaker manager.
@@ -66,9 +67,13 @@ func (cb *CircuitBreaker) RecordFailure(rootDir, taskID, target string) (*Circui
 		st.Tripped = true
 		tripped = true
 
-		// Auto-revert to clean state
+		// Never revert automatically: the latest checkpoint is not known to be green and
+		// reverting silently destroys the agent's work. Snapshot the current state instead
+		// so the agent (or a human) can choose to roll back explicitly.
 		chkMgr := checkpoint.NewManager(rootDir)
-		_ = chkMgr.Revert("latest")
+		if c, err := chkMgr.Save(fmt.Sprintf("circuit-breaker: %s failed %d times", target, st.Attempts)); err == nil {
+			st.SnapshotID = c.ID
+		}
 	}
 
 	states[key] = st

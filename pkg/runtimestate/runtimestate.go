@@ -59,10 +59,12 @@ func HashBytes(b []byte) string {
 }
 
 // IgnorePatterns returns root-anchored ignore patterns for .gitignore / info/exclude.
+// The locally installed binary is platform-specific and is ignored too (CI installs
+// its own; see init --setup-gh-actions).
 func IgnorePatterns() []string {
-	out := make([]string, len(Paths))
-	for i, p := range Paths {
-		out[i] = "/" + p
+	out := make([]string, 0, len(Paths)+1)
+	for _, p := range Paths {
+		out = append(out, "/"+p)
 	}
-	return out
+	return append(out, "/.agents/bin/monoflow")
 }

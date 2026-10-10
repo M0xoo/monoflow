@@ -79,6 +79,8 @@ commits restoring `go.work`. Round-1 issues confirmed fixed: no `--help` side ef
 | R2-11 | Every head ran CI twice (push + pull_request), superseded runs never cancelled, docs-only/draft changes would run CI; `init --setup-gh-actions` is documented but not implemented. | 17 runs / 8 heads |
 | R2-12 | `PruneStale`/`finish` force-delete worktrees with uncommitted/unpushed work (heartbeat only written at create). | code review while fixing R2-6 |
 | R2-13 | Shared state dirs (`.agents/prs`, `proofs`) not linked when absent at create → PRs/proofs invisible outside the worktree; `node_modules` symlink shows as untracked. | sim2 worktrees |
+| R2-15 | Circuit breaker auto-reverted the working tree to the latest (not necessarily green) checkpoint after 3 failed verifies — silently destroying an iterating agent's edits. | code review |
+| R2-16 | Monoflow repo itself tracked `.agents/cache` as a symlink (committed by an agent worktree); `init` committed the 12 MB local binary. | `git ls-files -s` mode 120000 |
 | R2-14 | Branch push with no PR (economical CI) would leave the watcher waiting 25 min; `pr create` + `push` start duplicate watchers. | design |
 
 ### Prioritised TODO (round 2)
@@ -96,4 +98,6 @@ commits restoring `go.work`. Round-1 issues confirmed fixed: no `--help` side ef
 | P0 | `init --setup-gh-actions`: PR+main triggers only, concurrency cancel, skip drafts/docs, `verify --affected --base=<PR base>` with restored cache; `verify --base` | R2-11 |
 | P0 | Never discard unsaved work in `finish`/`gc` (`--force` to override); activity from git | R2-12 |
 | P1 | Always link shared state dirs; exclude dependency links | R2-13 |
-| P1 | `CI_SKIPPED` when no run appears; one watcher per commit; `pr create` starts it | R2-14 |
+| P1 | `CI_SKIPPED` when no run appears; one watcher per commit; `pr create` starts it | R2-15 | Circuit breaker auto-reverted the working tree to the latest (not necessarily green) checkpoint after 3 failed verifies — silently destroying an iterating agent's edits. | code review |
+| R2-16 | Monoflow repo itself tracked `.agents/cache` as a symlink (committed by an agent worktree); `init` committed the 12 MB local binary. | `git ls-files -s` mode 120000 |
+| R2-14 |

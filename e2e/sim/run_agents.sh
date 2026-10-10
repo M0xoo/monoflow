@@ -4,7 +4,7 @@
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 WORK=${1:?workdir}; BIN=${2:?bin}; OUT=${3:?outdir}; MODEL=${4:-opencode/big-pickle}; shift 4 || shift $#
-AGENTS=("$@"); [ ${#AGENTS[@]} -eq 0 ] && AGENTS=(agent-billing agent-money agent-ui agent-ledger agent-api agent-money-sub)
+AGENTS=("$@"); [ ${#AGENTS[@]} -eq 0 ] && AGENTS=(agent-billing agent-money agent-ui agent-ledger agent-api agent-money-sub agent-docs)
 if [ -n "${SIM_GH_REPO:-}" ] && [ -z "${SIM_LINUX_BIN:-}" ] && [ -n "${MONOFLOW_SRC:-}" ]; then
   export SIM_LINUX_BIN="$WORK.monoflow-linux-amd64"
   (cd "$MONOFLOW_SRC" && GOOS=linux GOARCH=amd64 go build -o "$SIM_LINUX_BIN" ./cmd/monoflow)
