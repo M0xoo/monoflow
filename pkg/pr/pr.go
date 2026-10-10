@@ -321,10 +321,14 @@ func (m *PRManager) Create(opts CreateOptions) (*PRMetadata, error) {
 	// 9. Format Machine PR Body
 	fullBody := m.buildPRMarkdownBody(opts.Title, opts.Body, risk, proofReceipt, audit, affected, stackTiers)
 
-	// 10. Auto-push head branch if requested
+	// 10. Auto-push head branch if requested — only once the outer loop (local CI on this
+	// exact commit) is green.
 	pushed := false
 	var pushErr string
 	if opts.AutoPush {
+		if err := requireOuterGreen(m.RootDir, headSHA, headBranch); err != nil {
+			return nil, err
+		}
 		cmdPush := exec.Command("git", "push", "-u", remote, headBranch+":"+headBranch)
 		cmdPush.Dir = m.RootDir
 		if out, err := cmdPush.CombinedOutput(); err == nil {
@@ -1335,4 +1339,30 @@ func (m *PRManager) freshestBase(base string) string {
 		return remote
 	}
 	return base
+}
+
+// requireOuterGreen reuses, waits for, or runs the outer loop for sha and fails when it is red.
+func requireOuterGreen(root, sha, branch string) error {
+	om := verify.NewOuterLoopManager(root)
+	job := om.LatestForCommit(sha)
+	var err error
+	switch {
+	case job == nil:
+		job, err = om.StartJob(verify.OuterLoopOptions{CommitSHA: sha, Branch: branch, IncludeE2E: true})
+		if job == nil {
+			return fmt.Errorf("outer loop could not run: %v", err)
+		}
+	case job.Status == verify.JobQueued || job.Status == verify.JobRunning:
+		if job, err = om.WaitJob(job.ID, 30*time.Minute); err != nil {
+			return fmt.Errorf("outer loop did not finish: %w", err)
+		}
+	}
+	if job.Status == verify.JobRegressed || job.Status == verify.JobRolledBack {
+		summary := job.ErrorSummary
+		if len(summary) > 1200 {
+			summary = summary[:1200] + " …"
+		}
+		return fmt.Errorf("PR blocked: outer loop is red for %s (remote CI would fail): %s", sha[:min(8, len(sha))], summary)
+	}
+	return nil
 }

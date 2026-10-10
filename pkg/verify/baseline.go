@@ -79,7 +79,13 @@ func (r *Runner) baselineDir(baseRef string) string {
 		return ""
 	}
 	if mb == strings.TrimSpace(string(head)) && !worktreeDirty(r.RootDir) {
-		return "" // nothing changed relative to the base: a failure is real
+		// HEAD is on the base branch with no local edits: the change under test is HEAD
+		// itself, so the baseline is its parent (never the commit being judged).
+		parent, err := exec.Command("git", "-C", r.RootDir, "rev-parse", "HEAD^").Output()
+		if err != nil {
+			return "" // root commit: no baseline, failures are real
+		}
+		mb = strings.TrimSpace(string(parent))
 	}
 	dir := filepath.Join(r.cacheMgr.LocalDir, "baselines", mb)
 	if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
@@ -94,9 +100,15 @@ func (r *Runner) baselineDir(baseRef string) string {
 	return dir
 }
 
+// worktreeDirty reports uncommitted changes, ignoring MonoFlow's own .agents/ files.
 func worktreeDirty(dir string) bool {
 	out, _ := exec.Command("git", "-C", dir, "status", "--porcelain").Output()
-	return len(strings.TrimSpace(string(out))) > 0
+	for _, l := range strings.Split(string(out), "\n") {
+		if len(l) > 3 && !strings.HasPrefix(strings.TrimSpace(l[3:]), ".agents/") {
+			return true
+		}
+	}
+	return false
 }
 
 // runBaselineCheck runs cmd in dir on the baseline checkout, memoising the result per

@@ -28,6 +28,7 @@ const (
 	EventPRTested           EventType = "PR_TESTED"
 	EventPRConflict         EventType = "PR_CONFLICT"
 	EventCISkipped          EventType = "CI_SKIPPED"
+	EventOuterPassed        EventType = "OUTER_LOOP_PASSED"
 	EventDependencyReleased EventType = "DEPENDENCY_RELEASED"
 )
 

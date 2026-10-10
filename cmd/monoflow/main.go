@@ -1529,10 +1529,13 @@ func handleCIHealth(rootDir string) {
 func handleCommit(rootDir string) {
 	refuseSharedRoot(rootDir, "commit")
 	msg := "agent checkpoint commit"
+	noOuter := false
 	for i, arg := range os.Args[2:] {
 		if arg == "-m" && i+1 < len(os.Args[2:]) {
 			msg = os.Args[2:][i+1]
-			break
+		}
+		if arg == "--no-outer" {
+			noOuter = true
 		}
 	}
 
@@ -1543,7 +1546,17 @@ func handleCommit(rootDir string) {
 		os.Exit(1)
 	}
 
-	data, _ := json.MarshalIndent(res, "", "  ")
+	out := map[string]any{"commit": res}
+	// The outer loop (local CI on the exact commit) starts now, so it is usually green by
+	// the time the agent pushes; push only happens once it is.
+	if !noOuter && res.CommitSHA != "" {
+		om := verify.NewOuterLoopManager(rootDir)
+		if job, err := om.StartJob(verify.OuterLoopOptions{CommitSHA: res.CommitSHA, Async: true, IncludeE2E: true}); err == nil {
+			out["outer_loop"] = map[string]any{"job": job.ID, "status": "running",
+				"note": "local CI on this exact commit; 'monoflow push' pushes only when it is green"}
+		}
+	}
+	data, _ := json.MarshalIndent(out, "", "  ")
 	fmt.Println(string(data))
 }
 
@@ -1573,22 +1586,6 @@ func handleGuard(rootDir string) {
 }
 
 func handleOuter(rootDir string) {
-	verify.DefaultE2ERunner = func(dir string) (*verify.E2EResult, error) {
-		rep, err := scenario.RunScenario("")
-		if err != nil {
-			return &verify.E2EResult{
-				Status: "failed",
-				Error:  err.Error(),
-			}, err
-		}
-		return &verify.E2EResult{
-			Status:       rep.Status,
-			DurationMs:   rep.TotalTimeMs,
-			TotalScenes:  rep.TotalScenes,
-			PassedScenes: rep.Passed,
-		}, nil
-	}
-
 	om := verify.NewOuterLoopManager(rootDir)
 	if len(os.Args) < 3 {
 		fmt.Println(`{"error": "usage: monoflow outer start [opts] | status <id> | wait <id> | list"}`)
@@ -1597,6 +1594,18 @@ func handleOuter(rootDir string) {
 
 	sub := os.Args[2]
 	switch sub {
+	case "exec":
+		// Internal: the detached process started by an async job.
+		for _, a := range os.Args[3:] {
+			if strings.HasPrefix(a, "--job=") {
+				if err := om.ExecuteJobByID(strings.TrimPrefix(a, "--job=")); err != nil {
+					os.Exit(1)
+				}
+				return
+			}
+		}
+		os.Exit(2)
+
 	case "start", "run", "check":
 		opts := verify.OuterLoopOptions{
 			AutoPush:   false,
@@ -1764,18 +1773,36 @@ func handlePush(rootDir string) {
 		headSHA = strings.TrimSpace(string(out))
 	}
 
-	// 1d. Remote CI protection: everything remote CI would run on the affected packages
-	// (typecheck, lint, tests incl. dependents) must pass locally before the push.
+	// 1d. Outer-loop gate: the exact commit must have passed local CI (affected packages +
+	// dependents + the repo's ci_cmd, in a clean checkout) before it is pushed.
 	if !skipVerify {
-		if res, base, ok := verifyBranchAgainstBase(rootDir); ok && res.Status != "passed" {
+		if dirty := getGitChangedFiles(rootDir); len(dirty) > 0 && !onlyNonCode(dirty) {
+			data, _ := json.MarshalIndent(map[string]any{"status": "blocked",
+				"verdict": "Uncommitted changes: commit them with 'monoflow commit' (which starts the outer loop) before pushing."}, "", "  ")
+			fmt.Println(string(data))
+			os.Exit(1)
+		}
+		om := verify.NewOuterLoopManager(rootDir)
+		job := om.LatestForCommit(headSHA)
+		switch {
+		case job == nil:
+			job, _ = om.StartJob(verify.OuterLoopOptions{CommitSHA: headSHA, Branch: branch, Remote: remote, RemoteBranch: branch, AutoPush: true, Async: true, IncludeE2E: true})
+			printQueued(job, headSHA, branch)
+			return
+		case job.Status == verify.JobQueued || job.Status == verify.JobRunning:
+			_ = om.QueuePush(job, remote, branch)
+			printQueued(job, headSHA, branch)
+			return
+		case job.Status == verify.JobRegressed || job.Status == verify.JobRolledBack:
 			data, _ := json.MarshalIndent(map[string]any{
-				"status":  "blocked",
-				"verdict": fmt.Sprintf("Pre-push verification failed for %d/%d affected packages (changes vs %s). Remote CI would fail; fix locally first.", res.FailedTargets, res.TotalTargets, base),
-				"results": failedResults(res),
+				"status":     "blocked",
+				"verdict":    "Outer loop is red for this commit: remote CI would fail. Fix, 'monoflow commit', then push again.",
+				"outer_loop": map[string]any{"job": job.ID, "failures": compactSummary(job.ErrorSummary)},
 			}, "", "  ")
 			fmt.Println(string(data))
 			os.Exit(1)
 		}
+		// passed / promoted: push below
 	}
 
 	// 2. Perform push
@@ -3053,14 +3080,14 @@ func handleEventsWait(rootDir string, em *events.EventManager) {
 	for time.Now().Before(deadline) {
 		list, _ := em.List(false)
 		for _, e := range list {
-			if !strings.HasPrefix(string(e.Type), "CI_") || e.CommitSHA == "" ||
+			if !(strings.HasPrefix(string(e.Type), "CI_") || e.Type == events.EventOuterRegression) || e.CommitSHA == "" ||
 				!(strings.HasPrefix(e.CommitSHA, sha) || strings.HasPrefix(sha, e.CommitSHA)) {
 				continue
 			}
 			_ = em.Ack(e.ID)
 			data, _ := json.MarshalIndent(e, "", "  ")
 			fmt.Println(string(data))
-			if e.Type == events.EventCIFailed {
+			if e.Type == events.EventCIFailed || e.Type == events.EventOuterRegression {
 				os.Exit(1)
 			}
 			os.Exit(0)
@@ -3069,4 +3096,37 @@ func handleEventsWait(rootDir string, em *events.EventManager) {
 	}
 	fmt.Printf(`{"status": "timeout", "commit": %q, "hint": "no CI result after %d minutes; check 'monoflow events list' and 'monoflow ci health'"}`+"\n", sha, timeoutMin)
 	os.Exit(2)
+}
+
+func printQueued(job *verify.OuterJob, sha, branch string) {
+	id := ""
+	if job != nil {
+		id = job.ID
+	}
+	data, _ := json.MarshalIndent(map[string]any{
+		"status":          "queued_until_outer_green",
+		"branch":          branch,
+		"head_sha":        sha,
+		"outer_loop":      id,
+		"verdict":         "The outer loop (local CI on this commit) is still running; it pushes automatically when green and then watches remote CI. Nothing is pushed if it fails.",
+		"ci_wait_command": "./bin/monoflow events wait " + sha,
+		"agent_directive": ciWaitDirective(sha),
+	}, "", "  ")
+	fmt.Println(string(data))
+}
+
+func onlyNonCode(files []string) bool {
+	for _, f := range files {
+		if !graph.IsNonCodeFile(f) {
+			return false
+		}
+	}
+	return true
+}
+
+func compactSummary(s string) string {
+	if len(s) > 1500 {
+		return s[:1500] + " …"
+	}
+	return s
 }
