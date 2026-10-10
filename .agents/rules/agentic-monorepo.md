@@ -48,8 +48,8 @@ Follow these strict rules to keep execution fast, prevent context blowup, and av
 ## 8. Zero CI Polling & Reactive Asynchronous Wakeup
 * **STRICT PROHIBITION**: NEVER poll `gh pr checks`, `gh run watch`, or schedule artificial polling loops / timer wakeups while waiting for CI.
 * MonoFlow operates on a **fire-and-forget** reactive notification model:
-  - `monoflow push` / `monoflow pr create` start a detached watcher that writes CI_PASSED / CI_FAILED / CI_SKIPPED to the local inbox (`.agents/events/`).
-  - To be woken by the result, run `monoflow events wait <sha>` (printed as `ci_wait_command`) as a **background task** (Claude Code: Bash with `run_in_background`) and end your turn: it exits when the result lands (0 = passed/skipped, 1 = failed, with logs), which wakes you.
-  - Harnesses without background tasks: end your turn and run `monoflow events unread` when resumed. Nothing resumes you on its own.
+  - `monoflow commit` starts the **outer loop**: local CI on the exact commit (affected packages + dependents + the repo's `ci_cmd`, in a clean checkout). `monoflow push` / `pr create` push **only when it is green**; otherwise the push is queued and happens automatically on green, or is blocked on red.
+  - Events (outer loop, remote CI, releases) are **delivered to you** by MonoFlow's harness hooks (`monoflow init` installs them for Claude Code and opencode): new events appear in your context after tool calls and prompts, and when you end your turn the Stop hook waits for in-flight results and resumes you if something needs action. Just end your turn.
+  - Harnesses without those hooks: run `monoflow events wait <sha>` as a background task (exits 0 passed/skipped, 1 failed) or `monoflow events unread` when resumed.
 
 

@@ -2703,6 +2703,10 @@ func handleHook() {
 		if out := agenthooks.ClaudePreToolUse(os.Stdin, hookStateDir()); out != nil {
 			fmt.Println(string(out))
 		}
+	case "deliver":
+		hookDeliver(rootDirForHook())
+	case "stop":
+		hookStop(rootDirForHook())
 	case "check":
 		data, _ := io.ReadAll(os.Stdin)
 		if r := agenthooks.Decide(hookStateDir(), string(data)); r != nil {
@@ -3043,7 +3047,7 @@ func pinnedDependents(g *graph.DependencyGraph, pkg string) []string {
 
 // ciWaitDirective tells an agent how to get woken by its CI result without polling.
 func ciWaitDirective(sha string) string {
-	return fmt.Sprintf("Do not poll CI. Run './bin/monoflow events wait %s' as a background task (Claude Code: Bash with run_in_background) and end your turn: it exits when the CI result arrives (0 = passed/skipped, 1 = failed, with the failing logs), which wakes you. Without background tasks, end your turn and run 'monoflow events unread' when resumed.", sha)
+	return fmt.Sprintf("Do not poll CI. With MonoFlow's harness hooks (Claude Code, opencode) just end your turn: the outer-loop/CI result is delivered to you, and a failure resumes you. Other harnesses: run './bin/monoflow events wait %s' as a background task (exits 0 passed/skipped, 1 failed) or 'monoflow events unread' when resumed.", sha)
 }
 
 // handleEventsWait blocks until the CI result for a commit is in the local inbox (written
@@ -3129,4 +3133,146 @@ func compactSummary(s string) string {
 		return s[:1500] + " …"
 	}
 	return s
+}
+
+func rootDirForHook() string {
+	if root, err := findRepoRoot(); err == nil {
+		return root
+	}
+	return "."
+}
+
+func hookFlag(name string) string {
+	for _, a := range os.Args[3:] {
+		if strings.HasPrefix(a, "--"+name+"=") {
+			return strings.TrimPrefix(a, "--"+name+"=")
+		}
+	}
+	return ""
+}
+
+// hookDeliver injects events the agent has not seen yet into its context. Claude Code:
+// PostToolUse / UserPromptSubmit / SessionStart hooks (--event=<name>, JSON output);
+// other harnesses: --format=text prints plain text (nothing when there is nothing new).
+func hookDeliver(root string) {
+	_ = readHookStdin() // hook payload is not needed
+	branch := currentBranch(root)
+	em := events.NewEventManager(root)
+	pending := em.Pending(branch, branch, projectedPackages(root))
+	if hookFlag("only") == "action" {
+		var act []*events.Event
+		for _, e := range pending {
+			if e.RequiresAction {
+				act = append(act, e)
+			}
+		}
+		pending = act
+	}
+	if len(pending) == 0 {
+		return
+	}
+	_ = em.MarkDelivered(branch, pending)
+	text := events.Render(pending)
+	if hookFlag("format") == "text" {
+		fmt.Print(text)
+		return
+	}
+	event := firstNonEmpty(hookFlag("event"), "PostToolUse")
+	out, _ := json.Marshal(map[string]any{"hookSpecificOutput": map[string]any{
+		"hookEventName": event, "additionalContext": text}})
+	fmt.Println(string(out))
+}
+
+// hookStop runs when the agent is about to end its turn (Claude Code Stop hook). If an
+// outer loop or CI run for this branch is in flight it waits for the result (bounded by
+// agent_events.stop_wait_minutes), then blocks the stop with any event that needs action,
+// so the agent resumes and handles it without running a command.
+func hookStop(root string) {
+	var payload struct {
+		StopHookActive bool `json:"stop_hook_active"`
+	}
+	_ = json.Unmarshal(readHookStdin(), &payload)
+	branch := currentBranch(root)
+	wait := stopWaitMinutes(root)
+	if hookFlag("wait") != "" {
+		if n, err := strconv.Atoi(hookFlag("wait")); err == nil {
+			wait = n
+		}
+	}
+	deadline := time.Now().Add(time.Duration(wait) * time.Minute)
+	for wait > 0 && inFlight(root, branch) && time.Now().Before(deadline) {
+		time.Sleep(3 * time.Second)
+	}
+	em := events.NewEventManager(root)
+	var act []*events.Event
+	for _, e := range em.Pending(branch, branch, projectedPackages(root)) {
+		if e.RequiresAction {
+			act = append(act, e)
+		}
+	}
+	if len(act) == 0 {
+		return // nothing needs the agent: let it stop
+	}
+	_ = em.MarkDelivered(branch, act)
+	reason := events.Render(act) + "Handle these before finishing (they block your change from landing)."
+	if hookFlag("format") == "text" {
+		fmt.Print(reason)
+		return
+	}
+	out, _ := json.Marshal(map[string]any{"decision": "block", "reason": reason})
+	fmt.Println(string(out))
+}
+
+// inFlight reports outer-loop jobs or CI watches still running for branch.
+func inFlight(root, branch string) bool {
+	if jobs, err := verify.NewOuterLoopManager(root).ListJobs(); err == nil {
+		for _, j := range jobs {
+			if j.Branch == branch && (j.Status == verify.JobQueued || j.Status == verify.JobRunning) {
+				return true
+			}
+		}
+	}
+	if jobs, err := events.NewCIWatcher(root).ListJobs(); err == nil {
+		for _, j := range jobs {
+			if j.Branch == branch && j.Status == events.WatchStatusMonitoring && time.Since(j.StartedAt) < 2*time.Hour {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func stopWaitMinutes(root string) int {
+	data, err := os.ReadFile(filepath.Join(root, ".agents", "monoflow.config.json"))
+	if err != nil {
+		return 15
+	}
+	var cfg struct {
+		AgentEvents *struct {
+			StopWaitMinutes *int `json:"stop_wait_minutes"`
+		} `json:"agent_events"`
+	}
+	if json.Unmarshal(data, &cfg) == nil && cfg.AgentEvents != nil && cfg.AgentEvents.StopWaitMinutes != nil {
+		return *cfg.AgentEvents.StopWaitMinutes
+	}
+	return 15
+}
+
+// readHookStdin reads a hook's JSON payload without ever blocking: some harnesses leave
+// stdin open (or attached to nothing), so give up after a short delay.
+func readHookStdin() []byte {
+	if fi, err := os.Stdin.Stat(); err == nil && fi.Mode()&os.ModeCharDevice != 0 {
+		return nil // interactive terminal: no payload
+	}
+	ch := make(chan []byte, 1)
+	go func() {
+		data, _ := io.ReadAll(os.Stdin)
+		ch <- data
+	}()
+	select {
+	case data := <-ch:
+		return data
+	case <-time.After(300 * time.Millisecond):
+		return nil
+	}
 }

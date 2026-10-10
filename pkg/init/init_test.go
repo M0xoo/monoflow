@@ -71,3 +71,26 @@ func TestMergeSectionKeepsProjectInstructions(t *testing.T) {
 		t.Fatalf("CLAUDE.md must not be created when absent")
 	}
 }
+
+func TestInstallAgentHooksEventDelivery(t *testing.T) {
+	root := t.TempDir()
+	for i := 0; i < 2; i++ { // idempotent
+		if err := InstallAgentHooks(root); err != nil {
+			t.Fatal(err)
+		}
+	}
+	data, _ := os.ReadFile(filepath.Join(root, ".claude", "settings.json"))
+	s := string(data)
+	for _, ev := range []string{"PreToolUse", "SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"} {
+		if !strings.Contains(s, `"`+ev+`"`) {
+			t.Errorf("missing %s hook", ev)
+		}
+	}
+	if strings.Count(s, "hook stop") != 1 || strings.Count(s, "hook deliver") != 3 {
+		t.Errorf("hooks must be installed exactly once:\n%s", s)
+	}
+	plugin, _ := os.ReadFile(filepath.Join(root, ".opencode", "plugin", "monoflow.js"))
+	if !strings.Contains(string(plugin), "session.idle") || !strings.Contains(string(plugin), "client.session.prompt") {
+		t.Errorf("opencode plugin must deliver events to idle sessions")
+	}
+}
