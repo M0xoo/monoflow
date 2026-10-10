@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/antigravity/monoflow/pkg/checkpoint"
+	"github.com/antigravity/monoflow/pkg/events"
 	"github.com/antigravity/monoflow/pkg/graph"
 	"github.com/antigravity/monoflow/pkg/guard"
 )
@@ -336,22 +337,25 @@ func (om *OuterLoopManager) executeJobInternal(job *OuterJob) error {
 		// STRICT INVARIANT: NEVER PUSH TO REMOTE ON FAILURE
 		job.Promoted = false
 
-		// Create regression alert event
-		alertPath, _ := om.emitRegressionAlert(job)
-		job.AlertPath = alertPath
-
 		// Trip circuit breaker
 		cb := guard.NewCircuitBreaker(om.RootDir, 3)
 		_, _, _ = cb.RecordFailure(om.RootDir, job.ID, strings.Join(job.DirectPackages, ","))
 
 		// Auto-revert working tree to last green checkpoint if enabled
+		revertErr := ""
 		if job.AutoRevert {
 			chkMgr := checkpoint.NewManager(om.RootDir)
 			if err := chkMgr.Revert(""); err == nil {
 				job.RollbackTriggered = true
 				job.Status = JobRolledBack
+			} else {
+				revertErr = err.Error()
 			}
 		}
+
+		// Emit the regression event last so its payload reflects the rollback outcome
+		alertPath, _ := om.emitRegressionAlert(job, revertErr)
+		job.AlertPath = alertPath
 
 		_ = om.saveJob(job)
 		return fmt.Errorf("outer loop regression detected in %d packages", failedCount)
@@ -446,32 +450,73 @@ func (om *OuterLoopManager) generateTier2Receipt(job *OuterJob, g *graph.Depende
 	return receiptPath, sig, nil
 }
 
-// emitRegressionAlert writes an alert event to .agents/events/
-func (om *OuterLoopManager) emitRegressionAlert(job *OuterJob) (string, error) {
-	eventsDir := filepath.Join(om.RootDir, ".agents", "events")
-	_ = os.MkdirAll(eventsDir, 0755)
-
-	alertPath := filepath.Join(eventsDir, fmt.Sprintf("regression_%s.json", job.ID))
-	alertData := map[string]any{
-		"event":             "OUTER_LOOP_REGRESSION",
-		"job_id":            job.ID,
-		"commit_sha":        job.CommitSHA,
-		"branch":            job.Branch,
-		"remote_target":     fmt.Sprintf("%s/%s", job.Remote, job.RemoteBranch),
-		"pushed_to_remote":  false,
-		"auto_revert":       job.AutoRevert,
-		"failed_packages":   job.FailedPackages,
-		"tested_packages":   job.TotalPackagesTested,
-		"error_summary":     job.ErrorSummary,
-		"detected_at":       job.CompletedAt,
-		"action":            "Promotion to remote blocked. Remote branch remains pristine.",
+// emitRegressionAlert publishes an OUTER_LOOP_REGRESSION event on the .agents/events/ bus
+// so agents react via `monoflow events unread` (< 5ms) instead of polling remote CI.
+func (om *OuterLoopManager) emitRegressionAlert(job *OuterJob, revertErr string) (string, error) {
+	var failedTargets []string
+	for _, tr := range job.TargetResults {
+		if tr.Status == "failed" {
+			failedTargets = append(failedTargets, tr.Target)
+		}
+	}
+	if job.E2ECheck != nil && job.E2ECheck.Status != "passed" && job.E2ECheck.Status != "success" {
+		failedTargets = append(failedTargets, "e2e")
 	}
 
-	data, err := json.MarshalIndent(alertData, "", "  ")
-	if err != nil {
+	evt := &events.Event{
+		ID:             fmt.Sprintf("evt_outer_regression_%s", job.ID),
+		Type:           events.EventOuterRegression,
+		CommitSHA:      job.CommitSHA,
+		Branch:         job.Branch,
+		RequiresAction: true,
+		Summary: fmt.Sprintf("Outer loop regression in %d of %d package(s): %s. Promotion to %s/%s blocked.",
+			job.FailedPackages, job.TotalPackagesTested, strings.Join(failedTargets, ", "), job.Remote, job.RemoteBranch),
+		SuggestedTask: suggestRegressionTask(job, failedTargets),
+		Payload: map[string]any{
+			"job_id":             job.ID,
+			"remote_target":      fmt.Sprintf("%s/%s", job.Remote, job.RemoteBranch),
+			"pushed_to_remote":   false,
+			"auto_revert":        job.AutoRevert,
+			"rollback_triggered": job.RollbackTriggered,
+			"failed_targets":     failedTargets,
+			"failed_packages":    job.FailedPackages,
+			"tested_packages":    job.TotalPackagesTested,
+			"direct_packages":    job.DirectPackages,
+			"error_summary":      job.ErrorSummary,
+			"detected_at":        job.CompletedAt,
+			"action":             "Promotion to remote blocked. Remote branch remains pristine.",
+		},
+	}
+	if revertErr != "" {
+		evt.Payload["revert_error"] = revertErr
+	}
+
+	evMgr := events.NewEventManager(om.RootDir)
+	if err := evMgr.Emit(evt); err != nil {
 		return "", err
 	}
-	return alertPath, os.WriteFile(alertPath, data, 0644)
+	return filepath.Join(om.RootDir, ".agents", "events", evt.ID+".json"), nil
+}
+
+// suggestRegressionTask builds an actionable next step for the agent that owns the regression.
+func suggestRegressionTask(job *OuterJob, failedTargets []string) string {
+	var sb strings.Builder
+	if job.RollbackTriggered {
+		sb.WriteString("Working tree was auto-reverted to the last checkpoint. ")
+	}
+	if len(failedTargets) > 0 {
+		sb.WriteString(fmt.Sprintf("Fix the regression in %s", strings.Join(failedTargets, ", ")))
+	} else {
+		sb.WriteString("Fix the outer loop regression")
+	}
+	if len(job.DirectPackages) > 0 {
+		sb.WriteString(fmt.Sprintf(" caused by changes to %s", strings.Join(job.DirectPackages, ", ")))
+	}
+	if first, _, _ := strings.Cut(job.ErrorSummary, "\n"); first != "" {
+		sb.WriteString(fmt.Sprintf(" (first failure: %s)", first))
+	}
+	sb.WriteString(", then run `monoflow verify --affected` and `monoflow outer start`.")
+	return sb.String()
 }
 
 // GetJob loads a job record by ID.

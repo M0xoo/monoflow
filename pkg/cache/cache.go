@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -93,7 +94,7 @@ func DefaultConfig(rootDir string) Config {
 	if envDir := os.Getenv("MONOFLOW_CACHE_DIR"); envDir != "" {
 		cfg.Dir = envDir
 	} else {
-		cfg.Dir = filepath.Join(rootDir, ".agents", "cache")
+		cfg.Dir = SharedCacheDir(rootDir)
 	}
 
 	if envRemote := os.Getenv("MONOFLOW_REMOTE_CACHE_URL"); envRemote != "" {
@@ -123,13 +124,34 @@ func DefaultConfig(rootDir string) Config {
 			if raw.Cache.RemoteTimeoutMs > 0 {
 				cfg.RemoteTimeoutMs = raw.Cache.RemoteTimeoutMs
 			}
-			if cfg.Dir == filepath.Join(rootDir, ".agents", "cache") && raw.Cache.Dir != "" {
+			if os.Getenv("MONOFLOW_CACHE_DIR") == "" && raw.Cache.Dir != "" {
 				cfg.Dir = raw.Cache.Dir
 			}
 		}
 	}
 
 	return cfg
+}
+
+// SharedCacheDir returns the package cache directory for rootDir. Linked git worktrees
+// (where .git is a file) resolve to the main repository's .agents/cache so every agent
+// worktree shares one cache and gets hits for untouched dependencies.
+func SharedCacheDir(rootDir string) string {
+	local := filepath.Join(rootDir, ".agents", "cache")
+	if fi, err := os.Lstat(filepath.Join(rootDir, ".git")); err != nil || fi.IsDir() {
+		return local
+	}
+	cmd := exec.Command("git", "rev-parse", "--path-format=absolute", "--git-common-dir")
+	cmd.Dir = rootDir
+	out, err := cmd.Output()
+	if err != nil {
+		return local
+	}
+	commonDir := strings.TrimSpace(string(out))
+	if filepath.Base(commonDir) != ".git" {
+		return local // bare or non-standard layout: keep the worktree-local cache
+	}
+	return filepath.Join(filepath.Dir(commonDir), ".agents", "cache")
 }
 
 // NewManager initializes a cache manager.

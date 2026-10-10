@@ -108,13 +108,8 @@ const TaskTemplate = `{
     "Affected unit tests pass",
     "No typecheck errors in downstream packages"
   ],
-  "allowed_paths": [
-    "services/**",
-    "packages/**"
-  ],
-  "read_only_paths": [
-    "contracts/**"
-  ],
+  "allowed_paths": [],
+  "read_only_paths": [],
   "context_files": []
 }
 `
