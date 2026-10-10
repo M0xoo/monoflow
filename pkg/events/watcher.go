@@ -156,6 +156,33 @@ func (cw *CIWatcher) supervise(job *WatchJob, opts WatchOptions) {
 			return
 		}
 
+		// 1. Inspect PR mergeability if branch is associated with a pull request
+		if job.Branch != "" {
+			if prInfo, _ := cw.fetchPRMergeable(job.Branch); prInfo != nil {
+				if prInfo.Mergeable == "CONFLICTING" || prInfo.MergeStateStatus == "DIRTY" {
+					evt := &Event{
+						Type:           EventPRConflict,
+						CommitSHA:      job.CommitSHA,
+						Branch:         job.Branch,
+						RequiresAction: true,
+						Summary:        fmt.Sprintf("PR #%d ('%s') has merge conflicts with base branch (mergeStateStatus: %s)", prInfo.Number, prInfo.Title, prInfo.MergeStateStatus),
+						SuggestedTask:  "Rebase branch onto base branch using 'monoflow sync origin main --rebase' to resolve conflicts",
+						Payload: map[string]any{
+							"pr_number":        prInfo.Number,
+							"title":            prInfo.Title,
+							"mergeable":        prInfo.Mergeable,
+							"mergeStateStatus": prInfo.MergeStateStatus,
+						},
+					}
+					_ = cw.events.Emit(evt)
+					job.EventEmitted = true
+					job.EventID = evt.ID
+					cw.finishJob(job, WatchStatusCompletedFailed, fmt.Sprintf("PR #%d has merge conflicts with base branch", prInfo.Number))
+					return
+				}
+			}
+		}
+
 		runs, err := cw.fetchRemoteRuns(job.CommitSHA)
 		if err == nil && len(runs) > 0 {
 			allCompleted := true
@@ -244,6 +271,27 @@ func (cw *CIWatcher) supervise(job *WatchJob, opts WatchOptions) {
 			// Continue loop
 		}
 	}
+}
+
+type ghPRMergeableInfo struct {
+	Number           int    `json:"number"`
+	Title            string `json:"title"`
+	Mergeable        string `json:"mergeable"`        // "CONFLICTING", "MERGEABLE", "UNKNOWN"
+	MergeStateStatus string `json:"mergeStateStatus"` // "DIRTY", "CLEAN", "BLOCKED", "BEHIND"
+}
+
+func (cw *CIWatcher) fetchPRMergeable(branch string) (*ghPRMergeableInfo, error) {
+	cmd := exec.Command("gh", "pr", "view", branch, "--json", "number,title,mergeable,mergeStateStatus")
+	cmd.Dir = cw.RootDir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, err
+	}
+	var info ghPRMergeableInfo
+	if err := json.Unmarshal(out, &info); err != nil {
+		return nil, err
+	}
+	return &info, nil
 }
 
 func (cw *CIWatcher) fetchRemoteRuns(commitSHA string) ([]ghRunItem, error) {
