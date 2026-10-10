@@ -82,6 +82,9 @@ func (cw *CIWatcher) StartWatch(opts WatchOptions) (*WatchJob, error) {
 			}
 		}
 	}
+	if opts.CommitSHA != "" {
+		NewEventManager(cw.RootDir).AckSkipped(opts.CommitSHA)
+	}
 	cw.mu.Lock()
 
 	commitSHA := opts.CommitSHA

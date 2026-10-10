@@ -137,6 +137,18 @@ func (em *EventManager) supersedeOlderCI(newer *Event) {
 	}
 }
 
+// AckSkipped marks unread CI_SKIPPED results for sha as read: a new watch (e.g. the PR was just
+// opened) means a real result is coming, and the stale "skipped" must not answer for it.
+func (em *EventManager) AckSkipped(sha string) {
+	list, _ := em.List(true)
+	for _, e := range list {
+		if e.Type == EventCISkipped && e.CommitSHA != "" && sha != "" &&
+			(strings.HasPrefix(e.CommitSHA, sha) || strings.HasPrefix(sha, e.CommitSHA)) {
+			_ = em.Ack(e.ID)
+		}
+	}
+}
+
 // List returns all recorded events, optionally filtered to unread only.
 func (em *EventManager) List(unreadOnly bool) ([]*Event, error) {
 	em.mu.Lock()

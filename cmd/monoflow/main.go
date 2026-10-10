@@ -203,7 +203,7 @@ var commandDetails = map[string]string{
                                       (to update your branch from main, run 'monoflow sync' inside it)
   worktree finish <agent-id> [--force] Remove the worktree and its registry entry
   worktree isolate <agent-id>         Materialize per-worktree dependencies`,
-	"pr": `  pr create --title="<t>" [--body="<b>"] [--base=<b>] [--head=<b>] [--draft] [--stack] [--no-push]
+	"pr": `  pr create --title="<t>" [--body="<b>" | --body-file=<path>] [--base=<b>] [--head=<b>] [--draft] [--stack] [--no-push]
                                       Gate-checked PR (blocked unless DoD proof is VERIFIED)
   pr list [--state=<s>] [--limit=<n>] List PRs
   pr view <id> | pr status [id] [--json]   Show a PR / bridged local+remote status

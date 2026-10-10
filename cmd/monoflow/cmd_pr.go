@@ -15,7 +15,7 @@ import (
 func handlePR(rootDir string) {
 	if len(os.Args) < 3 {
 		fmt.Println(`MonoFlow Pull Request Commands:
-  monoflow pr create [--title="..."] [--body="..."] [--base=main] [--draft] [--stack] [--no-push]
+  monoflow pr create [--title="..."] [--body="..." | --body-file=<path>] [--base=main] [--draft] [--stack] [--no-push]
   monoflow pr list [--state=open|closed|merged|all] [--limit=N]
   monoflow pr view <id>
   monoflow pr status [id] [--json]
@@ -40,6 +40,13 @@ func handlePR(rootDir string) {
 				opts.Title = strings.TrimPrefix(arg, "--title=")
 			} else if strings.HasPrefix(arg, "--body=") {
 				opts.Body = strings.TrimPrefix(arg, "--body=")
+			} else if strings.HasPrefix(arg, "--body-file=") {
+				b, err := os.ReadFile(strings.TrimPrefix(arg, "--body-file="))
+				if err != nil {
+					fmt.Printf("{\"error\": %q}\n", "cannot read --body-file: "+err.Error())
+					os.Exit(2)
+				}
+				opts.Body = string(b)
 			} else if strings.HasPrefix(arg, "--base=") {
 				opts.BaseBranch = strings.TrimPrefix(arg, "--base=")
 			} else if strings.HasPrefix(arg, "--head=") {
@@ -52,6 +59,10 @@ func handlePR(rootDir string) {
 				opts.Stack = true
 			} else if arg == "--no-push" {
 				opts.AutoPush = false
+			} else if strings.HasPrefix(arg, "-") {
+				// A silently ignored flag (e.g. --body-file before it existed) loses the agent's input.
+				fmt.Printf("{\"error\": %q}\n", "unknown flag for pr create: "+arg+" (see 'monoflow pr create --help')")
+				os.Exit(2)
 			}
 		}
 
