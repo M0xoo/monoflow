@@ -150,7 +150,7 @@ Usage:
   monoflow guard [check]              Test integrity guard (anti-cheating) & secret scanner
   monoflow task [check|prove|slice]   DoD contracts, Proof of Work receipts, & stacked diffs
   monoflow deliver [--target=<p>]     Assemble hermetic deliverable artifact (.agents/dist)
-  monoflow cache [status|clean]       Local & remote package cache metrics, hit ratio & storage
+  monoflow cache [status|clean|serve] Local & remote package cache metrics, hit ratio & built-in HTTP daemon
   monoflow scenario [run] [--json]    Real end-to-end multi-agent enterprise monorepo simulation
   monoflow app test                   Delta compilation + symlink overlay (< 5s full-app)
   monoflow pr [create|list|view|review|test|local|merge] Full agent-native PR suite with affected packages
@@ -1839,7 +1839,8 @@ func handleCache(rootDir string) {
 	if len(os.Args) < 3 {
 		fmt.Println(`MonoFlow Cache Commands:
   monoflow cache status    Show local and remote cache efficiency, hit ratio, and disk usage
-  monoflow cache clean     Purge local cache storage`)
+  monoflow cache clean     Purge local cache storage
+  monoflow cache serve     Launch built-in HTTP Remote Cache server (--port=8080 --token=... --dir=...)`)
 		os.Exit(0)
 	}
 
@@ -1859,8 +1860,30 @@ func handleCache(rootDir string) {
 		}
 		fmt.Println(`{"status": "cleaned", "message": "Local verification and artifact cache purged"}`)
 
+	case "serve":
+		port := 8080
+		storageDir := filepath.Join(rootDir, ".agents", "cache", "remote_storage")
+		token := ""
+		for _, arg := range os.Args[3:] {
+			if strings.HasPrefix(arg, "--port=") {
+				if p, err := strconv.Atoi(strings.TrimPrefix(arg, "--port=")); err == nil {
+					port = p
+				}
+			} else if strings.HasPrefix(arg, "--dir=") {
+				storageDir = strings.TrimPrefix(arg, "--dir=")
+			} else if strings.HasPrefix(arg, "--token=") {
+				token = strings.TrimPrefix(arg, "--token=")
+			}
+		}
+		addr := fmt.Sprintf(":%d", port)
+		fmt.Printf(`{"status": "running", "addr": "%s", "storage_dir": %q, "token_protected": %t}`+"\n", addr, storageDir, token != "")
+		if err := cache.StartServer(addr, storageDir, token); err != nil {
+			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
+			os.Exit(1)
+		}
+
 	default:
-		fmt.Printf(`{"error": "unknown cache subcommand: %s (use status | clean)"}`+"\n", sub)
+		fmt.Printf(`{"error": "unknown cache subcommand: %s (use status | clean | serve)"}`+"\n", sub)
 		os.Exit(1)
 	}
 }
