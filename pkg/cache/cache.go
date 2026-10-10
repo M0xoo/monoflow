@@ -371,6 +371,19 @@ func (m *Manager) GetVerification(key string) (*VerificationRecord, bool) {
 	return nil, false
 }
 
+// PeekVerification reads a record without counting a hit or miss.
+func (m *Manager) PeekVerification(key string) (*VerificationRecord, bool) {
+	data, err := os.ReadFile(filepath.Join(m.verifyDir, key+".json"))
+	if err != nil {
+		return nil, false
+	}
+	var rec VerificationRecord
+	if json.Unmarshal(data, &rec) != nil {
+		return nil, false
+	}
+	return &rec, true
+}
+
 // PutVerification stores a successful verification run locally and optionally syncs to remote.
 func (m *Manager) PutVerification(rec *VerificationRecord) error {
 	if !m.Config.Enabled || rec == nil || rec.Key == "" {

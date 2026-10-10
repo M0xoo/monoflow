@@ -39,7 +39,11 @@ type TargetResult struct {
 	Quarantined []string          `json:"quarantined,omitempty"`
 	// Preexisting holds failures that also occur on the merge-base: reported, not blocking.
 	Preexisting []DiagnosticError `json:"preexisting,omitempty"`
-	CommandRun  string            `json:"command_run,omitempty"`
+	// CacheKey identifies the verified inputs (content, dependencies, command, platform).
+	CacheKey string `json:"cache_key,omitempty"`
+	// CachedFrom is set when the cached result came from another source (e.g. an agent proof).
+	CachedFrom string `json:"cached_from,omitempty"`
+	CommandRun string `json:"command_run,omitempty"`
 }
 
 // SuiteResult holds the aggregated verification results across all affected packages.
@@ -117,9 +121,13 @@ func (r *Runner) VerifyTarget(pkg *graph.PackageNode, opt VerifyOptions) TargetR
 		modeTag := opt.Stage + ":" + opt.Mode
 		cacheKey, _ = r.cacheMgr.ComputePackageKey(pkg, r.upstreamKeys(pkg), cmdStr, modeTag)
 		if !opt.NoCache && cacheKey != "" {
+			res.CacheKey = cacheKey
 			if rec, hit := r.cacheMgr.GetVerification(cacheKey); hit && rec.Status == "passed" {
 				res.Status = "passed"
 				res.Cached = true
+				if strings.HasPrefix(rec.Output, "monoflow-proof:") {
+					res.CachedFrom = strings.TrimSpace(strings.SplitN(rec.Output, "\n", 2)[0])
+				}
 				res.DurationMs = float64(time.Since(start).Microseconds()) / 1000.0
 				return res
 			}
@@ -317,4 +325,16 @@ func (r *Runner) VerifyAffected(g *graph.DependencyGraph, changedFiles []string,
 		AffectedPackages: affected.AllAffected,
 		Results:          results,
 	}
+}
+
+// PassedKeys returns the cache keys of passed (non-imported) results, i.e. what this
+// machine verified and can publish as proofs.
+func PassedKeys(results []TargetResult) []string {
+	var keys []string
+	for _, r := range results {
+		if r.Status == "passed" && r.CacheKey != "" && r.CachedFrom == "" {
+			keys = append(keys, r.CacheKey)
+		}
+	}
+	return keys
 }
