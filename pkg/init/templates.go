@@ -109,9 +109,7 @@ const TaskTemplate = `{
     "No typecheck errors in downstream packages"
   ],
   "allowed_paths": [],
-  "read_only_paths": [
-    "contracts/**"
-  ],
+  "read_only_paths": [],
   "context_files": []
 }
 `
