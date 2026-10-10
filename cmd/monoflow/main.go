@@ -12,6 +12,7 @@ import (
 
 	"github.com/antigravity/monoflow/pkg/checkpoint"
 	"github.com/antigravity/monoflow/pkg/deliver"
+	"github.com/antigravity/monoflow/pkg/events"
 	"github.com/antigravity/monoflow/pkg/graph"
 	"github.com/antigravity/monoflow/pkg/guard"
 	initialize "github.com/antigravity/monoflow/pkg/init"
@@ -87,6 +88,12 @@ func main() {
 	case "outer":
 		handleOuter(rootDir)
 
+	case "push":
+		handlePush(rootDir)
+
+	case "events":
+		handleEvents(rootDir)
+
 	case "version":
 		fmt.Println("MonoFlow v1.0.0 (Agent-Native Monorepo & Ultra-Fast CI Engine)")
 
@@ -107,6 +114,8 @@ Usage:
   monoflow worktree [create|sync|gc]  Virtual worktrees with CoW isolation & AST merge (<60ms)
   monoflow verify [--affected|--proof] Sub-2s inner loop with compact JSON diagnostics
   monoflow outer [start|status|wait]  Async outer loop: transitive matrix & remote promotion barrier
+  monoflow push [remote] [branch]     Fire-and-forget push with background autonomous CI watcher
+  monoflow events [unread|list|ack]   Asynchronous agent event inbox (check in < 5ms without polling)
   monoflow review [risk|audit|throttle] Machine risk scoring, anti-hallucination & backpressure
   monoflow queue [spec|verify]        Speculative local merge queue with flaky quarantine
   monoflow ci [check]                 Two-tier CI gate: Tier 1 fast-path (<30s) vs Tier 2 full
@@ -747,6 +756,30 @@ func handleQueue(rootDir string) {
 }
 
 func handleCI(rootDir string) {
+	if len(os.Args) > 2 && os.Args[2] == "watch" {
+		cw := events.NewCIWatcher(rootDir)
+		opts := events.WatchOptions{
+			Async: false,
+		}
+		for _, arg := range os.Args[3:] {
+			if strings.HasPrefix(arg, "--commit=") {
+				opts.CommitSHA = strings.TrimPrefix(arg, "--commit=")
+			} else if strings.HasPrefix(arg, "--branch=") {
+				opts.Branch = strings.TrimPrefix(arg, "--branch=")
+			} else if arg == "--async" {
+				opts.Async = true
+			}
+		}
+		job, err := cw.StartWatch(opts)
+		if err != nil {
+			fmt.Printf(`{"error": "%s"}`+"\n", err)
+			os.Exit(1)
+		}
+		data, _ := json.MarshalIndent(job, "", "  ")
+		fmt.Println(string(data))
+		return
+	}
+
 	qm := queue.NewQueueManager(rootDir)
 	headSHA := ""
 	for _, arg := range os.Args[2:] {
@@ -917,6 +950,149 @@ func handleOuter(rootDir string) {
 
 	default:
 		fmt.Printf(`{"error": "unknown outer subcommand: %s"}`+"\n", sub)
+		os.Exit(1)
+	}
+}
+
+func handlePush(rootDir string) {
+	// 1. Pre-push test integrity check & secret scan (< 20ms)
+	testViolations, _ := guard.CheckTestIntegrity(rootDir)
+	secretViolations, _ := guard.ScanSecrets(rootDir)
+	allViolations := append(testViolations, secretViolations...)
+	if len(allViolations) > 0 {
+		data, _ := json.MarshalIndent(map[string]any{
+			"status":     "blocked",
+			"violations": allViolations,
+			"verdict":    "Pre-push integrity check failed. Cannot push weakened tests or credentials to remote.",
+		}, "", "  ")
+		fmt.Println(string(data))
+		os.Exit(1)
+	}
+
+	remote := "origin"
+	branch := ""
+	noWatch := false
+
+	for _, arg := range os.Args[2:] {
+		if arg == "--no-watch" {
+			noWatch = true
+		} else if strings.HasPrefix(arg, "--remote=") {
+			remote = strings.TrimPrefix(arg, "--remote=")
+		} else if strings.HasPrefix(arg, "--branch=") {
+			branch = strings.TrimPrefix(arg, "--branch=")
+		} else if remote == "origin" && !strings.HasPrefix(arg, "-") {
+			remote = arg
+		} else if branch == "" && !strings.HasPrefix(arg, "-") {
+			branch = arg
+		}
+	}
+
+	if branch == "" {
+		cmdRev := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
+		cmdRev.Dir = rootDir
+		if out, err := cmdRev.CombinedOutput(); err == nil {
+			branch = strings.TrimSpace(string(out))
+		} else {
+			branch = "main"
+		}
+	}
+
+	headSHA := ""
+	cmdSHA := exec.Command("git", "rev-parse", "HEAD")
+	cmdSHA.Dir = rootDir
+	if out, err := cmdSHA.CombinedOutput(); err == nil {
+		headSHA = strings.TrimSpace(string(out))
+	}
+
+	// 2. Perform push
+	start := time.Now()
+	cmdPush := exec.Command("git", "push", remote, branch)
+	cmdPush.Dir = rootDir
+	out, err := cmdPush.CombinedOutput()
+	durMs := float64(time.Since(start).Microseconds()) / 1000.0
+
+	if err != nil {
+		fmt.Printf(`{"status": "push_failed", "error": "%s", "output": "%s"}`+"\n", err, strings.TrimSpace(string(out)))
+		os.Exit(1)
+	}
+
+	res := map[string]any{
+		"status":      "pushed",
+		"remote":      remote,
+		"branch":      branch,
+		"head_sha":    headSHA,
+		"duration_ms": durMs,
+	}
+
+	// 3. Spawn autonomous background CI watcher if not disabled
+	if !noWatch {
+		cw := events.NewCIWatcher(rootDir)
+		job, err := cw.StartWatch(events.WatchOptions{
+			CommitSHA: headSHA,
+			Branch:    branch,
+			Async:     true, // Detach in background!
+		})
+		if err == nil {
+			res["status"] = "pushed_and_watching"
+			res["watcher_id"] = job.ID
+			res["agent_directive"] = "UNBLOCKED. Autonomous CI watcher is monitoring remote runs in the background. MonoFlow will emit an event upon CI completion. You may proceed immediately with the next task."
+		}
+	}
+
+	data, _ := json.MarshalIndent(res, "", "  ")
+	fmt.Println(string(data))
+}
+
+func handleEvents(rootDir string) {
+	em := events.NewEventManager(rootDir)
+	sub := "unread"
+	if len(os.Args) > 2 {
+		sub = os.Args[2]
+	}
+
+	switch sub {
+	case "unread":
+		list, err := em.List(true)
+		if err != nil {
+			fmt.Printf(`{"error": "%s"}`+"\n", err)
+			os.Exit(1)
+		}
+		data, _ := json.MarshalIndent(map[string]any{
+			"unread_count": len(list),
+			"events":       list,
+		}, "", "  ")
+		fmt.Println(string(data))
+
+	case "list", "all":
+		list, err := em.List(false)
+		if err != nil {
+			fmt.Printf(`{"error": "%s"}`+"\n", err)
+			os.Exit(1)
+		}
+		data, _ := json.MarshalIndent(map[string]any{
+			"total_count": len(list),
+			"events":      list,
+		}, "", "  ")
+		fmt.Println(string(data))
+
+	case "ack":
+		if len(os.Args) < 4 {
+			fmt.Println(`{"error": "missing event-id for ack"}`)
+			os.Exit(1)
+		}
+		evtID := os.Args[3]
+		if err := em.Ack(evtID); err != nil {
+			fmt.Printf(`{"error": "%s"}`+"\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf(`{"status": "acknowledged", "event_id": "%s"}`+"\n", evtID)
+
+	case "clear":
+		_ = em.ClearAll()
+		fmt.Println(`{"status": "cleared"}`)
+
+	default:
+		fmt.Printf(`{"error": "unknown events subcommand: %s (use unread | list | ack <id> | clear)"}`+"\n", sub)
 		os.Exit(1)
 	}
 }
