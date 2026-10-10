@@ -22,7 +22,8 @@ remote CI stays green. Run it as ` + "`" + `.agents/bin/monoflow` + "`" + ` (als
    if it says ` + "`" + `not_created` + "`" + `, follow its ` + "`" + `agent_directive` + "`" + ` (e.g. open it with your GitHub integration).
 8. Do not wait for CI and do not run ` + "`" + `push` + "`" + ` again: ` + "`" + `pr create` + "`" + ` already started the CI watcher.
    ` + "`" + `monoflow events unread` + "`" + ` once, then end your turn; CI_PASSED / CI_FAILED / CI_SKIPPED events
-   arrive by themselves. On CI_FAILED: reproduce with ` + "`" + `monoflow verify --affected` + "`" + `, fix, commit, ` + "`" + `monoflow push` + "`" + `.
+   arrive by themselves. When CI is red, start with ` + "`" + `monoflow ci health` + "`" + ` (failure history, breaking
+   commit range, flakiness) instead of reading CI APIs. On CI_FAILED: reproduce with ` + "`" + `monoflow verify --affected` + "`" + `, fix, commit, ` + "`" + `monoflow push` + "`" + `.
 9. ` + "`" + `monoflow worktree list` + "`" + ` shows every agent's branch, PR and CI state. ` + "`" + `monoflow worktree finish <agent-id>` + "`" + ` when merged.
 
 ## Instead of → use

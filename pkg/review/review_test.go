@@ -20,6 +20,22 @@ func TestEvaluateRiskDocOnly(t *testing.T) {
 	}
 }
 
+func TestAuditPRDossierDocsSite(t *testing.T) {
+	title := "docs: rework README and docs site"
+	desc := "Rebuild the docs/ site and README."
+	files := []string{"README.md", "docs/index.html", "docs/app.js", "docs/styles.css"}
+
+	res := AuditPRDossier(title, desc, files)
+	if !res.Valid {
+		t.Fatalf("expected files under docs/ to count as documentation, got warnings: %+v", res.HallucinationWarnings)
+	}
+
+	res = AuditPRDossier(title, desc, []string{"README.md", "services/docs/handler.go"})
+	if res.Valid {
+		t.Fatalf("expected nested docs/ code outside the root docs/ dir to still be flagged")
+	}
+}
+
 func TestEvaluateRiskCriticalFiles(t *testing.T) {
 	files := []string{
 		"services/billing/migrations/001_add_credits.sql",

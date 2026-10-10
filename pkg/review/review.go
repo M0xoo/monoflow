@@ -15,9 +15,9 @@ import (
 type RiskTier string
 
 const (
-	Tier1AutoApprovable        RiskTier = "TIER_1_AUTO_APPROVABLE"
-	Tier2HumanReviewRequired   RiskTier = "TIER_2_HUMAN_REVIEW_REQUIRED"
-	Tier3ElevatedRiskBlocked   RiskTier = "TIER_3_ELEVATED_RISK_BLOCKED"
+	Tier1AutoApprovable      RiskTier = "TIER_1_AUTO_APPROVABLE"
+	Tier2HumanReviewRequired RiskTier = "TIER_2_HUMAN_REVIEW_REQUIRED"
+	Tier3ElevatedRiskBlocked RiskTier = "TIER_3_ELEVATED_RISK_BLOCKED"
 )
 
 // RiskFactor explains why risk points were assigned.
@@ -60,7 +60,7 @@ var (
 	securityPattern  = regexp.MustCompile(`(?i)(auth/|oauth/|jwt/|crypto/|security/|permissions?/|rbac/)`)
 	infraPattern     = regexp.MustCompile(`(?i)(\.github/workflows/|dockerfile|docker-compose|k8s/|terraform/|helm/)`)
 	secretPattern    = regexp.MustCompile(`(?i)(\.env|credentials|secret|vault)`)
-	docOnlyPattern   = regexp.MustCompile(`(?i)(\.md|\.txt|\.markdown|docs/)$`)
+	docOnlyPattern   = regexp.MustCompile(`(?i)(\.md|\.txt|\.markdown)$|^docs/`)
 	testPattern      = regexp.MustCompile(`(?i)(_test\.go|\.(spec|test)\.[cm]?[jt]sx?|(^|/)tests?\.[cm]?[jt]s|(^|/)(__tests__|tests?)/.*\.[cm]?[jt]sx?|_test\.py|(^|/)test_[^/]*\.py|_test\.rs|(^|/)tests/.*\.rs)$`)
 )
 

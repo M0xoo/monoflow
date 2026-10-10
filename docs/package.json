@@ -1,7 +1,7 @@
 {
   "name": "@monoflow/docs",
   "version": "1.0.0",
-  "description": "MonoFlow systems engineering documentation and landing portal",
+  "description": "MonoFlow website (GitHub Pages)",
   "private": true,
   "scripts": {
     "test": "node test.js",

@@ -2,23 +2,22 @@
 
 # ⚡ MonoFlow
 
-**The Agent-Native Monorepo & Ultra-Fast CI Operating Environment**
+### Make your monorepo usable by coding agents.
 
-[![Go Version](https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat&logo=go)](https://go.dev)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Build Status](https://img.shields.io/badge/CI-Passing-brightgreen.svg)]()
-[![Inner Loop Latency](https://img.shields.io/badge/Inner_Loop-<2s-blueviolet.svg)]()
-[![Startup Latency](https://img.shields.io/badge/Startup-<18ms-orange.svg)]()
+One Go binary that gives Claude Code, Cursor, Antigravity and Copilot a **map** of your repo,<br>
+a **fast feedback loop**, an **undo** button, an **isolated place** to work, and a **safe path** to ship.
 
-*Stop blowing token budgets on ANSI terminal dumps. Stop waiting 45 minutes for CI. Stop dirtying Git history with trial-and-error edits.*
+[![CI](https://github.com/M0xoo/monoflow/actions/workflows/ci.yml/badge.svg)](https://github.com/M0xoo/monoflow/actions/workflows/ci.yml)
+[![Go Version](https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat&logo=go&logoColor=white)](https://go.dev)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+[![Output: JSON](https://img.shields.io/badge/output-compact%20JSON-blueviolet.svg)](#2--feedback-in-seconds-as-json)
+[![Languages](https://img.shields.io/badge/langs-Go%20·%20TS%20·%20Rust%20·%20Python%20·%20Proto-orange.svg)](#-language-support)
 
-[Documentation (Live)](https://m0xoo.github.io/monoflow/) •
-[Quickstart](#-quickstart-in-10-seconds) •
-[Why MonoFlow?](#-why-monoflow) •
-[Core Pillars](#-core-pillars) •
-[CLI Reference](#-cli-reference) •
-[Polyglot Support](#-polyglot-support) •
-[Benchmarks](#-benchmarks)
+[**Website**](https://m0xoo.github.io/monoflow/) •
+[Quickstart](#-quickstart) •
+[What you get](#-what-you-get) •
+[The agent loop](#-the-agent-loop) •
+[Commands](#-commands)
 
 </div>
 
@@ -26,299 +25,173 @@
 
 ## 💡 Why MonoFlow?
 
-When coders are **autonomous agents** (Google Antigravity, Cursor, Claude Code, Copilot Workspace), traditional human-centric monorepo workflows completely break down:
+Most monorepos are set up for humans. When an autonomous agent does the coding, the same workflow wastes its time, its tokens and your review hours.
 
-| Traditional Human Monorepo | ⚡ MonoFlow Agent-Native Environment |
+| 🐢 Without MonoFlow, an agent… | ⚡ With MonoFlow, it… |
 | :--- | :--- |
-| **45-minute CI suites** with Docker builds and full end-to-end matrices stall agent velocity. | **Sub-2s Inner Loop**: Evaluates dependency DAG to verify strictly affected targets in parallel. |
-| **Sprawling terminal dumps** with ANSI colors and spinners burn 5,000+ context tokens. | **Token-Compact JSON Diagnostics**: Emits `{ file, line, col, code, message }` directly. |
-| **Standard Git commits** dirty public history on every experimental edit. | **15ms Ephemeral Checkpoints**: Shadow workspace (`git write-tree`) with 14ms instant rollback. |
-| **Unreviewable 800-line PRs** touching 35 files across 4 packages. | **Stacked Diffs by Default**: Slices changes into Types $\to$ Implementation $\to$ Consumers. |
-| **"Did this actually work?"** Reviewers spend 15 min checking out branches. | **1-Second Reviewer Verification**: Cryptographic Proof of Work receipt verified in **< 1ms**. |
-| **Recompiling 50 packages** to test a 2-package change on the full app. | **Delta Grafting & Symlink Overlays**: Assembles the full app in **< 5 seconds**. |
+| greps the whole tree to guess what depends on what | asks the dependency graph directly: `graph query`, `graph impact` |
+| runs the full suite and reads pages of colored logs | checks **only affected packages** and gets errors back as **JSON** |
+| commits every failed attempt, or loses work it can't undo | **checkpoints and reverts** in milliseconds, with nothing in Git history |
+| edits the same checkout as you and every other agent | works in its own **sparse worktree** |
+| "fixes" red tests by deleting assertions | gets stopped by the **test integrity guard** |
+| polls `gh run watch` in a loop, spending tokens while it waits | pushes, moves on, and is **notified** when CI finishes |
 
 ---
 
-## 🚀 Quickstart in 10 Seconds
-
-Install MonoFlow into any existing repository (Node, Go, Rust, Python, or Polyglot) with a single command:
+## 🚀 Quickstart
 
 ```bash
-curl -fsSL https://get.monoflow.dev/install.sh | bash
-# or from source:
+# 1. Build (Go 1.22+)
 git clone https://github.com/M0xoo/monoflow.git
-cd monoflow && make build && ./install.sh
+cd monoflow && make build
+
+# 2. Install into your repository
+cd /path/to/your-repo
+/path/to/monoflow/install.sh
+
+# 3. (optional) Add GitHub Actions caching + two-tier CI
+.agents/bin/monoflow init --setup-gh-actions
 ```
 
-MonoFlow automatically:
-1. Detects package boundaries and existing test/lint scripts.
-2. Builds the directed dependency graph in `.agents/monoflow.config.json`.
-3. Installs the zero-dependency, statically compiled binary into `.agents/bin/monoflow`.
-4. Provisions agent rules, Antigravity skills, task boundary templates, and flaky test quarantine.
-5. Configures GitHub Actions package cache & two-tier CI workflows (`monoflow init --setup-gh-actions` or `--gh`).
+`monoflow init` discovers your packages and writes everything your agent needs:
+
+| File | Purpose |
+| :--- | :--- |
+| `.agents/monoflow.config.json` | Discovered packages and dependency graph |
+| `AGENTS.md` · `.agents/rules/` · `.agents/skills/monoflow/` | Instructions your agent loads automatically |
+| `.agents/task.json` | Task boundaries (`allowed_paths`, `read_only_paths`) |
+| `.agents/quarantine.json` | Flaky tests kept out of the feedback loop |
 
 ---
 
-## 🏛️ Core Pillars
+## 🧰 What you get
 
-```mermaid
-flowchart TD
-    subgraph AgentLoop["Agent Inner Loop (< 2s)"]
-        A["Agent Edit (Source Level)"] --> B["Ephemeral Checkpoint (15ms)\nmonoflow checkpoint save"]
-        B --> C["monoflow verify --affected"]
-        C --> D{"Affected Fast Checks"}
-        D -- "Syntax / Type Error" --> E["Token-Compact JSON\n(Zero ANSI escape codes)"]
-        E --> F["Rollback via monoflow checkpoint revert (14ms)"]
-        F --> A
-        D -- "Pass" --> G["monoflow task prove"]
-    end
+### 1. 🗺️ A map of the repo, so agents don't have to crawl it
 
-    subgraph DeliverablePoW["Deliverable & Proof of Work"]
-        G --> H["Build Deliverable (.agents/dist)\nCompute SHA-256 Fingerprint"]
-        H --> I["Generate Proof Receipt\n(.agents/proofs/task-123.json)"]
-        I --> J["1-Second Reviewer Verification\nmonoflow verify --proof=task-123 (< 1ms)"]
-    end
+`init` finds your packages and their dependency graph. After that, agents ask questions directly:
+
+```bash
+monoflow graph query packages/core        # upstream deps + downstream dependents
+monoflow graph impact packages/core/x.go  # which packages a change to this file affects
 ```
 
-### 1. The Sub-2s Inner Loop & Clean JSON Diagnostics
-Agents should never parse ANSI terminal noise or scroll past 500 lines of dependencies. MonoFlow runs affected targets in parallel goroutines and normalizes compiler errors into clean JSON:
+Large repo? `monoflow clone --packages=billing` and `monoflow subset set` check out only the packages a task needs, plus whatever they depend on.
+
+### 2. ⚡ Feedback in seconds, as JSON
+
+`monoflow verify --affected` checks only the packages your change touches. It runs them in parallel and uses cached results when inputs haven't changed. Compiler and test errors come back normalized, with no ANSI codes and no spinners:
 
 ```json
 {
   "status": "failed",
-  "duration_ms": 238,
-  "affected_packages": ["billing"],
-  "results": [
-    {
-      "target": "billing",
-      "language": "typescript",
-      "status": "failed",
-      "errors": [
-        {
-          "file": "services/billing/tax.ts",
-          "line": 42,
-          "col": 11,
-          "code": "TS2322",
-          "message": "Type 'string' is not assignable to type 'number'.",
-          "expected": "number",
-          "received": "string"
-        }
-      ]
-    }
-  ]
+  "affected_packages": ["packages/core"],
+  "results": [{
+    "target": "packages/core",
+    "language": "go",
+    "errors": [{
+      "file": "./core.go", "line": 3, "col": 25, "code": "go-error",
+      "message": "cannot use \"x\" (untyped string constant) as int value in return statement"
+    }],
+    "command_run": "go build ./..."
+  }]
 }
 ```
 
-### 2. Ephemeral Checkpoints (Shadow Workspace)
-* Captures the entire working tree state in **15ms** using low-level Git plumbing (`git write-tree`).
-* If a trial edit fails, `monoflow checkpoint revert` restores the workspace in **14ms**. Zero Git history pollution.
+### 3. ⏪ Undo without touching Git history
 
-### 3. Machine-Checked Definition of Done (DoD) & Proof of Work (PoW)
-Before creating a PR, the agent executes `monoflow task prove <task-id>`:
-* Verifies declared boundary scopes (`allowed_paths` vs `read_only_paths`).
-* Compiles the real deliverable artifact into `.agents/dist/<target>`.
-* Signs the **Proof Receipt** (`.agents/proofs/<task-id>.json`).
+Agents learn by trying things. Checkpoints let them do that without making a commit for every attempt:
 
-Reviewers (human engineers or AI review bots) verify the PR in **under 1 second**:
 ```bash
-monoflow verify --proof=task-849
-```
-```json
-{
-  "status": "VERIFIED",
-  "task_id": "task-849",
-  "verified_in_ms": 0.165,
-  "dod_checks_passed": 3,
-  "confidence_verdict": "APPROVED (1-Second Instant Verification Passed)"
-}
+monoflow checkpoint save "try new tax rounding"
+# ...edit, verify, fail...
+monoflow checkpoint revert
 ```
 
-### 4. Full-App Testing Without the 1-Hour Build (Delta Grafting)
-When you modify 2 packages in a 50-package monorepo:
-* MonoFlow builds **only the 2 modified packages**.
-* Reuses 48 pre-built cached artifacts from local/remote cache.
-* Grafts them into an active symlink overlay (`.agents/dist/full-app`) in **< 50ms**.
+Snapshots use Git plumbing (`write-tree` / `read-tree`), so they never show up in the log.
 
-### 5. Agent-Native PR Lifecycle Suite (`monoflow pr`)
-AI agents develop and propose changes via pull requests with automated machine risk scoring, DoD receipts, and local affected-package projection:
-* **Create PR (`monoflow pr create`)**: Automatically packages Git diffs with machine risk badges (`Tier 1 Auto-Approvable`, `Tier 2 Human Review`, `Tier 3 Blocked`), DoD Proof of Work certificates, and affected package manifests. Supports `--stack` for 3-tier stacked PR slicing.
-* **Local PR Affected Packages (`monoflow pr local <id>`)**: Projects the workspace or provisions an isolated virtual worktree containing **only the PR's affected packages** and interface contracts in < 100ms:
-  ```bash
-  # Project active workspace to only packages affected by PR #42
-  monoflow pr local 42 --deps=contracts
+### 4. 🧪 An isolated worktree for every agent
 
-  # Or spawn an isolated virtual worktree focused on PR #42
-  monoflow pr local 42 --worktree=agent-review-42 --deps=contracts
-  ```
-* **Hot-Mount PR Delta Testing (`monoflow pr test <id>`)**: Verifies the PR against the base branch using delta-overlay compilation in **~2.4 seconds**.
-* **Unified GitHub / MonoFlow PR Bridging (`monoflow pr status [id]`)**: Displays both the local machine proof receipt (DoD checks, execution duration, git tree SHA) and the remote GitHub URL in a single view, eliminating any confusion between local vs. remote PR states.
-* **Machine Review & Sign-Off (`monoflow pr review <id>`)**: Audits claims against git diffs and auto-approves Tier 1 changesets.
-* **Speculative Merge (`monoflow pr merge <id>`)**: Safely promotes PRs through MonoFlow's speculative local merge queue.
+Several agents (or an agent and a human) can share one repo without getting in each other's way. Each one works in its own sparse worktree, which contains only the packages it needs:
 
-### 6. Semantic Symbol-Level AST Synthesizer (Same-File Multi-Agent Swarming)
-Traditional `git merge` is line-based and fails with ugly conflict markers (`<<<<<<< HEAD`) whenever two agents add functions or imports to the same file.
-* MonoFlow parses native ASTs (Go `ast`, TypeScript/JavaScript, Python).
-* If Agent A adds `func CancelOrder()` and Agent B adds `func RefundOrder()`, MonoFlow **synthesizes both declarations** and deduplicates imports automatically in **< 20ms**. Zero conflict markers.
+```bash
+monoflow worktree create agent-42 --packages=billing
+monoflow worktree sync --to=agent-42 --from=agent-7   # symbol-level merge
+monoflow worktree finish agent-42
+```
 
-### 7. Stopping "Agentic Slop" & Decision Fatigue (`monoflow review`)
-AI agents generate code 10x faster than humans can review. MonoFlow protects engineering teams from review burnout:
-* **Semantic Risk Scoring:** Quantifies PR risk from 0 to 100 (`TIER_1_AUTO_APPROVABLE`, `TIER_2_HUMAN_REVIEW`, `TIER_3_ELEVATED_RISK_BLOCKED`) based on database migrations, auth/crypto, infra, and DAG fan-out.
-* **Anti-Hallucination Scope Audit:** Flags PR descriptions claiming "minor typo" or "doc update" while secretly modifying core schemas or auth logic.
-* **Agentic Backpressure:** Pauses autonomous PR creation when the human review queue is saturated.
+When two agents add different functions to the same file, MonoFlow merges at the **AST level** (Go, TS/JS, Python), so you don't get conflict markers.
 
-### 8. Speculative Local Merge Queue & Two-Tier CI (`monoflow queue` & `monoflow ci`)
-Agents spamming PRs to GitHub Actions causes queue gridlock, flaky test bisect cascades, and thousands of dollars in runner costs:
-* **Speculative Local Pre-Flight Rebase:** Simulates landing on `main` in an ephemeral scratch worktree in **22ms**, testing strictly affected packages and automatically bypassing quarantined flaky tests.
-* **Two-Tier CI Gate for GitHub Actions:** Emits a signed cryptographic receipt (`.agents/queue/receipt_<sha>.json`). When CI runs, MonoFlow validates the signature and activates **Tier 1 Fast-Path CI (< 30s)** instead of a 30-minute monorepo rebuild, slashing CI bills by up to **90%**.
+### 5. 🛡️ Guardrails you can trust
 
-### 9. Fast Agent Commit & Worktree GC
-* `monoflow commit -m "..."` validates test integrity and scans secrets in < 50ms, then commits with `--no-verify` to bypass hanging interactive human pre-commit hooks (Husky, lint-staged).
-* `monoflow worktree gc` tracks heartbeat leases and automatically purges abandoned or orphaned worktrees (> TTL).
-
-### 10. Anti-Cheating Test Guard & Secret Scanner
-Agents frequently attempt to make CI green by deleting failing assertions, commenting out tests, or inserting hollow assertions like `expect(true).toBe(true)`.
-* **Test Integrity Guard:** Rejects any diff where existing test assertions were weakened, deleted, or mocked away.
-* **Secret Scanner:** Scans diffs for AWS keys, private keys, or API tokens before creating commits or proof receipts.
-
-### 11. Runaway Loop Circuit Breaker
-Prevents agents from burning $50 in API tokens and spinning in infinite self-healing loops:
-* Caps self-correction attempts at 3 iterations.
-* If attempt 3 fails, MonoFlow **auto-reverts to the latest green checkpoint** and emits a structured Human Escalation payload.
-
-### 12. Selective Package Subsetting & Partial Clone (`monoflow clone` & `monoflow subset`)
-Large enterprise monorepos with 50+ packages consume tens of gigabytes of disk and network, slowing down autonomous agent startup and file watchers:
-* **Partial Blob Clone:** `monoflow clone <url> [dest] --packages=<target>` leverages Git partial clone (`--filter=blob:none`) and sparse checkout cone mode. Blobs for omitted packages are never downloaded.
-* **Transitive Upstream Dependency Resolution:** Automatically inspects the dependency graph and includes all upstream packages required to compile and test the target.
-* **Dynamic Workspace Projection:** Switch between package subsets in **< 50ms** (`monoflow subset set --packages=<name>`), instantly omitting unneeded packages from the working directory.
-* **Sparse Agent Worktrees:** `monoflow worktree create worker-1 --packages=<name>` spawns an isolated APFS worktree populated ONLY with the agent's target package and dependencies, slashing disk usage by 70–95%.
-
-### 13. Deterministic Package Caching & Built-in HTTP Daemon (`monoflow cache`)
-Avoid re-compiling, re-linting, or re-testing packages whose inputs have not changed:
-* **Deterministic Content-Addressable Keying:** Computes SHA-256 package keys (`pkg-cache-key`) spanning source trees, toolchain versions, dependencies, and configuration.
-* **Sub-Millisecond Iterative Inner Loop:** `monoflow verify` automatically checks `.agents/cache/verify/`. If package source code is unmodified, tests return in **< 1ms** with cached JSON test telemetry.
-* **Hermetic Packaging:** Compiles production targets into self-contained tarballs (`.agents/dist/<target>-<hash>.tar.gz`).
-* **Zero-Dependency HTTP Cache Daemon:** Launch `monoflow cache serve --port=8080` to share build & verification caches across local agent swarms and remote CI workers.
-* **GitHub Actions Integration:** Auto-generates workflow templates (`monoflow init --setup-gh-actions` or `monoflow cache setup-gh`) to restore and upload package caches via `@actions/cache`.
-
-### 14. SemVer Package Versioning, Changeset Cascades & Dependency Health (`monoflow version` & `monoflow subset check`)
-Coordinating versions across polyglot micro-services and libraries is error-prone:
-* **Declarative Changesets:** Run `monoflow version bump <package> [patch|minor|major] --cascade` to record atomic changesets in `.agents/changesets/`.
-* **Automatic Downstream Cascade:** Automatically computes topological dependents in the DAG and cascades version bumps downstream without manual dependency auditing.
-* **Atomic Polyglot Manifest Application:** `monoflow version apply` updates version fields across `package.json`, `go.mod`, `Cargo.toml`, and `pyproject.toml` in **< 10ms**.
-* **Subset Dependency Health Check:** `monoflow subset check` ensures that all upstream packages required by the active package subset are present in the checkout cone, preventing mysterious build breaks in sparse workspaces.
-
-### 15. Fire-and-Forget Push & Autonomous Reactive Event Bus (`monoflow push` & `monoflow events`)
-Waiting for remote cloud CI burns thousands of LLM context tokens in polling loops:
-* **Fire-and-Forget Push:** `monoflow push [remote] [branch]` validates test integrity, pushes the commit, and launches an autonomous background supervisor (`pkg/events/watcher.go`).
-* **Zero-Token Idle:** The agent immediately proceeds to the next backlog task or concludes its turn without spinning or polling `gh run watch`.
-* **Reactive Event Inbox:** Background watchers monitor remote GitHub Actions runs and deposit structured event payloads in `.agents/events/`. Agents query pending notifications in **< 5ms** via `monoflow events unread`.
-
-### 16. Native Remote Synchronization & Safe Branching (`monoflow sync` & `monoflow branch`)
-Human-centric git workflows (`git pull`, `git checkout`) break sparse cones and dirty shadow indexes:
-* **Subset-Preserving Sync:** `monoflow sync [remote] [branch]` pulls remote updates via fast-forward or rebase while automatically preserving the active package subset and sparse checkout filters.
-* **Safe Branching:** `monoflow branch [name]` and `monoflow branch switch <name>` create and switch branches without raw Git friction or detached HEAD states.
-
-### 17. Enterprise Multi-Agent Scenario Simulator (`monoflow scenario`)
-Validate your agent team protocols and CI performance locally:
-* **Full Swarm Benchmark:** `monoflow scenario run [--json]` executes a reproducible end-to-end multi-agent monorepo simulation against an ephemeral repository.
-* **Complete Swarm Lifecycle:** Exercises parallel agent worktrees, same-file AST synthesis, risk scoring, anti-cheating guards, speculative merge queues, two-tier CI gates, and deliverable artifact compilation with sub-millisecond telemetry.
-
----
-
-## 📖 CLI Reference
-
-| Command | Description | Latency |
+| Guardrail | Command | What it stops |
 | :--- | :--- | :--- |
-| `monoflow init [dir]` | Auto-discover repository architecture, generate config & agent rules | ~40ms |
-| `monoflow init --setup-gh-actions` | Auto-configure GitHub Actions cache, two-tier CI & artifact uploads | ~45ms |
-| `monoflow clone <url> [dest] --packages=<p>` | **Partial clone of specific packages + transitive dependencies** | **< 1s** |
-| `monoflow subset set --packages=<p>` | **Project workspace to subset of packages (omit others)** | **~40ms** |
-| `monoflow subset add <p>` | Add package(s) to active subset without wiping existing ones | ~35ms |
-| `monoflow subset remove <p> [--force]` | Remove package(s) with dependency safety verification | ~25ms |
-| `monoflow subset update [p]` | **Selectively update packages from remote without touching others** | **~60ms** |
-| `monoflow subset deps <pkg>` | Inspect dependency tree & recommended checkout strategy | ~5ms |
-| `monoflow subset list` | Inspect active package subset vs omitted packages | ~5ms |
-| `monoflow subset check` | **Verify transitive dependency health of active subset** | **~8ms** |
-| `monoflow subset reset` | Disable sparse checkout, restoring full monorepo | ~30ms |
-| `monoflow graph` | Output full dependency DAG in JSON | ~5ms |
-| `monoflow graph query <pkg>` | Inspect upstream dependencies & downstream dependents | ~3ms |
-| `monoflow graph impact <file>` | Compute exact package impact matrix for a modified file | ~3ms |
-| `monoflow checkpoint save "msg"` | Ephemeral in-memory tree snapshot (shadow workspace via `git write-tree`) | ~15ms |
-| `monoflow checkpoint revert [id]` | Instant rollback of failed trial edits | ~14ms |
-| `monoflow worktree create <id> [--package=<p>]` | **Provision virtual worktree focused on a package/subset** | **50ms – 70ms** |
-| `monoflow worktree focus <id> <p>` | Switch existing worktree's focus to a different package | ~40ms |
-| `monoflow worktree add <id> <p>` | Add packages to worktree's active sparse checkout | ~35ms |
-| `monoflow worktree remove <id> <p>` | Remove packages from worktree with dependency safety | ~25ms |
-| `monoflow worktree update <id> [p]` | Selectively update worktree packages from remote branch | ~60ms |
-| `monoflow worktree isolate <id>` | Promote worktree to mutable APFS/reflink cloned dependencies | ~68ms |
-| `monoflow worktree sync --to=B --from=A` | **Symbol-level AST synthesis** across concurrent agent worktrees | ~18ms |
-| `monoflow worktree gc` | Clean up abandoned agent worktrees (> TTL) and unlock Git refs | ~15ms |
-| `monoflow worktree finish <id>` | Harvest diff, remove worktree & prune Git records | ~27ms |
-| `monoflow verify --affected` | Run affected inner loop with token-compact JSON output (cached in < 1ms) | < 300ms |
-| `monoflow verify --proof=<id>` | **1-Second Reviewer Verification** | **< 1ms** |
-| `monoflow outer [start|status|wait]` | **Async outer loop: transitive matrix & remote promotion barrier** | **~200ms** |
-| `monoflow push [remote] [branch]` | **Fire-and-forget push with background autonomous CI watcher** | **~1.2s** |
-| `monoflow sync [remote] [branch]` | **Fast remote sync (ff-only or rebase) keeping sparse subset** | **~80ms** |
-| `monoflow branch [name|switch]` | List, create, or switch branches without raw git commands | ~12ms |
-| `monoflow events [unread|list|ack]` | **Asynchronous agent event inbox (check in < 5ms without polling)** | **~4ms** |
-| `monoflow review risk` | Machine risk scoring (0–100) & blast radius classification | ~10ms |
-| `monoflow review audit --title=... --desc=...` | Detect undisclosed blast radius & PR hallucination | ~10ms |
-| `monoflow review throttle` | Enforce agentic backpressure when human review bandwidth is full | ~5ms |
-| `monoflow queue spec [task-id]` | **Speculative local merge simulation** & pre-flight receipt generation | **~22ms** |
-| `monoflow ci check [--head=<sha>]` | **Two-Tier CI Gate**: Activate Tier 1 fast-path (<30s) on verified receipts | **~5ms** |
-| `monoflow commit -m "<msg>"` | Sub-50ms verified agent commit bypassing slow interactive hooks | ~40ms |
-| `monoflow guard check` | Check test integrity (anti-cheating) & scan for secrets | ~15ms |
-| `monoflow task check` | Enforce task boundary contracts (`allowed_paths`) | ~5ms |
-| `monoflow task prove <id>` | Run DoD checks, build deliverable, and emit PoW receipt | ~260ms |
-| `monoflow task slice` | Slices worktree diff into stacked PR tiers (Types $\to$ Logic $\to$ Tests) | ~5ms |
-| `monoflow deliver [--target=<p>]` | Assemble hermetic deliverable artifact (`.agents/dist`) | ~40ms |
-| `monoflow cache [status|clean|serve]` | **Local & remote package cache metrics & built-in HTTP daemon** | **~6ms** |
-| `monoflow version [list|bump|apply|check]` | **SemVer package versioning, changesets & cascade propagation** | **~5ms** |
-| `monoflow scenario [run] [--json]` | **Real end-to-end multi-agent enterprise monorepo simulation** | **~2.8s** |
-| `monoflow app test` | Assemble full-app symlink overlay (cached + delta) | ~40ms |
-| `monoflow pr create` | Create PR with machine risk score, proof receipt, and affected manifest | ~350ms |
-| `monoflow pr list` | List active PRs with risk tiers and CI status | ~25ms |
-| `monoflow pr view <id>` | View PR metadata, risk breakdown, and DoD checks | ~15ms |
-| `monoflow pr status [id]` | **Single bridged view of local proof receipt & remote GitHub URL** | **~20ms** |
-| `monoflow pr local <id>` | **Project workspace / worktree to PR's affected packages** | **< 100ms** |
-| `monoflow pr test <id>` | Hot-mount PR delta over latest master base image | ~2.4s |
-| `monoflow pr review <id>` | Machine review and sign-off on PR | ~30ms |
-| `monoflow pr merge <id>` | Speculatively queue or squash merge PR | ~60ms |
-| `monoflow quarantine [list\|add]` | Isolate flaky tests from agent feedback loops | ~5ms |
+| **Task boundaries** | `task check` | Edits outside `allowed_paths`, or to `read_only_paths` |
+| **Test integrity** | `guard check` | Deleted, commented-out or hollow assertions |
+| **Secret scan** | `guard check` | API keys and private keys in diffs |
+| **Proof of work** | `task prove <id>` → `verify --proof=<id>` | "It works on my machine" PRs |
+| **Risk scoring** | `review risk` · `review audit` | Risky changes without a human; PR descriptions that don't match the diff |
+| **Backpressure** | `review throttle` | Agents opening more PRs than reviewers can handle |
+
+### 6. 🚢 A shipping path built for agents
+
+- **Commits and branches without raw Git.** `commit`, `branch`, `sync` and `push` keep sparse checkouts intact and **refuse direct pushes to `main`**.
+- **PRs.** `pr create | test | local | review | merge` opens PRs with a risk tier, a proof receipt and the list of affected packages. `pr status` shows the local proof receipt and the GitHub PR in one view.
+- **No CI polling.** `push` starts a background watcher and returns right away. When CI finishes, the result lands in `.agents/events/`, and the agent reads it with `events unread`.
+- **CI health instead of log spelunking.** When CI is red, `ci health` reports when each check started failing, the breaking and fixing commits, recurrences and flaky checks, in one call instead of dozens of `gh run view` reads.
+- **Two-tier CI.** `queue spec` runs a speculative local merge and signs a receipt. `ci check` lets CI take a fast path for verified commits.
+- **Caching and releases.** A content-addressed package cache with an optional HTTP server (`cache serve`), plus SemVer changesets that cascade through dependents (`version bump --cascade`).
 
 ---
 
-## 🌐 Polyglot Support
+## 🔁 The agent loop
 
-MonoFlow includes zero-config fast runners for all major languages:
+`init` writes this loop into `AGENTS.md`, so your agent follows it without extra prompting:
 
-| Language | Fast Check Tooling | Output Normalizer |
+```mermaid
+flowchart LR
+    A["worktree create"] --> B["graph query / impact"]
+    B --> C["checkpoint save"]
+    C --> D["edit"]
+    D --> E{"verify --affected"}
+    E -- "fail (JSON errors)" --> F["fix or checkpoint revert"]
+    F --> D
+    E -- "pass" --> G["task check + guard check"]
+    G --> H["commit → pr create"]
+    H --> I["events unread<br/>(no polling)"]
+```
+
+---
+
+## 🌐 Language support
+
+| Language | Fast checks | Diagnostics |
 | :--- | :--- | :--- |
-| **TypeScript / Node** | `tsc --incremental`, `biome check`, `vitest <file>` | Extracts TS error codes, file, line, col, expected, received |
-| **Go** | `go vet`, `go build`, `go test -run` | Extracts Go compiler line errors and package failures |
-| **Rust** | `cargo check -p`, `cargo test -p` | Bypasses LLVM codegen for sub-second type/borrow checks |
-| **Python** | `ruff check` (< 20ms in Rust), `pytest <file>` | Parses Ruff codes, Mypy type-errors, and Pytest assertions |
-| **Protobuf / Contracts** | `buf check`, proto schema validation | Traces cross-language downstream impact edges |
+| **Go** | `go build`, `go vet`, `go test -run` | file / line / col and package failures |
+| **TypeScript / Node** | `tsc --incremental`, `biome`, `vitest` | TS error codes, expected / received |
+| **Rust** | `cargo check -p`, `cargo test -p` | borrow and type errors, without full codegen |
+| **Python** | `ruff check`, `pytest` | Ruff codes, Mypy errors, assertion failures |
+| **Protobuf** | `buf` schema checks | dependency impact across languages |
 
 ---
 
-## 📊 Benchmarks
+## 📖 Commands
 
-Measured on an Apple Silicon (M-series) workstation across a 5-package polyglot monorepo:
+| Area | Commands |
+| :--- | :--- |
+| 🏁 **Setup** | `init [--setup-gh-actions]` · `clone <url> --packages=…` |
+| 🗺️ **Understand** | `graph` · `graph query <pkg>` · `graph impact <file>` |
+| ✂️ **Partial checkout** | `subset set\|add\|remove\|update\|deps\|list\|check\|reset` |
+| ⚡ **Inner loop** | `verify --affected` · `checkpoint save\|revert\|list` · `cache status\|clean\|serve` · `quarantine list\|add` |
+| 🧪 **Isolation** | `worktree create\|focus\|add\|remove\|update\|isolate\|sync\|list\|finish\|gc` |
+| 🛡️ **Guardrails** | `task check\|prove\|slice` · `verify --proof=<id>` · `guard check` · `review risk\|audit\|throttle` |
+| 🌿 **Git** | `commit -m` · `branch` · `sync` · `push` |
+| 🚢 **Ship** | `pr create\|list\|view\|status\|test\|local\|review\|merge` · `queue spec` · `ci check` · `outer start\|status\|wait` |
+| 🩺 **CI health** | `ci health [--check=<name>] [--logs]` |
+| 📬 **Events** | `events unread\|list\|ack\|clear` |
+| 📦 **Build & release** | `deliver` · `app test` · `version list\|bump\|apply\|check` |
+| 🎬 **Try it** | `scenario run [--json]`: a full multi-agent simulation on a temporary repo |
 
-| Operation | Traditional Monorepo Tooling | MonoFlow (Go Native) | Speedup |
-| :--- | :--- | :--- | :--- |
-| **CLI Startup Latency** | 220ms (Node) / 180ms (Python) | **18ms** | **~12x faster** |
-| **Dependency Graph Query** | 1,400ms (filesystem crawl) | **3ms** (in-memory DAG) | **~460x faster** |
-| **State Snapshot / Checkpoint** | 850ms (`git stash` / `git commit`) | **15ms** (`git write-tree`) | **~56x faster** |
-| **State Rollback** | 1,200ms (`git checkout -f`) | **14ms** (`git read-tree -u`) | **~85x faster** |
-| **Inner Loop Typecheck Error** | 4,500ms (raw ANSI terminal dump) | **238ms** (clean JSON) | **~19x faster** |
-| **Package Cache Hit Verification** | 14,000ms (re-running full test suite) | **0.8ms** (content-addressable cache) | **~17,500x faster** |
-| **Full App Assembly** | 45 minutes (full compile) | **39ms** (symlink overlay) | **Instant** |
-| **PR Reviewer Verification** | 10–15 minutes (re-compile & run) | **0.165ms** (cached PoW verify) | **Instant** |
-| **SemVer Changeset Cascade** | 2,500ms (manual manifest audit) | **4.8ms** (automated DAG cascade) | **~500x faster** |
-| **Sparse Remote Subset Sync** | 4,500ms (`git fetch` & tree rebase) | **58ms** (sparse-aware fast-forward) | **~77x faster** |
-| **Autonomous Event Inbox Check** | 5,000 tokens (polling spinner logs) | **3.4ms** (zero tokens burned) | **Zero Token Waste** |
+Run `monoflow` with no arguments to see the full usage.
 
 ---
 
@@ -327,14 +200,9 @@ Measured on an Apple Silicon (M-series) workstation across a 5-package polyglot 
 Contributions are welcome!
 
 ```bash
-git clone https://github.com/M0xoo/monoflow.git
-cd monoflow
-
-# Run all unit and integration tests:
-make test
-
-# Build optimized binary:
-make build
+make test    # unit + integration tests
+make build   # bin/monoflow
+make e2e     # end-to-end multi-agent scenario
 ```
 
 ---
