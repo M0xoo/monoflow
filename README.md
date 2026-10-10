@@ -169,6 +169,7 @@ AI agents generate code 10x faster than humans can review. MonoFlow protects eng
 ### 8. Speculative Local Merge Queue & Two-Tier CI (`monoflow queue` & `monoflow ci`)
 Agents spamming PRs to GitHub Actions causes queue gridlock, flaky test bisect cascades, and thousands of dollars in runner costs:
 * **Speculative Local Pre-Flight Rebase:** Simulates landing on `main` in an ephemeral scratch worktree in **22ms**, testing strictly affected packages and automatically bypassing quarantined flaky tests.
+* **CI Health & Failure History (`monoflow ci health`):** One command replaces dozens of `gh run list` / `gh run view` / jobs API reads. It returns global metrics (run success rate, commit green rate, MTTR, flaky checks, last green commit, how long the branch has been red) and, per check, a pass/fail timeline (`PPFF~P`) plus every failure incident: **when it started, the last passing and first failing commit, which commit fixed it, and whether it broke the same way before** (recurrence, with the previous fix to `git show`). Currently red checks are grouped by breaking commit and come with suspect commits/files from local git, the failing step, an optional log error excerpt (`--logs`), and concrete next steps. Only failed runs, re-run attempts and the newest green run per workflow are fetched; completed jobs are cached under `.agents/cache/ci-health`.
 * **Two-Tier CI Gate for GitHub Actions:** Emits a signed cryptographic receipt (`.agents/queue/receipt_<sha>.json`). When CI runs, MonoFlow validates the signature and activates **Tier 1 Fast-Path CI (< 30s)** instead of a 30-minute monorepo rebuild, slashing CI bills by up to **90%**.
 
 ### 9. Fast Agent Commit & Worktree GC
@@ -265,6 +266,7 @@ Validate your agent team protocols and CI performance locally:
 | `monoflow review audit --title=... --desc=...` | Detect undisclosed blast radius & PR hallucination | ~10ms |
 | `monoflow review throttle` | Enforce agentic backpressure when human review bandwidth is full | ~5ms |
 | `monoflow queue spec [task-id]` | **Speculative local merge simulation** & pre-flight receipt generation | **~22ms** |
+| `monoflow ci health [--branch=<b>] [--limit=<n>] [--workflow=<file>] [--check=<name>] [--logs]` | **CI health & failure history**: global metrics, when each check broke, breaking/fixing commit, recurrences, flakiness | ~1 API call + 1 per failed run |
 | `monoflow ci check [--head=<sha>]` | **Two-Tier CI Gate**: Activate Tier 1 fast-path (<30s) on verified receipts | **~5ms** |
 | `monoflow commit -m "<msg>"` | Sub-50ms verified agent commit bypassing slow interactive hooks | ~40ms |
 | `monoflow guard check` | Check test integrity (anti-cheating) & scan for secrets | ~15ms |
