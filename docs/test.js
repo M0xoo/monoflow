@@ -38,7 +38,12 @@ if (!htmlContent.includes('workbench-viewport')) {
   console.error('✗ index.html missing workbench viewport');
   process.exit(1);
 }
-console.log('✓ index.html structure and integrity verified');
+
+if (!htmlContent.includes('demo-video') || !htmlContent.includes('video-terminal-feed')) {
+  console.error('✗ index.html missing 90s programmatic video player component');
+  process.exit(1);
+}
+console.log('✓ index.html structure, integrity, and video player verified');
 
 // 3. Verify styles.css
 const cssPath = path.join(__dirname, 'styles.css');

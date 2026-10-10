@@ -6,7 +6,7 @@
   <title>MonoFlow — Sub-Second Monorepo Engine for Autonomous Coding Agents</title>
   <meta name="description" content="A Go-native systems engine for multi-agent monorepo collaboration: sub-2s inner loops, 15ms shadow checkpoints, CoW worktrees with AST synthesis, and two-tier CI gates.">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.85em%22 font-size=%2280%22>⚡</text></svg>">
-  <link rel="stylesheet" href="styles.css?v=20261010-v4">
+  <link rel="stylesheet" href="styles.css?v=20261010-v5">
   <style>
 /* ==========================================================================
    MonoFlow — Systems Engineering Design System (2026)
@@ -908,6 +908,286 @@ input[type="range"]::-webkit-slider-thumb {
 }
 
 /* ==========================================================================
+   Programmatic 90-Second Systems Video Simulator
+   ========================================================================== */
+.video-section {
+  margin: 5rem 0 6rem;
+}
+
+.video-player-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+  position: relative;
+}
+
+.video-player-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.85rem 1.25rem;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border-hairline);
+}
+
+.video-badge-group {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.video-rec-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  color: #ef4444;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.video-rec-badge .rec-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #ef4444;
+  animation: pulse-rec 1.2s infinite;
+}
+
+@keyframes pulse-rec {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.3; transform: scale(0.85); }
+}
+
+.video-screen {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  min-height: 480px;
+  background: #020305;
+  border-bottom: 1px solid var(--border-hairline);
+}
+
+.video-feed {
+  padding: 1.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  line-height: 1.6;
+  color: #e2e8f0;
+  overflow-y: auto;
+  border-right: 1px solid var(--border-hairline);
+  background: #030407;
+  max-height: 480px;
+}
+
+.video-hud-feed {
+  padding: 1.5rem;
+  background: #07090f;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  overflow-y: auto;
+  max-height: 480px;
+}
+
+.hud-panel {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-sm);
+  padding: 1rem;
+}
+
+.hud-panel-title {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 0.75rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.hud-swarm-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.hud-swarm-agent {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  padding: 0.45rem 0.65rem;
+  background: var(--bg-elevated);
+  border-radius: 3px;
+  border-left: 3px solid var(--border-muted);
+}
+
+.hud-swarm-agent.active-1 { border-left-color: var(--accent); }
+.hud-swarm-agent.active-2 { border-left-color: var(--info); }
+.hud-swarm-agent.active-orch { border-left-color: var(--success); }
+
+/* Video Controls Bar */
+.video-controls {
+  padding: 1rem 1.5rem;
+  background: var(--bg-elevated);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.timeline-row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.timeline-track-wrap {
+  flex-grow: 1;
+  position: relative;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.timeline-bar {
+  width: 100%;
+  height: 6px;
+  background: var(--bg-subtle);
+  border-radius: 3px;
+  position: relative;
+  overflow: hidden;
+}
+
+.timeline-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, var(--accent) 0%, var(--success) 100%);
+  border-radius: 3px;
+  transition: width 0.1s linear;
+}
+
+.timeline-markers {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+  display: flex;
+  justify-content: space-between;
+  padding: 0 1px;
+}
+
+.timeline-notch {
+  width: 2px;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.video-btn-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.video-btn-group {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.v-btn {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-hairline);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  padding: 0.35rem 0.75rem;
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  transition: all 0.12s ease;
+}
+
+.v-btn:hover {
+  background: var(--bg-subtle);
+  border-color: var(--border-muted);
+  color: var(--accent);
+}
+
+.v-btn.active {
+  background: var(--accent);
+  color: #000;
+  border-color: var(--accent);
+  font-weight: 700;
+}
+
+.video-time-display {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.video-time-display .current-t {
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+/* Chapter Navigation Pills */
+.video-chapters-row {
+  display: flex;
+  gap: 0.5rem;
+  overflow-x: auto;
+  margin-top: 1rem;
+  padding-bottom: 0.25rem;
+}
+
+.chapter-pill {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-hairline);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  padding: 0.4rem 0.75rem;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+  transition: all 0.12s ease;
+  cursor: pointer;
+}
+
+.chapter-pill:hover {
+  border-color: var(--border-muted);
+  color: var(--text-primary);
+}
+
+.chapter-pill.active {
+  background: var(--bg-elevated);
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+@media (max-width: 900px) {
+  .video-screen { grid-template-columns: 1fr; }
+  .video-feed { border-right: none; border-bottom: 1px solid var(--border-hairline); }
+}
+
+/* ==========================================================================
    Footer
    ========================================================================== */
 .footer {
@@ -968,6 +1248,7 @@ input[type="range"]::-webkit-slider-thumb {
       </div>
 
       <nav class="header-links">
+        <a href="#demo-video" class="header-link">90s Video</a>
         <a href="#workbench" class="header-link">Live Console</a>
         <a href="#benchmarks" class="header-link">Benchmarks</a>
         <a href="#architecture" class="header-link">Architecture</a>
@@ -1013,8 +1294,8 @@ input[type="range"]::-webkit-slider-thumb {
       </div>
 
       <div class="hero-cta">
-        <a href="#workbench" class="btn-primary">
-          <span>Launch Systems Console</span>
+        <a href="#demo-video" class="btn-primary">
+          <span>Watch 90s Swarm Video</span>
           <span>&darr;</span>
         </a>
         <a href="https://github.com/M0xoo/monoflow" target="_blank" rel="noopener noreferrer" class="btn-secondary">
@@ -1059,6 +1340,83 @@ input[type="range"]::-webkit-slider-thumb {
           </div>
           <div class="telemetry-val emerald">90%</div>
           <div class="telemetry-desc">CI runner compute & token cost reduction via DAG gates</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Programmatic 90-Second Systems Video Walkthrough -->
+    <section id="demo-video" class="video-section container">
+      <div class="section-label">Programmatic Video Walkthrough (90 Seconds)</div>
+      <h2 class="section-heading">Watch the Swarm Workflow in Action</h2>
+      <p class="section-subtext">
+        An interactive, programmatic 90-second simulation of autonomous coding agents collaborating across a 14-package monorepo: from CoW worktrees and same-file AST synthesis to sub-2s inner loops and background CI supervision.
+      </p>
+
+      <div class="video-player-card">
+        <!-- Player Header -->
+        <div class="video-player-header">
+          <div style="display: flex; align-items: center; gap: 0.75rem;">
+            <div class="video-rec-badge">
+              <span class="rec-dot"></span>
+              <span>LIVE 60FPS</span>
+            </div>
+            <span id="video-chapter-name" style="font-family: var(--font-mono); font-size: 0.82rem; font-weight: 600; color: var(--text-primary);">
+              01 / Monorepo Discovery &amp; DAG Graph Compilation
+            </span>
+          </div>
+
+          <div class="video-badge-group">
+            <span class="brand-badge" style="color: var(--success); border-color: rgba(16, 185, 129, 0.3);">4K ULTRA-HD</span>
+            <button class="v-btn" id="video-speed-btn" title="Toggle playback speed">1x Speed</button>
+            <button class="v-btn" id="video-record-btn" title="Export WebM Video"><span>⬇</span><span>Export Video</span></button>
+          </div>
+        </div>
+
+        <!-- Video Split-Screen (Terminal & HUD) -->
+        <div class="video-screen">
+          <div class="video-feed" id="video-terminal-feed">
+            <!-- Populated programmatically by app.js -->
+          </div>
+          <div class="video-hud-feed" id="video-hud-feed">
+            <!-- Populated programmatically by app.js -->
+          </div>
+        </div>
+
+        <!-- Video Timeline Controls -->
+        <div class="video-controls">
+          <div class="timeline-row">
+            <button class="v-btn active" id="video-play-btn" style="min-width: 84px;">
+              <span>▶</span><span>Play</span>
+            </button>
+
+            <div class="timeline-track-wrap" id="video-timeline-track" title="Click or drag to scrub timeline">
+              <div class="timeline-bar">
+                <div class="timeline-fill" id="video-timeline-fill"></div>
+                <div class="timeline-markers">
+                  <span class="timeline-notch" style="margin-left: 0%;"></span>
+                  <span class="timeline-notch" style="margin-left: 16.6%;"></span>
+                  <span class="timeline-notch" style="margin-left: 33.3%;"></span>
+                  <span class="timeline-notch" style="margin-left: 50%;"></span>
+                  <span class="timeline-notch" style="margin-left: 66.6%;"></span>
+                  <span class="timeline-notch" style="margin-left: 83.3%;"></span>
+                </div>
+              </div>
+            </div>
+
+            <div class="video-time-display">
+              <span class="current-t" id="video-time-current">00:00</span> / <span>01:30</span>
+            </div>
+          </div>
+
+          <!-- Chapter Navigation Pills -->
+          <div class="video-chapters-row">
+            <button class="chapter-pill active" data-chapter="1">0:00 DAG Discovery</button>
+            <button class="chapter-pill" data-chapter="2">0:15 CoW Worktrees</button>
+            <button class="chapter-pill" data-chapter="3">0:30 AST Synthesis</button>
+            <button class="chapter-pill" data-chapter="4">0:45 Sub-2s Inner Loop</button>
+            <button class="chapter-pill" data-chapter="5">1:00 Test Guardrails</button>
+            <button class="chapter-pill" data-chapter="6">1:15 Fire &amp; Forget Push</button>
+          </div>
         </div>
       </div>
     </section>
@@ -1434,6 +1792,16 @@ input[type="range"]::-webkit-slider-thumb {
               <td><code>--strict</code>, <code>--quarantine-hallucinations</code></td>
             </tr>
             <tr>
+              <td><code>monoflow push &lt;remote&gt; &lt;branch&gt;</code></td>
+              <td>Fire-and-forget push with background autonomous CI watcher</td>
+              <td><code>--no-watch</code>, <code>--branch &lt;b&gt;</code></td>
+            </tr>
+            <tr>
+              <td><code>monoflow events unread</code></td>
+              <td>Asynchronous agent event inbox (check in &lt; 5ms without polling)</td>
+              <td><code>--ack &lt;id&gt;</code>, <code>--clear</code></td>
+            </tr>
+            <tr>
               <td><code>monoflow queue merge</code></td>
               <td>Enqueues PR into speculative DAG merge queue</td>
               <td><code>--speculative</code>, <code>--auto-rebase</code></td>
@@ -1460,6 +1828,7 @@ input[type="range"]::-webkit-slider-thumb {
 
       <nav class="footer-nav">
         <a href="https://github.com/M0xoo/monoflow" target="_blank" rel="noopener noreferrer">GitHub (M0xoo/monoflow)</a>
+        <a href="#demo-video">90s Video</a>
         <a href="#workbench">Systems Console</a>
         <a href="#benchmarks">Benchmarks</a>
         <a href="#architecture">Architecture</a>
@@ -1472,6 +1841,6 @@ input[type="range"]::-webkit-slider-thumb {
     </div>
   </footer>
 
-  <script src="app.js?v=20261010-v4"></script>
+  <script src="app.js?v=20261010-v5"></script>
 </body>
 </html>

@@ -898,6 +898,286 @@ input[type="range"]::-webkit-slider-thumb {
 }
 
 /* ==========================================================================
+   Programmatic 90-Second Systems Video Simulator
+   ========================================================================== */
+.video-section {
+  margin: 5rem 0 6rem;
+}
+
+.video-player-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+  position: relative;
+}
+
+.video-player-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.85rem 1.25rem;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border-hairline);
+}
+
+.video-badge-group {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.video-rec-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  color: #ef4444;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.video-rec-badge .rec-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #ef4444;
+  animation: pulse-rec 1.2s infinite;
+}
+
+@keyframes pulse-rec {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.3; transform: scale(0.85); }
+}
+
+.video-screen {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  min-height: 480px;
+  background: #020305;
+  border-bottom: 1px solid var(--border-hairline);
+}
+
+.video-feed {
+  padding: 1.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  line-height: 1.6;
+  color: #e2e8f0;
+  overflow-y: auto;
+  border-right: 1px solid var(--border-hairline);
+  background: #030407;
+  max-height: 480px;
+}
+
+.video-hud-feed {
+  padding: 1.5rem;
+  background: #07090f;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  overflow-y: auto;
+  max-height: 480px;
+}
+
+.hud-panel {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-sm);
+  padding: 1rem;
+}
+
+.hud-panel-title {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 0.75rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.hud-swarm-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.hud-swarm-agent {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  padding: 0.45rem 0.65rem;
+  background: var(--bg-elevated);
+  border-radius: 3px;
+  border-left: 3px solid var(--border-muted);
+}
+
+.hud-swarm-agent.active-1 { border-left-color: var(--accent); }
+.hud-swarm-agent.active-2 { border-left-color: var(--info); }
+.hud-swarm-agent.active-orch { border-left-color: var(--success); }
+
+/* Video Controls Bar */
+.video-controls {
+  padding: 1rem 1.5rem;
+  background: var(--bg-elevated);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.timeline-row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.timeline-track-wrap {
+  flex-grow: 1;
+  position: relative;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.timeline-bar {
+  width: 100%;
+  height: 6px;
+  background: var(--bg-subtle);
+  border-radius: 3px;
+  position: relative;
+  overflow: hidden;
+}
+
+.timeline-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, var(--accent) 0%, var(--success) 100%);
+  border-radius: 3px;
+  transition: width 0.1s linear;
+}
+
+.timeline-markers {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+  display: flex;
+  justify-content: space-between;
+  padding: 0 1px;
+}
+
+.timeline-notch {
+  width: 2px;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.video-btn-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.video-btn-group {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.v-btn {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-hairline);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  padding: 0.35rem 0.75rem;
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  transition: all 0.12s ease;
+}
+
+.v-btn:hover {
+  background: var(--bg-subtle);
+  border-color: var(--border-muted);
+  color: var(--accent);
+}
+
+.v-btn.active {
+  background: var(--accent);
+  color: #000;
+  border-color: var(--accent);
+  font-weight: 700;
+}
+
+.video-time-display {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.video-time-display .current-t {
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+/* Chapter Navigation Pills */
+.video-chapters-row {
+  display: flex;
+  gap: 0.5rem;
+  overflow-x: auto;
+  margin-top: 1rem;
+  padding-bottom: 0.25rem;
+}
+
+.chapter-pill {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-hairline);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  padding: 0.4rem 0.75rem;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+  transition: all 0.12s ease;
+  cursor: pointer;
+}
+
+.chapter-pill:hover {
+  border-color: var(--border-muted);
+  color: var(--text-primary);
+}
+
+.chapter-pill.active {
+  background: var(--bg-elevated);
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+@media (max-width: 900px) {
+  .video-screen { grid-template-columns: 1fr; }
+  .video-feed { border-right: none; border-bottom: 1px solid var(--border-hairline); }
+}
+
+/* ==========================================================================
    Footer
    ========================================================================== */
 .footer {
