@@ -29,6 +29,16 @@ Follow this procedure for all coding tasks:
      ```
    - If fix fails repeatedly, run `.agents/bin/monoflow checkpoint revert` to restore clean state.
 
-5. **Finalize Task**:
+5. **Finalize & Propose Changes via Pull Request**:
    - Verify task boundaries: `.agents/bin/monoflow task check`.
-   - Slice changes into stacked review commits: `.agents/bin/monoflow stack slice`.
+   - Commit changes cleanly: `.agents/bin/monoflow commit -m "feat/fix: summary"`.
+   - Propose changes via PR (direct push to main is blocked):
+     `.agents/bin/monoflow pr create --title="feat: my feature"`.
+   - Run hot-mount delta tests: `.agents/bin/monoflow pr test <id>`.
+   - Project locally to worktree: `.agents/bin/monoflow pr local <id> --worktree`.
+   - Approve & merge: `.agents/bin/monoflow pr review <id> --approve` followed by `.agents/bin/monoflow pr merge <id> --strategy=squash`.
+
+6. **Keep Workspace Synchronized**:
+   - Synchronize with remote without raw git commands:
+     `.agents/bin/monoflow sync`
+

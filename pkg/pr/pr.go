@@ -179,16 +179,11 @@ func (m *PRManager) Create(opts CreateOptions) (*PRMetadata, error) {
 	start := time.Now()
 
 	// 1. Resolve branches
-	headBranch := opts.HeadBranch
-	if headBranch == "" {
-		cmdHead := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
-		cmdHead.Dir = m.RootDir
-		if out, err := cmdHead.CombinedOutput(); err == nil {
-			headBranch = strings.TrimSpace(string(out))
-		}
-	}
-	if headBranch == "" || headBranch == "HEAD" {
-		return nil, fmt.Errorf("unable to determine current git head branch")
+	cmdCurrent := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
+	cmdCurrent.Dir = m.RootDir
+	currentBranch := "main"
+	if out, err := cmdCurrent.CombinedOutput(); err == nil {
+		currentBranch = strings.TrimSpace(string(out))
 	}
 
 	baseBranch := opts.BaseBranch
@@ -196,8 +191,26 @@ func (m *PRManager) Create(opts CreateOptions) (*PRMetadata, error) {
 		baseBranch = "main"
 	}
 
+	headBranch := opts.HeadBranch
+	if headBranch == "" {
+		if currentBranch != baseBranch && currentBranch != "HEAD" {
+			headBranch = currentBranch
+		} else {
+			headBranch = fmt.Sprintf("feat/pr-%d", time.Now().Unix())
+		}
+	}
+
+	// Switch or create head branch if not already on it
+	if currentBranch != headBranch {
+		cmdSwitch := exec.Command("git", "checkout", "-B", headBranch)
+		cmdSwitch.Dir = m.RootDir
+		if out, err := cmdSwitch.CombinedOutput(); err != nil {
+			return nil, fmt.Errorf("failed to switch to head branch '%s': %v (%s)", headBranch, err, strings.TrimSpace(string(out)))
+		}
+	}
+
 	if headBranch == baseBranch {
-		return nil, fmt.Errorf("cannot create PR from base branch '%s'; please switch to or create a feature branch first (e.g. git checkout -b feat/...)", baseBranch)
+		return nil, fmt.Errorf("cannot create PR from base branch '%s'; please switch to or create a feature branch first", baseBranch)
 	}
 
 	remote := opts.Remote

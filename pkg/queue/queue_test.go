@@ -2,11 +2,28 @@ package queue
 
 import (
 	"os"
+	"os/exec"
+	"path/filepath"
 	"testing"
 )
 
 func TestQueueSpeculativeReceipt(t *testing.T) {
-	qm := NewQueueManager(".")
+	tmpDir := t.TempDir()
+	runCmd := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = tmpDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v failed: %v (%s)", args, err, string(out))
+		}
+	}
+	runCmd("init", "-b", "main")
+	runCmd("config", "user.name", "Test Agent")
+	runCmd("config", "user.email", "agent@test.local")
+	_ = os.WriteFile(filepath.Join(tmpDir, "README.md"), []byte("# test"), 0644)
+	runCmd("add", "README.md")
+	runCmd("commit", "-m", "init")
+
+	qm := NewQueueManager(tmpDir)
 
 	changed := []string{"services/billing/billing.go"}
 	receipt, err := qm.SubmitSpeculative("task-merge-01", nil, changed, SpeculativeOptions{
