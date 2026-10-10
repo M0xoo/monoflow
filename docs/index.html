@@ -1772,9 +1772,9 @@ input[type="range"]::-webkit-slider-thumb {
               <td><code>--packages &lt;p1,p2&gt;</code>, <code>--include-deps</code></td>
             </tr>
             <tr>
-              <td><code>monoflow subset [set|list|reset]</code></td>
-              <td>Projects current workspace to specific package subset (&lt; 50ms switch)</td>
-              <td><code>--packages &lt;p1,p2&gt;</code>, <code>--include-deps</code></td>
+              <td><code>monoflow subset [set|add|remove|update|deps|list|reset]</code></td>
+              <td>Dynamic package subset management: add/remove packages, update from remote &lt; 50ms</td>
+              <td><code>--packages &lt;p1,p2&gt;</code>, <code>--deps &lt;mode&gt;</code>, <code>--force</code></td>
             </tr>
             <tr>
               <td><code>monoflow run &lt;task&gt;</code></td>
@@ -1787,9 +1787,9 @@ input[type="range"]::-webkit-slider-thumb {
               <td><code>--message &lt;msg&gt;</code>, <code>--tag &lt;name&gt;</code></td>
             </tr>
             <tr>
-              <td><code>monoflow worktree spawn</code></td>
-              <td>Provisions CoW worktree with shared virtual caches</td>
-              <td><code>--agent &lt;id&gt;</code>, <code>--share-caches</code></td>
+              <td><code>monoflow worktree create / focus</code></td>
+              <td>Provisions or focuses a virtual worktree on a package or subset</td>
+              <td><code>--package &lt;name&gt;</code>, <code>--deps &lt;mode&gt;</code>, <code>--isolated-deps</code></td>
             </tr>
             <tr>
               <td><code>monoflow synthesize &lt;file&gt;</code></td>

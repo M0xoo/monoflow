@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/antigravity/monoflow/pkg/graph"
@@ -254,3 +255,163 @@ func TestCloneSubset(t *testing.T) {
 		t.Errorf("expected packages/proto to exist: %v", err)
 	}
 }
+
+func TestAddPackageToSubset(t *testing.T) {
+	repoDir := setupTestMonorepo(t)
+	defer os.RemoveAll(repoDir)
+
+	// Start with only proto
+	_, err := Apply(repoDir, []string{"proto"}, false)
+	if err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
+
+	// Verify only proto is present
+	if _, err := os.Stat(filepath.Join(repoDir, "packages", "contracts")); !os.IsNotExist(err) {
+		t.Errorf("expected contracts to be omitted initially")
+	}
+
+	// Add contracts to the active subset
+	addRes, err := Add(repoDir, []string{"contracts"}, DepStrategySource)
+	if err != nil {
+		t.Fatalf("Add failed: %v", err)
+	}
+
+	if addRes.SubsetPackagesCount != 2 { // contracts + proto
+		t.Errorf("expected 2 packages, got: %d", addRes.SubsetPackagesCount)
+	}
+
+	// Verify contracts is now materialized on disk!
+	if _, err := os.Stat(filepath.Join(repoDir, "packages", "contracts", "index.ts")); err != nil {
+		t.Errorf("expected contracts to exist after Add: %v", err)
+	}
+	// Verify billing is still omitted!
+	if _, err := os.Stat(filepath.Join(repoDir, "services", "billing")); !os.IsNotExist(err) {
+		t.Errorf("expected billing to remain omitted after Add")
+	}
+}
+
+func TestRemovePackageDependencySafety(t *testing.T) {
+	repoDir := setupTestMonorepo(t)
+	defer os.RemoveAll(repoDir)
+
+	// Set subset to billing and web-frontend (billing pulls contracts and proto)
+	_, err := Apply(repoDir, []string{"billing", "web-frontend"}, true)
+	if err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
+
+	// Attempt to remove "contracts" WITHOUT force
+	// Billing depends on contracts! Should fail with safety error.
+	_, err = Remove(repoDir, []string{"contracts"}, false)
+	if err == nil {
+		t.Fatalf("expected error trying to remove contracts while billing is active, but succeeded")
+	}
+	if !strings.Contains(err.Error(), "billing") || !strings.Contains(err.Error(), "depends on it") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+
+	// Remove "web-frontend" (nothing depends on web-frontend) -> should succeed!
+	remRes, err := Remove(repoDir, []string{"web-frontend"}, false)
+	if err != nil {
+		t.Fatalf("Remove web-frontend failed: %v", err)
+	}
+	if remRes.SubsetPackagesCount != 3 { // billing, contracts, proto
+		t.Errorf("expected 3 remaining packages, got %d", remRes.SubsetPackagesCount)
+	}
+
+	// Verify web-frontend is pruned from disk
+	if _, err := os.Stat(filepath.Join(repoDir, "apps", "web-frontend")); !os.IsNotExist(err) {
+		t.Errorf("expected web-frontend pruned from disk")
+	}
+
+	// Now remove "contracts" with --force -> should succeed
+	forceRes, err := Remove(repoDir, []string{"contracts"}, true)
+	if err != nil {
+		t.Fatalf("Remove with force failed: %v", err)
+	}
+	_ = forceRes
+}
+
+func TestUpdatePackageFromRemote(t *testing.T) {
+	originRepo := setupTestMonorepo(t)
+	defer os.RemoveAll(originRepo)
+
+	// Clone subset with billing and contracts
+	cloneDest, err := os.MkdirTemp("", "monoflow_update_dest_*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = os.RemoveAll(cloneDest)
+	defer os.RemoveAll(cloneDest)
+
+	_, err = Clone(originRepo, cloneDest, []string{"billing"}, DefaultCloneOptions())
+	if err != nil {
+		t.Fatalf("Clone failed: %v", err)
+	}
+
+	// In originRepo, make an edit in contracts/index.ts and an edit in apps/web-frontend/index.html
+	_ = os.WriteFile(filepath.Join(originRepo, "packages/contracts/index.ts"), []byte("export const v = 2; // updated\n"), 0644)
+	_ = os.WriteFile(filepath.Join(originRepo, "apps/web-frontend/index.html"), []byte("<h1>Updated Web</h1>\n"), 0644)
+
+	cmdAdd := exec.Command("git", "add", ".")
+	cmdAdd.Dir = originRepo
+	_ = cmdAdd.Run()
+
+	cmdCommit := exec.Command("git", "commit", "-m", "remote updates to contracts and web")
+	cmdCommit.Dir = originRepo
+	_ = cmdCommit.Run()
+
+	// In cloneDest, update ONLY "contracts" from remote origin main
+	upRes, err := Update(cloneDest, []string{"contracts"}, originRepo, "main")
+	if err != nil {
+		t.Fatalf("Update failed: %v", err)
+	}
+
+	if upRes.Status != "updated" {
+		t.Errorf("expected updated status, got: %s", upRes.Status)
+	}
+	if len(upRes.UpdatedPackages) != 1 || upRes.UpdatedPackages[0] != "contracts" {
+		t.Errorf("expected contracts in updated packages, got: %v", upRes.UpdatedPackages)
+	}
+
+	// Verify contracts in cloneDest has the new content!
+	cContent, _ := os.ReadFile(filepath.Join(cloneDest, "packages/contracts/index.ts"))
+	if !strings.Contains(string(cContent), "export const v = 2") {
+		t.Errorf("expected updated content in contracts, got: %s", string(cContent))
+	}
+
+	// Verify apps/web-frontend is STILL NOT on disk in cloneDest! (untouched)
+	if _, err := os.Stat(filepath.Join(cloneDest, "apps", "web-frontend")); !os.IsNotExist(err) {
+		t.Errorf("expected web-frontend to remain omitted on disk in cloneDest")
+	}
+}
+
+func TestInspectDeps(t *testing.T) {
+	repoDir := setupTestMonorepo(t)
+	defer os.RemoveAll(repoDir)
+
+	g, err := graph.LoadOrDiscover(repoDir)
+	if err != nil {
+		t.Fatalf("LoadOrDiscover failed: %v", err)
+	}
+
+	report, err := InspectDeps(g, "billing", repoDir)
+	if err != nil {
+		t.Fatalf("InspectDeps failed: %v", err)
+	}
+
+	if report.Package != "billing" {
+		t.Errorf("unexpected package: %s", report.Package)
+	}
+	if len(report.DirectUpstream) != 1 || report.DirectUpstream[0] != "contracts" {
+		t.Errorf("expected direct upstream contracts, got: %v", report.DirectUpstream)
+	}
+	if len(report.TransitiveUpstream) != 2 { // contracts, proto
+		t.Errorf("expected 2 transitive upstream packages, got: %v", report.TransitiveUpstream)
+	}
+	if report.RecommendedStrategy == "" {
+		t.Errorf("expected recommended strategy, got empty")
+	}
+}
+

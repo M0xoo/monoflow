@@ -313,5 +313,44 @@ func TestWorktreeSparsePackageSubset(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(info.Path, "pkgB")); !os.IsNotExist(err) {
 		t.Errorf("expected pkgB to be omitted from sparse worktree, but it exists")
 	}
+
+	// 1. Add pkgB to the worktree
+	addInfo, err := mgr.AddPackage("worker-a", []string{"pkgB"}, "")
+	if err != nil {
+		t.Fatalf("AddPackage failed: %v", err)
+	}
+	if len(addInfo.Packages) != 2 {
+		t.Errorf("expected 2 packages after AddPackage, got: %v", addInfo.Packages)
+	}
+	if _, err := os.Stat(filepath.Join(info.Path, "pkgB", "b.go")); err != nil {
+		t.Errorf("expected pkgB to exist in worktree after AddPackage: %v", err)
+	}
+
+	// 2. Remove pkgA from the worktree
+	remInfo, err := mgr.RemovePackage("worker-a", []string{"pkgA"}, false)
+	if err != nil {
+		t.Fatalf("RemovePackage failed: %v", err)
+	}
+	if len(remInfo.Packages) != 1 || remInfo.Packages[0] != "pkgB" {
+		t.Errorf("expected only pkgB in worktree after RemovePackage, got: %v", remInfo.Packages)
+	}
+	if _, err := os.Stat(filepath.Join(info.Path, "pkgA")); !os.IsNotExist(err) {
+		t.Errorf("expected pkgA to be pruned from worktree after RemovePackage")
+	}
+
+	// 3. Focus worktree back on pkgA
+	focusInfo, err := mgr.Focus("worker-a", "pkgA", "")
+	if err != nil {
+		t.Fatalf("Focus failed: %v", err)
+	}
+	if len(focusInfo.Packages) != 1 || focusInfo.Packages[0] != "pkgA" {
+		t.Errorf("expected only pkgA after Focus, got: %v", focusInfo.Packages)
+	}
+	if _, err := os.Stat(filepath.Join(info.Path, "pkgA", "a.go")); err != nil {
+		t.Errorf("expected pkgA to exist after Focus: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(info.Path, "pkgB")); !os.IsNotExist(err) {
+		t.Errorf("expected pkgB to be omitted after Focus")
+	}
 }
 

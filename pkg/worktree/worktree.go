@@ -27,16 +27,20 @@ type WorktreeInfo struct {
 	Isolated        bool      `json:"isolated"`
 	IsolationMethod string    `json:"isolation_method,omitempty"`
 	ModifiedFiles   []string  `json:"modified_files,omitempty"`
+	FocusedPackage  string    `json:"focused_package,omitempty"`
 	Packages        []string  `json:"packages,omitempty"`
 	OmittedPackages []string  `json:"omitted_packages,omitempty"`
 	IsSparse        bool      `json:"is_sparse,omitempty"`
+	Strategy        string    `json:"strategy,omitempty"`
 }
 
 // CreateOptions configures worktree creation.
 type CreateOptions struct {
-	IsolatedDeps bool
-	Packages     []string
-	IncludeDeps  bool
+	IsolatedDeps   bool
+	FocusedPackage string
+	Packages       []string
+	Strategy       subset.DepStrategy
+	IncludeDeps    bool
 }
 
 // IsolateResult details the result of isolating dependencies for an agent worktree.
@@ -169,12 +173,24 @@ func (m *Manager) CreateWithOpts(agentID string, opts CreateOptions) (*WorktreeI
 	var omittedPkgs []string
 	isSparse := false
 
-	if len(opts.Packages) > 0 {
-		includeDeps := true
-		if !opts.IncludeDeps && len(opts.Packages) > 0 {
-			includeDeps = opts.IncludeDeps
+	targetPkgs := opts.Packages
+	if opts.FocusedPackage != "" && len(targetPkgs) == 0 {
+		targetPkgs = []string{opts.FocusedPackage}
+	}
+
+	strategy := opts.Strategy
+	if strategy == "" {
+		if opts.IncludeDeps {
+			strategy = subset.DepStrategySource
+		} else if len(targetPkgs) > 0 && !opts.IncludeDeps {
+			strategy = subset.DepStrategyNone
+		} else {
+			strategy = subset.DepStrategySource
 		}
-		subRes, errSub := subset.Apply(wtPath, opts.Packages, includeDeps)
+	}
+
+	if len(targetPkgs) > 0 {
+		subRes, errSub := subset.ApplyWithOptions(wtPath, targetPkgs, strategy)
 		if errSub == nil && subRes != nil {
 			includedPkgs = subRes.IncludedPackages
 			omittedPkgs = subRes.OmittedPackages
@@ -193,9 +209,11 @@ func (m *Manager) CreateWithOpts(agentID string, opts CreateOptions) (*WorktreeI
 		SymlinksCount:   symlinkCount,
 		Isolated:        opts.IsolatedDeps,
 		IsolationMethod: isolationMethod,
+		FocusedPackage:  opts.FocusedPackage,
 		Packages:        includedPkgs,
 		OmittedPackages: omittedPkgs,
 		IsSparse:        isSparse,
+		Strategy:        string(strategy),
 	}
 
 	registry, _ := m.loadRegistry()
@@ -529,4 +547,115 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	return os.WriteFile(dst, data, 0644)
+}
+
+// Focus changes an active worktree's focus to a single package (or package subset).
+func (m *Manager) Focus(agentID string, targetPackage string, strategy subset.DepStrategy) (*WorktreeInfo, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	wtPath := filepath.Join(m.worktreesDir, agentID)
+	if !fileExists(wtPath) {
+		return nil, fmt.Errorf("worktree for agent '%s' not found", agentID)
+	}
+
+	subRes, err := subset.ApplyWithOptions(wtPath, []string{targetPackage}, strategy)
+	if err != nil {
+		return nil, err
+	}
+
+	reg, _ := m.loadRegistry()
+	info, ok := reg[agentID]
+	if !ok {
+		info = WorktreeInfo{AgentID: agentID, Path: wtPath}
+	}
+
+	info.FocusedPackage = targetPackage
+	info.Packages = subRes.IncludedPackages
+	info.OmittedPackages = subRes.OmittedPackages
+	info.IsSparse = true
+	info.Strategy = string(strategy)
+	info.LastHeartbeat = time.Now().UTC()
+
+	reg[agentID] = info
+	_ = m.saveRegistry(reg)
+	return &info, nil
+}
+
+// AddPackage adds packages to an active worktree's sparse checkout without wiping existing ones.
+func (m *Manager) AddPackage(agentID string, packages []string, strategy subset.DepStrategy) (*WorktreeInfo, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	wtPath := filepath.Join(m.worktreesDir, agentID)
+	if !fileExists(wtPath) {
+		return nil, fmt.Errorf("worktree for agent '%s' not found", agentID)
+	}
+
+	subRes, err := subset.Add(wtPath, packages, strategy)
+	if err != nil {
+		return nil, err
+	}
+
+	reg, _ := m.loadRegistry()
+	info, ok := reg[agentID]
+	if !ok {
+		info = WorktreeInfo{AgentID: agentID, Path: wtPath}
+	}
+
+	info.Packages = subRes.IncludedPackages
+	info.OmittedPackages = subRes.OmittedPackages
+	info.IsSparse = true
+	if strategy != "" {
+		info.Strategy = string(strategy)
+	}
+	info.LastHeartbeat = time.Now().UTC()
+
+	reg[agentID] = info
+	_ = m.saveRegistry(reg)
+	return &info, nil
+}
+
+// RemovePackage removes packages from an active worktree with dependency safety.
+func (m *Manager) RemovePackage(agentID string, packages []string, force bool) (*WorktreeInfo, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	wtPath := filepath.Join(m.worktreesDir, agentID)
+	if !fileExists(wtPath) {
+		return nil, fmt.Errorf("worktree for agent '%s' not found", agentID)
+	}
+
+	subRes, err := subset.Remove(wtPath, packages, force)
+	if err != nil {
+		return nil, err
+	}
+
+	reg, _ := m.loadRegistry()
+	info, ok := reg[agentID]
+	if !ok {
+		info = WorktreeInfo{AgentID: agentID, Path: wtPath}
+	}
+
+	info.Packages = subRes.IncludedPackages
+	info.OmittedPackages = subRes.OmittedPackages
+	info.LastHeartbeat = time.Now().UTC()
+
+	reg[agentID] = info
+	_ = m.saveRegistry(reg)
+	return &info, nil
+}
+
+// UpdateFromRemote pulls selective package updates from a remote branch into the worktree.
+func (m *Manager) UpdateFromRemote(agentID string, packages []string, remote, branch string) (*subset.UpdateResult, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	wtPath := filepath.Join(m.worktreesDir, agentID)
+	if !fileExists(wtPath) {
+		return nil, fmt.Errorf("worktree for agent '%s' not found", agentID)
+	}
+
+	_ = m.touchInternal(agentID)
+	return subset.Update(wtPath, packages, remote, branch)
 }

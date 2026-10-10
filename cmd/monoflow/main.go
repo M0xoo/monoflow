@@ -550,17 +550,23 @@ func handleWorktree(rootDir string) {
 		agentID := os.Args[3]
 		isolated := false
 		var pkgs []string
+		focusedPkg := ""
+		strategy := subset.DepStrategySource
 		includeDeps := true
 		for i := 4; i < len(os.Args); i++ {
 			arg := os.Args[i]
 			if arg == "--isolated-deps" {
 				isolated = true
+			} else if strings.HasPrefix(arg, "--package=") {
+				focusedPkg = strings.TrimPrefix(arg, "--package=")
 			} else if strings.HasPrefix(arg, "--packages=") {
 				raw := strings.TrimPrefix(arg, "--packages=")
 				pkgs = strings.Split(raw, ",")
 			} else if arg == "--packages" && i+1 < len(os.Args) {
 				pkgs = strings.Split(os.Args[i+1], ",")
 				i++
+			} else if strings.HasPrefix(arg, "--deps=") {
+				strategy = subset.DepStrategy(strings.TrimPrefix(arg, "--deps="))
 			} else if strings.HasPrefix(arg, "--include-deps=") {
 				val := strings.TrimPrefix(arg, "--include-deps=")
 				includeDeps = val != "false" && val != "0"
@@ -569,9 +575,11 @@ func handleWorktree(rootDir string) {
 
 		start := time.Now()
 		info, err := mgr.CreateWithOpts(agentID, worktree.CreateOptions{
-			IsolatedDeps: isolated,
-			Packages:     pkgs,
-			IncludeDeps:  includeDeps,
+			IsolatedDeps:   isolated,
+			FocusedPackage: focusedPkg,
+			Packages:       pkgs,
+			Strategy:       strategy,
+			IncludeDeps:    includeDeps,
 		})
 		durMs := float64(time.Since(start).Microseconds()) / 1000.0
 		if err != nil {
@@ -590,11 +598,104 @@ func handleWorktree(rootDir string) {
 			"duration_ms":      durMs,
 			"verdict":          "Virtual worktree provisioned (< 60ms shared, or ~400ms CoW cloned)",
 		}
+		if info.FocusedPackage != "" {
+			resMap["focused_package"] = info.FocusedPackage
+		}
 		if info.IsSparse {
 			resMap["packages"] = info.Packages
 			resMap["omitted_packages"] = info.OmittedPackages
+			resMap["strategy"] = info.Strategy
 		}
 		data, _ := json.MarshalIndent(resMap, "", "  ")
+		fmt.Println(string(data))
+
+	case "focus":
+		if len(os.Args) < 5 {
+			fmt.Println(`{"error": "usage: monoflow worktree focus <agent-id> <package> [--deps=source|contracts|none]"}`)
+			os.Exit(1)
+		}
+		agentID := os.Args[3]
+		pkg := os.Args[4]
+		strategy := subset.DepStrategySource
+		for _, arg := range os.Args[5:] {
+			if strings.HasPrefix(arg, "--deps=") {
+				strategy = subset.DepStrategy(strings.TrimPrefix(arg, "--deps="))
+			}
+		}
+		info, err := mgr.Focus(agentID, pkg, strategy)
+		if err != nil {
+			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
+			os.Exit(1)
+		}
+		data, _ := json.MarshalIndent(info, "", "  ")
+		fmt.Println(string(data))
+
+	case "add", "add-package":
+		if len(os.Args) < 5 {
+			fmt.Println(`{"error": "usage: monoflow worktree add <agent-id> <pkg1,pkg2,...> [--deps=source|contracts|none]"}`)
+			os.Exit(1)
+		}
+		agentID := os.Args[3]
+		pkgs := strings.Split(os.Args[4], ",")
+		strategy := subset.DepStrategySource
+		for _, arg := range os.Args[5:] {
+			if strings.HasPrefix(arg, "--deps=") {
+				strategy = subset.DepStrategy(strings.TrimPrefix(arg, "--deps="))
+			}
+		}
+		info, err := mgr.AddPackage(agentID, pkgs, strategy)
+		if err != nil {
+			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
+			os.Exit(1)
+		}
+		data, _ := json.MarshalIndent(info, "", "  ")
+		fmt.Println(string(data))
+
+	case "remove", "remove-package":
+		if len(os.Args) < 5 {
+			fmt.Println(`{"error": "usage: monoflow worktree remove <agent-id> <pkg1,pkg2,...> [--force]"}`)
+			os.Exit(1)
+		}
+		agentID := os.Args[3]
+		pkgs := strings.Split(os.Args[4], ",")
+		force := false
+		for _, arg := range os.Args[5:] {
+			if arg == "--force" {
+				force = true
+			}
+		}
+		info, err := mgr.RemovePackage(agentID, pkgs, force)
+		if err != nil {
+			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
+			os.Exit(1)
+		}
+		data, _ := json.MarshalIndent(info, "", "  ")
+		fmt.Println(string(data))
+
+	case "update":
+		if len(os.Args) < 4 {
+			fmt.Println(`{"error": "usage: monoflow worktree update <agent-id> [pkg1,pkg2,...] [--remote=origin] [--branch=main]"}`)
+			os.Exit(1)
+		}
+		agentID := os.Args[3]
+		var pkgs []string
+		remote := "origin"
+		branch := "main"
+		for _, arg := range os.Args[4:] {
+			if strings.HasPrefix(arg, "--remote=") {
+				remote = strings.TrimPrefix(arg, "--remote=")
+			} else if strings.HasPrefix(arg, "--branch=") {
+				branch = strings.TrimPrefix(arg, "--branch=")
+			} else if !strings.HasPrefix(arg, "--") {
+				pkgs = strings.Split(arg, ",")
+			}
+		}
+		res, err := mgr.UpdateFromRemote(agentID, pkgs, remote, branch)
+		if err != nil {
+			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
+			os.Exit(1)
+		}
+		data, _ := json.MarshalIndent(res, "", "  ")
 		fmt.Println(string(data))
 
 	case "isolate":
@@ -1196,6 +1297,12 @@ func handleClone() {
 	opts.IncludeDeps = includeDeps
 	opts.Branch = branch
 
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "--deps=") {
+			opts.Strategy = subset.DepStrategy(strings.TrimPrefix(arg, "--deps="))
+		}
+	}
+
 	res, err := subset.Clone(remoteURL, destDir, pkgs, opts)
 	if err != nil {
 		fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
@@ -1208,7 +1315,7 @@ func handleClone() {
 
 func handleSubset(rootDir string) {
 	if len(os.Args) < 3 {
-		fmt.Println(`{"error": "usage: monoflow subset set --packages=<pkg1,pkg2,...> | list | reset"}`)
+		fmt.Println(`{"error": "usage: monoflow subset set --packages=<p1,p2> | add <p1,p2> | remove <p1,p2> [--force] | update [p1,p2] | deps <pkg> | list | reset"}`)
 		os.Exit(1)
 	}
 
@@ -1216,17 +1323,25 @@ func handleSubset(rootDir string) {
 	switch sub {
 	case "set":
 		packagesArg := ""
+		strategy := subset.DepStrategySource
 		includeDeps := true
 		for i := 3; i < len(os.Args); i++ {
 			arg := os.Args[i]
 			if strings.HasPrefix(arg, "--packages=") {
 				packagesArg = strings.TrimPrefix(arg, "--packages=")
-			} else if arg == "--packages" && i+1 < len(os.Args) {
+			} else if strings.HasPrefix(arg, "--package=") {
+				packagesArg = strings.TrimPrefix(arg, "--package=")
+			} else if (arg == "--packages" || arg == "--package") && i+1 < len(os.Args) {
 				packagesArg = os.Args[i+1]
 				i++
+			} else if strings.HasPrefix(arg, "--deps=") {
+				strategy = subset.DepStrategy(strings.TrimPrefix(arg, "--deps="))
 			} else if strings.HasPrefix(arg, "--include-deps=") {
 				val := strings.TrimPrefix(arg, "--include-deps=")
 				includeDeps = val != "false" && val != "0"
+				if !includeDeps {
+					strategy = subset.DepStrategyNone
+				}
 			}
 		}
 
@@ -1236,12 +1351,93 @@ func handleSubset(rootDir string) {
 		}
 
 		pkgs := strings.Split(packagesArg, ",")
-		res, err := subset.Apply(rootDir, pkgs, includeDeps)
+		res, err := subset.ApplyWithOptions(rootDir, pkgs, strategy)
 		if err != nil {
 			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
 			os.Exit(1)
 		}
 		data, _ := json.MarshalIndent(res, "", "  ")
+		fmt.Println(string(data))
+
+	case "add":
+		if len(os.Args) < 4 {
+			fmt.Println(`{"error": "usage: monoflow subset add <pkg1,pkg2,...> [--deps=source|contracts|none]"}`)
+			os.Exit(1)
+		}
+		pkgs := strings.Split(os.Args[3], ",")
+		strategy := subset.DepStrategySource
+		for _, arg := range os.Args[4:] {
+			if strings.HasPrefix(arg, "--deps=") {
+				strategy = subset.DepStrategy(strings.TrimPrefix(arg, "--deps="))
+			}
+		}
+		res, err := subset.Add(rootDir, pkgs, strategy)
+		if err != nil {
+			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
+			os.Exit(1)
+		}
+		data, _ := json.MarshalIndent(res, "", "  ")
+		fmt.Println(string(data))
+
+	case "remove":
+		if len(os.Args) < 4 {
+			fmt.Println(`{"error": "usage: monoflow subset remove <pkg1,pkg2,...> [--force]"}`)
+			os.Exit(1)
+		}
+		pkgs := strings.Split(os.Args[3], ",")
+		force := false
+		for _, arg := range os.Args[4:] {
+			if arg == "--force" {
+				force = true
+			}
+		}
+		res, err := subset.Remove(rootDir, pkgs, force)
+		if err != nil {
+			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
+			os.Exit(1)
+		}
+		data, _ := json.MarshalIndent(res, "", "  ")
+		fmt.Println(string(data))
+
+	case "update":
+		var pkgs []string
+		remote := "origin"
+		branch := "main"
+		for i := 3; i < len(os.Args); i++ {
+			arg := os.Args[i]
+			if strings.HasPrefix(arg, "--remote=") {
+				remote = strings.TrimPrefix(arg, "--remote=")
+			} else if strings.HasPrefix(arg, "--branch=") {
+				branch = strings.TrimPrefix(arg, "--branch=")
+			} else if !strings.HasPrefix(arg, "--") {
+				pkgs = strings.Split(arg, ",")
+			}
+		}
+		res, err := subset.Update(rootDir, pkgs, remote, branch)
+		if err != nil {
+			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
+			os.Exit(1)
+		}
+		data, _ := json.MarshalIndent(res, "", "  ")
+		fmt.Println(string(data))
+
+	case "deps", "inspect":
+		if len(os.Args) < 4 {
+			fmt.Println(`{"error": "usage: monoflow subset deps <pkg-name>"}`)
+			os.Exit(1)
+		}
+		target := os.Args[3]
+		g, err := graph.LoadOrDiscover(rootDir)
+		if err != nil {
+			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
+			os.Exit(1)
+		}
+		report, err := subset.InspectDeps(g, target, rootDir)
+		if err != nil {
+			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
+			os.Exit(1)
+		}
+		data, _ := json.MarshalIndent(report, "", "  ")
 		fmt.Println(string(data))
 
 	case "list", "status":
@@ -1262,7 +1458,7 @@ func handleSubset(rootDir string) {
 		fmt.Println(`{"status": "reset", "message": "Sparse checkout disabled. Full monorepo restored."}`)
 
 	default:
-		fmt.Printf(`{"error": "unknown subset subcommand '%s' (use set | list | reset)"}`+"\n", sub)
+		fmt.Printf(`{"error": "unknown subset subcommand '%s' (use set | add | remove | update | deps | list | reset)"}`+"\n", sub)
 		os.Exit(1)
 	}
 }

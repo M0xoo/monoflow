@@ -10,21 +10,36 @@ import (
 	"strings"
 	"time"
 
+	"github.com/antigravity/monoflow/pkg/checkpoint"
 	"github.com/antigravity/monoflow/pkg/graph"
+)
+
+// DepStrategy defines how upstream monorepo dependencies are handled.
+type DepStrategy string
+
+const (
+	// DepStrategySource materializes all upstream dependencies as full source code (default).
+	DepStrategySource DepStrategy = "source"
+	// DepStrategyContracts materializes only contracts / proto / schema declaration packages.
+	DepStrategyContracts DepStrategy = "contracts"
+	// DepStrategyNone strictly materializes the target package with zero upstream monorepo dependencies.
+	DepStrategyNone DepStrategy = "none"
 )
 
 // CloneOptions configures the subset clone operation.
 type CloneOptions struct {
-	IncludeDeps bool   // Automatically include upstream transitive dependencies (default: true)
-	Branch      string // Git branch or commit to checkout (optional)
-	PartialBlob bool   // Use Git partial clone --filter=blob:none (default: true)
-	Cone        bool   // Use Git sparse-checkout in cone mode (default: true)
-	Depth       int    // Optional shallow depth
+	Strategy    DepStrategy // Dependency handling strategy (source, contracts, none)
+	IncludeDeps bool        // Convenience boolean for backward compatibility (default: true)
+	Branch      string      // Git branch or commit to checkout (optional)
+	PartialBlob bool        // Use Git partial clone --filter=blob:none (default: true)
+	Cone        bool        // Use Git sparse-checkout in cone mode (default: true)
+	Depth       int         // Optional shallow depth
 }
 
 // DefaultCloneOptions returns standard clone settings.
 func DefaultCloneOptions() CloneOptions {
 	return CloneOptions{
+		Strategy:    DepStrategySource,
 		IncludeDeps: true,
 		PartialBlob: true,
 		Cone:        true,
@@ -44,6 +59,7 @@ type SubsetResult struct {
 	SubsetPackagesCount int      `json:"subset_packages_count"`// Number of packages checked out
 	DiskSavingsPct      float64  `json:"disk_savings_pct"`     // Estimated or calculated savings %
 	DurationMs          float64  `json:"duration_ms"`
+	Strategy            string   `json:"strategy,omitempty"`
 	Method              string   `json:"method"` // e.g. "git-partial-sparse-cone"
 	Message             string   `json:"message"`
 }
@@ -56,6 +72,7 @@ type SubsetStatus struct {
 	OmittedPackages    []string `json:"omitted_packages"`
 	SparsePaths        []string `json:"sparse_paths"`
 	TotalPackagesCount int      `json:"total_packages_count"`
+	Strategy           string   `json:"strategy,omitempty"`
 }
 
 // SubsetMetadata is persisted in .agents/subset.json
@@ -64,12 +81,59 @@ type SubsetMetadata struct {
 	IncludedPackages  []string  `json:"included_packages"`
 	OmittedPackages   []string  `json:"omitted_packages"`
 	SparsePaths       []string  `json:"sparse_paths"`
+	Strategy          string    `json:"strategy,omitempty"`
 	CreatedAt         time.Time `json:"created_at"`
 	Method            string    `json:"method"`
 }
 
-// Resolve identifies which packages to check out, resolving upstream dependencies and computing sparse paths.
+// UpdateResult records the outcome of selectively updating packages from a remote.
+type UpdateResult struct {
+	Status          string   `json:"status"`
+	Remote          string   `json:"remote"`
+	Branch          string   `json:"branch"`
+	UpdatedPackages []string `json:"updated_packages"`
+	UpdatedFiles    []string `json:"updated_files"`
+	DurationMs      float64  `json:"duration_ms"`
+	Message         string   `json:"message"`
+}
+
+// DepsReport provides detailed dependency analysis and strategy recommendations.
+type DepsReport struct {
+	Package              string      `json:"package"`
+	Path                 string      `json:"path"`
+	Language             string      `json:"language"`
+	DirectUpstream       []string    `json:"direct_upstream"`
+	TransitiveUpstream   []string    `json:"transitive_upstream"`
+	DirectDownstream     []string    `json:"direct_downstream"`
+	TransitiveDownstream []string    `json:"transitive_downstream"`
+	DependenciesStatus   []DepStatus `json:"dependencies_status"`
+	RecommendedStrategy  string      `json:"recommended_strategy"`
+}
+
+// DepStatus represents the materialization state of an individual dependency.
+type DepStatus struct {
+	Name         string `json:"name"`
+	Path         string `json:"path"`
+	IsActive     bool   `json:"is_active"`
+	Materialized bool   `json:"materialized"` // present on disk
+	Relation     string `json:"relation"`     // "direct" or "transitive"
+}
+
+// Resolve identifies which packages to check out with boolean includeDeps (defaults to source strategy).
 func Resolve(g *graph.DependencyGraph, targets []string, includeDeps bool) (included []string, omitted []string, sparsePaths []string, err error) {
+	strategy := DepStrategySource
+	if !includeDeps {
+		strategy = DepStrategyNone
+	}
+	return ResolveWithOptions(g, targets, strategy)
+}
+
+// ResolveWithOptions identifies packages to check out using a configurable dependency strategy.
+func ResolveWithOptions(g *graph.DependencyGraph, targets []string, strategy DepStrategy) (included []string, omitted []string, sparsePaths []string, err error) {
+	if strategy == "" {
+		strategy = DepStrategySource
+	}
+
 	allPackages := g.GetAllPackages()
 	if len(allPackages) == 0 {
 		return nil, nil, nil, fmt.Errorf("no packages discovered in monorepo graph")
@@ -108,16 +172,24 @@ func Resolve(g *graph.DependencyGraph, targets []string, includeDeps bool) (incl
 		matchedPackages[p.Name] = p
 	}
 
-	// Resolve upstream transitive dependencies if requested
+	// Resolve upstream transitive dependencies based on strategy
 	includedMap := make(map[string]bool)
 	for name := range matchedPackages {
 		includedMap[name] = true
-		if includeDeps {
+
+		if strategy == DepStrategySource {
 			upstream := g.GetUpstream(name)
 			for _, u := range upstream {
 				includedMap[u] = true
-				// Traverse recursively with cycle safety
-				traverseTransitiveUpstream(g, u, includedMap)
+				traverseTransitiveUpstream(g, u, includedMap, strategy, allMap)
+			}
+		} else if strategy == DepStrategyContracts {
+			upstream := g.GetUpstream(name)
+			for _, u := range upstream {
+				if isContractPackage(allMap[u]) {
+					includedMap[u] = true
+				}
+				traverseTransitiveUpstream(g, u, includedMap, strategy, allMap)
 			}
 		}
 	}
@@ -170,11 +242,25 @@ func Resolve(g *graph.DependencyGraph, targets []string, includeDeps bool) (incl
 	return included, omitted, sparsePaths, nil
 }
 
-func traverseTransitiveUpstream(g *graph.DependencyGraph, current string, visited map[string]bool) {
+func isContractPackage(p *graph.PackageNode) bool {
+	if p == nil {
+		return false
+	}
+	if p.Language == graph.LangProto {
+		return true
+	}
+	lower := strings.ToLower(p.Name + " " + p.Path)
+	return strings.Contains(lower, "contract") || strings.Contains(lower, "proto") || strings.Contains(lower, "schema")
+}
+
+func traverseTransitiveUpstream(g *graph.DependencyGraph, current string, visited map[string]bool, strategy DepStrategy, allMap map[string]*graph.PackageNode) {
 	for _, u := range g.GetUpstream(current) {
 		if !visited[u] {
+			if strategy == DepStrategyContracts && !isContractPackage(allMap[u]) {
+				continue
+			}
 			visited[u] = true
-			traverseTransitiveUpstream(g, u, visited)
+			traverseTransitiveUpstream(g, u, visited, strategy, allMap)
 		}
 	}
 }
@@ -225,8 +311,16 @@ func findMatchingPackage(packages []*graph.PackageNode, target string) *graph.Pa
 func Clone(remoteURL, destDir string, targets []string, opts CloneOptions) (*SubsetResult, error) {
 	start := time.Now()
 
+	strategy := opts.Strategy
+	if strategy == "" {
+		if opts.IncludeDeps {
+			strategy = DepStrategySource
+		} else {
+			strategy = DepStrategyNone
+		}
+	}
+
 	if destDir == "" {
-		// Default to basename of repo URL
 		base := filepath.Base(strings.TrimSuffix(remoteURL, ".git"))
 		if base == "" || base == "." {
 			base = "monorepo-subset"
@@ -260,7 +354,6 @@ func Clone(remoteURL, destDir string, targets []string, opts CloneOptions) (*Sub
 	cmd := exec.Command("git", args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil && opts.PartialBlob {
-		// Fallback without --filter=blob:none if remote server / transport does not support partial clone
 		_ = os.RemoveAll(absDest)
 		argsFallback := []string{"clone", "--no-checkout"}
 		if opts.Branch != "" {
@@ -293,8 +386,8 @@ func Clone(remoteURL, destDir string, targets []string, opts CloneOptions) (*Sub
 		return nil, fmt.Errorf("failed to discover monorepo graph in cloned repo: %w", err)
 	}
 
-	// Step 4: Resolve requested packages and dependencies
-	included, omitted, sparsePaths, err := Resolve(g, targets, opts.IncludeDeps)
+	// Step 4: Resolve requested packages and dependencies using chosen strategy
+	included, omitted, sparsePaths, err := ResolveWithOptions(g, targets, strategy)
 	if err != nil {
 		return nil, err
 	}
@@ -327,6 +420,7 @@ func Clone(remoteURL, destDir string, targets []string, opts CloneOptions) (*Sub
 		IncludedPackages:  included,
 		OmittedPackages:   omitted,
 		SparsePaths:       sparsePaths,
+		Strategy:          string(strategy),
 		CreatedAt:         time.Now().UTC(),
 		Method:            "git-partial-sparse-cone",
 	})
@@ -342,13 +436,23 @@ func Clone(remoteURL, destDir string, targets []string, opts CloneOptions) (*Sub
 		SubsetPackagesCount: len(included),
 		DiskSavingsPct:      savingsPct,
 		DurationMs:          durMs,
+		Strategy:            string(strategy),
 		Method:              "git-partial-sparse-cone",
-		Message:             fmt.Sprintf("Cloned subset of %d/%d packages in %.2fms (omitted %d packages, ~%.1f%% package reduction)", len(included), totalCount, durMs, len(omitted), savingsPct),
+		Message:             fmt.Sprintf("Cloned subset of %d/%d packages in %.2fms (strategy: %s, omitted %d packages, ~%.1f%% package reduction)", len(included), totalCount, durMs, strategy, len(omitted), savingsPct),
 	}, nil
 }
 
-// Apply configures an existing repository or worktree to only materialize the requested subset of packages.
+// Apply configures an existing repository to only materialize the requested subset of packages.
 func Apply(repoDir string, targets []string, includeDeps bool) (*SubsetResult, error) {
+	strategy := DepStrategySource
+	if !includeDeps {
+		strategy = DepStrategyNone
+	}
+	return ApplyWithOptions(repoDir, targets, strategy)
+}
+
+// ApplyWithOptions configures an existing repository with an explicit dependency strategy.
+func ApplyWithOptions(repoDir string, targets []string, strategy DepStrategy) (*SubsetResult, error) {
 	start := time.Now()
 
 	absRepo, err := filepath.Abs(repoDir)
@@ -361,7 +465,7 @@ func Apply(repoDir string, targets []string, includeDeps bool) (*SubsetResult, e
 		return nil, fmt.Errorf("failed to load monorepo graph: %w", err)
 	}
 
-	included, omitted, sparsePaths, err := Resolve(g, targets, includeDeps)
+	included, omitted, sparsePaths, err := ResolveWithOptions(g, targets, strategy)
 	if err != nil {
 		return nil, err
 	}
@@ -398,6 +502,7 @@ func Apply(repoDir string, targets []string, includeDeps bool) (*SubsetResult, e
 		IncludedPackages:  included,
 		OmittedPackages:   omitted,
 		SparsePaths:       sparsePaths,
+		Strategy:          string(strategy),
 		CreatedAt:         time.Now().UTC(),
 		Method:            "git-sparse-cone",
 	})
@@ -413,8 +518,382 @@ func Apply(repoDir string, targets []string, includeDeps bool) (*SubsetResult, e
 		SubsetPackagesCount: len(included),
 		DiskSavingsPct:      savingsPct,
 		DurationMs:          durMs,
+		Strategy:            string(strategy),
 		Method:              "git-sparse-cone",
 		Message:             fmt.Sprintf("Switched workspace to subset of %d/%d packages in %.2fms (omitted %d packages)", len(included), totalCount, durMs, len(omitted)),
+	}, nil
+}
+
+// Add adds one or more packages to the active package subset without wiping existing selections.
+func Add(repoDir string, targets []string, strategy DepStrategy) (*SubsetResult, error) {
+	absRepo, err := filepath.Abs(repoDir)
+	if err != nil {
+		return nil, err
+	}
+
+	meta, _ := loadSubsetMetadata(absRepo)
+	existing := make(map[string]bool)
+	var combined []string
+
+	if meta != nil && len(meta.RequestedPackages) > 0 {
+		for _, req := range meta.RequestedPackages {
+			if !existing[req] {
+				existing[req] = true
+				combined = append(combined, req)
+			}
+		}
+	}
+
+	for _, t := range targets {
+		parts := strings.Split(t, ",")
+		for _, part := range parts {
+			trimmed := strings.TrimSpace(part)
+			if trimmed != "" && !existing[trimmed] {
+				existing[trimmed] = true
+				combined = append(combined, trimmed)
+			}
+		}
+	}
+
+	if strategy == "" && meta != nil && meta.Strategy != "" {
+		strategy = DepStrategy(meta.Strategy)
+	}
+
+	return ApplyWithOptions(absRepo, combined, strategy)
+}
+
+// Remove removes one or more packages from the active subset with strict dependency safety.
+func Remove(repoDir string, targets []string, force bool) (*SubsetResult, error) {
+	absRepo, err := filepath.Abs(repoDir)
+	if err != nil {
+		return nil, err
+	}
+
+	g, err := graph.LoadOrDiscover(absRepo)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load monorepo graph: %w", err)
+	}
+
+	meta, err := loadSubsetMetadata(absRepo)
+	if err != nil || meta == nil || len(meta.RequestedPackages) == 0 {
+		return nil, fmt.Errorf("repository is not currently in a package subset. Run 'monoflow subset set --packages=...' first")
+	}
+
+	// Identify packages to remove
+	toRemoveMap := make(map[string]bool)
+	for _, t := range targets {
+		parts := strings.Split(t, ",")
+		for _, part := range parts {
+			trimmed := strings.TrimSpace(part)
+			if trimmed == "" {
+				continue
+			}
+			p := findMatchingPackage(g.GetAllPackages(), trimmed)
+			if p != nil {
+				toRemoveMap[p.Name] = true
+			} else {
+				toRemoveMap[trimmed] = true
+			}
+		}
+	}
+
+	// Calculate remaining requested targets
+	var remainingRequested []string
+	for _, req := range meta.RequestedPackages {
+		p := findMatchingPackage(g.GetAllPackages(), req)
+		reqName := req
+		if p != nil {
+			reqName = p.Name
+		}
+		if !toRemoveMap[reqName] && !toRemoveMap[req] {
+			remainingRequested = append(remainingRequested, req)
+		}
+	}
+
+	if len(remainingRequested) == 0 {
+		return nil, fmt.Errorf("cannot remove all packages from subset. To restore the full monorepo, run 'monoflow subset reset'")
+	}
+
+	// Dependency safety check: verify that no remaining package requires any package being removed
+	if !force {
+		allMap := make(map[string]*graph.PackageNode)
+		for _, p := range g.GetAllPackages() {
+			allMap[p.Name] = p
+		}
+
+		for remName := range toRemoveMap {
+			for _, remPkgName := range remainingRequested {
+				p := findMatchingPackage(g.GetAllPackages(), remPkgName)
+				if p == nil {
+					continue
+				}
+				upstreamMap := make(map[string]bool)
+				upstream := g.GetUpstream(p.Name)
+				for _, u := range upstream {
+					upstreamMap[u] = true
+					traverseTransitiveUpstream(g, u, upstreamMap, DepStrategySource, allMap)
+				}
+
+				if upstreamMap[remName] {
+					return nil, fmt.Errorf("cannot remove package '%s': active package '%s' depends on it. Use --force to remove anyway, or remove '%s' first", remName, p.Name, p.Name)
+				}
+			}
+		}
+	}
+
+	strategy := DepStrategySource
+	if meta.Strategy != "" {
+		strategy = DepStrategy(meta.Strategy)
+	}
+
+	return ApplyWithOptions(absRepo, remainingRequested, strategy)
+}
+
+// Update selectively pulls and updates specific packages from a remote branch without touching others.
+func Update(repoDir string, targets []string, remote, branch string) (*UpdateResult, error) {
+	start := time.Now()
+	absRepo, err := filepath.Abs(repoDir)
+	if err != nil {
+		return nil, err
+	}
+
+	if remote == "" {
+		remote = "origin"
+	}
+	if branch == "" {
+		branch = "main"
+	}
+
+	g, err := graph.LoadOrDiscover(absRepo)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load monorepo graph: %w", err)
+	}
+
+	// Determine which packages to update
+	var pkgsToUpdate []*graph.PackageNode
+	if len(targets) == 0 {
+		// Update all active subset packages (or all packages if not sparse)
+		meta, _ := loadSubsetMetadata(absRepo)
+		if meta != nil && len(meta.IncludedPackages) > 0 {
+			for _, name := range meta.IncludedPackages {
+				if p, ok := g.GetPackage(name); ok {
+					pkgsToUpdate = append(pkgsToUpdate, p)
+				}
+			}
+		} else {
+			pkgsToUpdate = g.GetAllPackages()
+		}
+	} else {
+		for _, t := range targets {
+			parts := strings.Split(t, ",")
+			for _, part := range parts {
+				trimmed := strings.TrimSpace(part)
+				if trimmed == "" {
+					continue
+				}
+				p := findMatchingPackage(g.GetAllPackages(), trimmed)
+				if p == nil {
+					return nil, fmt.Errorf("package '%s' not found in monorepo graph", trimmed)
+				}
+				pkgsToUpdate = append(pkgsToUpdate, p)
+			}
+		}
+	}
+
+	if len(pkgsToUpdate) == 0 {
+		return &UpdateResult{
+			Status:          "up_to_date",
+			Remote:          remote,
+			Branch:          branch,
+			UpdatedPackages: []string{},
+			UpdatedFiles:    []string{},
+			DurationMs:      float64(time.Since(start).Microseconds()) / 1000.0,
+			Message:         "No packages selected for update.",
+		}, nil
+	}
+
+	// 1. Fetch remote branch commit/tree metadata with partial blob filter
+	cmdFetch := exec.Command("git", "fetch", remote, branch, "--filter=blob:none")
+	cmdFetch.Dir = absRepo
+	if _, errFetch := cmdFetch.CombinedOutput(); errFetch != nil {
+		// Fallback without filter if remote transport doesn't support blob filtering (e.g. file:// protocol)
+		cmdFetchFallback := exec.Command("git", "fetch", remote, branch)
+		cmdFetchFallback.Dir = absRepo
+		if outFallback, errFallback := cmdFetchFallback.CombinedOutput(); errFallback != nil {
+			return nil, fmt.Errorf("git fetch %s %s failed: %w (%s)", remote, branch, errFallback, strings.TrimSpace(string(outFallback)))
+		}
+	}
+
+	remoteRef := "FETCH_HEAD"
+
+	// 2. Identify diffs specifically for target package paths
+	var updatedFiles []string
+	var updatedPkgNames []string
+
+	for _, p := range pkgsToUpdate {
+		if p.Path == "" || p.Path == "." {
+			continue
+		}
+		cmdDiff := exec.Command("git", "diff", "--name-only", "HEAD.."+remoteRef, "--", p.Path)
+		cmdDiff.Dir = absRepo
+		outDiff, errDiff := cmdDiff.Output()
+		if errDiff != nil {
+			continue
+		}
+
+		lines := strings.Split(strings.TrimSpace(string(outDiff)), "\n")
+		var changedInPkg []string
+		for _, l := range lines {
+			trimmed := strings.TrimSpace(l)
+			if trimmed != "" {
+				changedInPkg = append(changedInPkg, trimmed)
+			}
+		}
+
+		if len(changedInPkg) > 0 {
+			// Check if locally dirty in this package
+			cmdStatus := exec.Command("git", "status", "--porcelain", "--", p.Path)
+			cmdStatus.Dir = absRepo
+			outStatus, _ := cmdStatus.Output()
+			if len(strings.TrimSpace(string(outStatus))) > 0 {
+				// Save shadow checkpoint before applying update
+				_, _ = checkpoint.NewManager(absRepo).Save(fmt.Sprintf("pre-update-%s", p.Name))
+			}
+
+			// Checkout remote version of these files
+			cmdCheckout := exec.Command("git", "checkout", remoteRef, "--", p.Path)
+			cmdCheckout.Dir = absRepo
+			if outCo, errCo := cmdCheckout.CombinedOutput(); errCo != nil {
+				return nil, fmt.Errorf("failed to update package '%s' from %s: %w (%s)", p.Name, remoteRef, errCo, strings.TrimSpace(string(outCo)))
+			}
+
+			updatedFiles = append(updatedFiles, changedInPkg...)
+			updatedPkgNames = append(updatedPkgNames, p.Name)
+		}
+	}
+
+	durMs := float64(time.Since(start).Microseconds()) / 1000.0
+
+	if len(updatedPkgNames) == 0 {
+		return &UpdateResult{
+			Status:          "up_to_date",
+			Remote:          remote,
+			Branch:          branch,
+			UpdatedPackages: []string{},
+			UpdatedFiles:    []string{},
+			DurationMs:      durMs,
+			Message:         fmt.Sprintf("All %d selected package(s) are already up to date with %s in %.2fms.", len(pkgsToUpdate), remoteRef, durMs),
+		}, nil
+	}
+
+	return &UpdateResult{
+		Status:          "updated",
+		Remote:          remote,
+		Branch:          branch,
+		UpdatedPackages: updatedPkgNames,
+		UpdatedFiles:    updatedFiles,
+		DurationMs:      durMs,
+		Message:         fmt.Sprintf("Selectively updated %d package(s) (%d files) from %s in %.2fms (other packages untouched).", len(updatedPkgNames), len(updatedFiles), remoteRef, durMs),
+	}, nil
+}
+
+// InspectDeps provides a detailed dependency report for a package.
+func InspectDeps(g *graph.DependencyGraph, target string, repoDir string) (*DepsReport, error) {
+	allPackages := g.GetAllPackages()
+	p := findMatchingPackage(allPackages, target)
+	if p == nil {
+		return nil, fmt.Errorf("package '%s' not found in monorepo graph", target)
+	}
+
+	allMap := make(map[string]*graph.PackageNode)
+	for _, pkg := range allPackages {
+		allMap[pkg.Name] = pkg
+	}
+
+	directUpstream := g.GetUpstream(p.Name)
+	transitiveUpstreamMap := make(map[string]bool)
+	for _, u := range directUpstream {
+		transitiveUpstreamMap[u] = true
+		traverseTransitiveUpstream(g, u, transitiveUpstreamMap, DepStrategySource, allMap)
+	}
+	delete(transitiveUpstreamMap, p.Name)
+
+	var transitiveUpstream []string
+	for u := range transitiveUpstreamMap {
+		transitiveUpstream = append(transitiveUpstream, u)
+	}
+	sort.Strings(transitiveUpstream)
+
+	directDownstream := g.GetDownstream(p.Name)
+	transitiveDownstream := g.GetTransitiveDownstream(p.Name)
+
+	meta, _ := loadSubsetMetadata(repoDir)
+	activeMap := make(map[string]bool)
+	if meta != nil {
+		for _, inc := range meta.IncludedPackages {
+			activeMap[inc] = true
+		}
+	} else {
+		// All packages active if not sparse
+		for _, pkg := range allPackages {
+			activeMap[pkg.Name] = true
+		}
+	}
+
+	var depStatusList []DepStatus
+	for _, u := range transitiveUpstream {
+		relation := "transitive"
+		for _, d := range directUpstream {
+			if d == u {
+				relation = "direct"
+				break
+			}
+		}
+
+		uPkg := allMap[u]
+		pkgPath := ""
+		materialized := false
+		if uPkg != nil {
+			pkgPath = uPkg.Path
+			if _, err := os.Stat(filepath.Join(repoDir, uPkg.Path)); err == nil {
+				materialized = true
+			}
+		}
+
+		depStatusList = append(depStatusList, DepStatus{
+			Name:         u,
+			Path:         pkgPath,
+			IsActive:     activeMap[u],
+			Materialized: materialized,
+			Relation:     relation,
+		})
+	}
+
+	// Strategy recommendation
+	recStrategy := "source (standard full-source dependency)"
+	hasProtoOrContracts := false
+	for _, u := range transitiveUpstream {
+		if isContractPackage(allMap[u]) {
+			hasProtoOrContracts = true
+			break
+		}
+	}
+	if len(transitiveUpstream) == 0 {
+		recStrategy = "none (zero internal dependencies, isolated hermetic package)"
+	} else if hasProtoOrContracts && len(transitiveUpstream) == 1 {
+		recStrategy = "contracts (lightweight interface only; saves disk and indexing)"
+	}
+
+	return &DepsReport{
+		Package:              p.Name,
+		Path:                 p.Path,
+		Language:             string(p.Language),
+		DirectUpstream:       directUpstream,
+		TransitiveUpstream:   transitiveUpstream,
+		DirectDownstream:     directDownstream,
+		TransitiveDownstream: transitiveDownstream,
+		DependenciesStatus:   depStatusList,
+		RecommendedStrategy:  recStrategy,
 	}, nil
 }
 
@@ -425,12 +904,10 @@ func Status(repoDir string) (*SubsetStatus, error) {
 		return nil, err
 	}
 
-	// Check if sparse-checkout is enabled in git
 	cmd := exec.Command("git", "sparse-checkout", "list")
 	cmd.Dir = absRepo
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		// Not sparse or git error
 		return &SubsetStatus{
 			IsSparse:           false,
 			IncludedPackages:   []string{},
@@ -465,6 +942,7 @@ func Status(repoDir string) (*SubsetStatus, error) {
 			OmittedPackages:    meta.OmittedPackages,
 			SparsePaths:        activePaths,
 			TotalPackagesCount: totalCount,
+			Strategy:           meta.Strategy,
 		}, nil
 	}
 
@@ -497,7 +975,6 @@ func Reset(repoDir string) error {
 }
 
 func loadGraphFromGit(repoDir string) (*graph.DependencyGraph, error) {
-	// 1. Try reading .agents/monoflow.config.json from HEAD without checking it out
 	cmd := exec.Command("git", "show", "HEAD:.agents/monoflow.config.json")
 	cmd.Dir = repoDir
 	if out, err := cmd.Output(); err == nil && len(out) > 0 {
@@ -513,7 +990,6 @@ func loadGraphFromGit(repoDir string) (*graph.DependencyGraph, error) {
 		}
 	}
 
-	// 2. Checkout root metadata files to allow discovery
 	cmdSet := exec.Command("git", "sparse-checkout", "set", ".agents")
 	cmdSet.Dir = repoDir
 	_ = cmdSet.Run()

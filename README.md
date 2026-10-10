@@ -193,6 +193,10 @@ Large enterprise monorepos with 50+ packages consume tens of gigabytes of disk a
 | `monoflow init [dir]` | Auto-discover repository architecture & initialize `.agents` | ~40ms |
 | `monoflow clone <url> [dest] --packages=<p>` | **Partial clone of specific packages + transitive dependencies** | **< 1s** |
 | `monoflow subset set --packages=<p>` | **Project workspace to subset of packages (omit others)** | **~40ms** |
+| `monoflow subset add <p>` | Add package(s) to active subset without wiping existing ones | ~35ms |
+| `monoflow subset remove <p> [--force]` | Remove package(s) with dependency safety verification | ~25ms |
+| `monoflow subset update [p]` | **Selectively update packages from remote without touching others** | **~60ms** |
+| `monoflow subset deps <pkg>` | Inspect dependency tree & recommended checkout strategy | ~5ms |
 | `monoflow subset list` | Inspect active package subset vs omitted packages | ~5ms |
 | `monoflow subset reset` | Disable sparse checkout, restoring full monorepo | ~30ms |
 | `monoflow graph` | Output full dependency DAG in JSON | ~5ms |
@@ -200,7 +204,11 @@ Large enterprise monorepos with 50+ packages consume tens of gigabytes of disk a
 | `monoflow graph impact <file>` | Compute exact package impact matrix for a modified file | ~3ms |
 | `monoflow checkpoint save "msg"` | Ephemeral in-memory tree snapshot (shadow workspace) | ~15ms |
 | `monoflow checkpoint revert [id]` | Instant rollback of failed trial edits | ~14ms |
-| `monoflow worktree create <id> [--packages=<p>]` | Provision virtual worktree (shared, CoW cloned, or sparse subset) | 50ms – 70ms |
+| `monoflow worktree create <id> [--package=<p>]` | **Provision virtual worktree focused on a package/subset** | **50ms – 70ms** |
+| `monoflow worktree focus <id> <p>` | Switch existing worktree's focus to a different package | ~40ms |
+| `monoflow worktree add <id> <p>` | Add packages to worktree's active sparse checkout | ~35ms |
+| `monoflow worktree remove <id> <p>` | Remove packages from worktree with dependency safety | ~25ms |
+| `monoflow worktree update <id> [p]` | Selectively update worktree packages from remote branch | ~60ms |
 | `monoflow worktree isolate <id>` | Promote worktree to mutable APFS/reflink cloned dependencies | ~68ms |
 | `monoflow worktree sync --to=B --from=A` | **Symbol-level AST synthesis** across concurrent agent worktrees | ~18ms |
 | `monoflow worktree gc` | Clean up abandoned agent worktrees (> TTL) and unlock Git refs | ~15ms |
