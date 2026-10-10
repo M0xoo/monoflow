@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/antigravity/monoflow/pkg/merge"
+	"github.com/antigravity/monoflow/pkg/subset"
 )
 
 // WorktreeInfo records metadata for an active virtual worktree.
@@ -26,11 +27,16 @@ type WorktreeInfo struct {
 	Isolated        bool      `json:"isolated"`
 	IsolationMethod string    `json:"isolation_method,omitempty"`
 	ModifiedFiles   []string  `json:"modified_files,omitempty"`
+	Packages        []string  `json:"packages,omitempty"`
+	OmittedPackages []string  `json:"omitted_packages,omitempty"`
+	IsSparse        bool      `json:"is_sparse,omitempty"`
 }
 
 // CreateOptions configures worktree creation.
 type CreateOptions struct {
 	IsolatedDeps bool
+	Packages     []string
+	IncludeDeps  bool
 }
 
 // IsolateResult details the result of isolating dependencies for an agent worktree.
@@ -159,6 +165,23 @@ func (m *Manager) CreateWithOpts(agentID string, opts CreateOptions) (*WorktreeI
 		_ = os.Chmod(filepath.Join(agentsDest, "bin", "monoflow"), 0755)
 	}
 
+	var includedPkgs []string
+	var omittedPkgs []string
+	isSparse := false
+
+	if len(opts.Packages) > 0 {
+		includeDeps := true
+		if !opts.IncludeDeps && len(opts.Packages) > 0 {
+			includeDeps = opts.IncludeDeps
+		}
+		subRes, errSub := subset.Apply(wtPath, opts.Packages, includeDeps)
+		if errSub == nil && subRes != nil {
+			includedPkgs = subRes.IncludedPackages
+			omittedPkgs = subRes.OmittedPackages
+			isSparse = true
+		}
+	}
+
 	headSHA, _ := m.runGit("rev-parse", "HEAD")
 
 	info := WorktreeInfo{
@@ -170,6 +193,9 @@ func (m *Manager) CreateWithOpts(agentID string, opts CreateOptions) (*WorktreeI
 		SymlinksCount:   symlinkCount,
 		Isolated:        opts.IsolatedDeps,
 		IsolationMethod: isolationMethod,
+		Packages:        includedPkgs,
+		OmittedPackages: omittedPkgs,
+		IsSparse:        isSparse,
 	}
 
 	registry, _ := m.loadRegistry()

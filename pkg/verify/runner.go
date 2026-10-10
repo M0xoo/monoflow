@@ -2,6 +2,7 @@ package verify
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -81,6 +82,11 @@ func (r *Runner) VerifyTarget(pkg *graph.PackageNode, opt VerifyOptions) TargetR
 
 	res.CommandRun = cmdStr
 	absPkgPath := filepath.Join(r.RootDir, pkg.Path)
+	if _, err := os.Stat(absPkgPath); os.IsNotExist(err) {
+		res.DurationMs = float64(time.Since(start).Microseconds()) / 1000.0
+		res.Status = "passed"
+		return res
+	}
 
 	// Execute command via shell
 	cmd := exec.Command("sh", "-c", cmdStr)

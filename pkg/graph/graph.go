@@ -133,8 +133,8 @@ func (g *DependencyGraph) AddPackage(pkg *PackageNode) {
 	}
 }
 
-// rebuildEdges populates upstream and downstream maps and handles cycles safely.
-func (g *DependencyGraph) rebuildEdges() {
+// RebuildEdges populates upstream and downstream maps and handles cycles safely.
+func (g *DependencyGraph) RebuildEdges() {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
@@ -155,6 +155,10 @@ func (g *DependencyGraph) rebuildEdges() {
 			}
 		}
 	}
+}
+
+func (g *DependencyGraph) rebuildEdges() {
+	g.RebuildEdges()
 }
 
 // GetPackage retrieves a package by name.

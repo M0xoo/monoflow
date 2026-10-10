@@ -19,6 +19,7 @@ import (
 	"github.com/antigravity/monoflow/pkg/proof"
 	"github.com/antigravity/monoflow/pkg/queue"
 	"github.com/antigravity/monoflow/pkg/review"
+	"github.com/antigravity/monoflow/pkg/subset"
 	"github.com/antigravity/monoflow/pkg/task"
 	"github.com/antigravity/monoflow/pkg/telemetry"
 	"github.com/antigravity/monoflow/pkg/verify"
@@ -33,13 +34,19 @@ func main() {
 
 	cmd := os.Args[1]
 	rootDir, err := findRepoRoot()
-	if err != nil && cmd != "init" {
+	if err != nil && cmd != "init" && cmd != "clone" {
 		rootDir = "."
 	}
 
 	metrics := telemetry.NewCollector()
 
 	switch cmd {
+	case "clone":
+		handleClone()
+
+	case "subset":
+		handleSubset(rootDir)
+
 	case "init":
 		handleInit(rootDir)
 
@@ -109,6 +116,8 @@ func printUsage() {
 
 Usage:
   monoflow init [dir]                 Install MonoFlow into an existing or new repo
+  monoflow clone <url> [dest] --packages=<p1,p2> Clone subset of monorepo packages (< 1s partial clone)
+  monoflow subset [set|list|reset]    Manage package subset projection in current workspace
   monoflow graph [query|impact]       Query upstream/downstream dependencies & impact
   monoflow checkpoint [save|revert]   Ephemeral 15ms snapshots (shadow workspace)
   monoflow worktree [create|sync|gc]  Virtual worktrees with CoW isolation & AST merge (<60ms)
@@ -540,20 +549,36 @@ func handleWorktree(rootDir string) {
 		}
 		agentID := os.Args[3]
 		isolated := false
-		for _, arg := range os.Args[4:] {
+		var pkgs []string
+		includeDeps := true
+		for i := 4; i < len(os.Args); i++ {
+			arg := os.Args[i]
 			if arg == "--isolated-deps" {
 				isolated = true
+			} else if strings.HasPrefix(arg, "--packages=") {
+				raw := strings.TrimPrefix(arg, "--packages=")
+				pkgs = strings.Split(raw, ",")
+			} else if arg == "--packages" && i+1 < len(os.Args) {
+				pkgs = strings.Split(os.Args[i+1], ",")
+				i++
+			} else if strings.HasPrefix(arg, "--include-deps=") {
+				val := strings.TrimPrefix(arg, "--include-deps=")
+				includeDeps = val != "false" && val != "0"
 			}
 		}
 
 		start := time.Now()
-		info, err := mgr.CreateWithOpts(agentID, worktree.CreateOptions{IsolatedDeps: isolated})
+		info, err := mgr.CreateWithOpts(agentID, worktree.CreateOptions{
+			IsolatedDeps: isolated,
+			Packages:     pkgs,
+			IncludeDeps:  includeDeps,
+		})
 		durMs := float64(time.Since(start).Microseconds()) / 1000.0
 		if err != nil {
 			fmt.Printf(`{"error": "%s"}`+"\n", err)
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(map[string]any{
+		resMap := map[string]any{
 			"status":           "created",
 			"agent_id":         info.AgentID,
 			"path":             info.Path,
@@ -561,9 +586,15 @@ func handleWorktree(rootDir string) {
 			"symlinks_count":   info.SymlinksCount,
 			"isolated":         info.Isolated,
 			"isolation_method": info.IsolationMethod,
+			"is_sparse":        info.IsSparse,
 			"duration_ms":      durMs,
 			"verdict":          "Virtual worktree provisioned (< 60ms shared, or ~400ms CoW cloned)",
-		}, "", "  ")
+		}
+		if info.IsSparse {
+			resMap["packages"] = info.Packages
+			resMap["omitted_packages"] = info.OmittedPackages
+		}
+		data, _ := json.MarshalIndent(resMap, "", "  ")
 		fmt.Println(string(data))
 
 	case "isolate":
@@ -1123,4 +1154,115 @@ func getGitChangedFiles(rootDir string) []string {
 		}
 	}
 	return files
+}
+
+func handleClone() {
+	if len(os.Args) < 3 {
+		fmt.Println(`{"error": "usage: monoflow clone <repo-url> [dest-dir] --packages=<pkg1,pkg2,...> [--include-deps=true|false] [--branch=<name>]"}`)
+		os.Exit(1)
+	}
+
+	remoteURL := os.Args[2]
+	destDir := ""
+	packagesArg := ""
+	includeDeps := true
+	branch := ""
+
+	args := os.Args[3:]
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if strings.HasPrefix(arg, "--packages=") {
+			packagesArg = strings.TrimPrefix(arg, "--packages=")
+		} else if arg == "--packages" && i+1 < len(args) {
+			packagesArg = args[i+1]
+			i++
+		} else if strings.HasPrefix(arg, "--include-deps=") {
+			val := strings.TrimPrefix(arg, "--include-deps=")
+			includeDeps = val != "false" && val != "0"
+		} else if strings.HasPrefix(arg, "--branch=") {
+			branch = strings.TrimPrefix(arg, "--branch=")
+		} else if !strings.HasPrefix(arg, "--") && destDir == "" {
+			destDir = arg
+		}
+	}
+
+	if packagesArg == "" {
+		fmt.Println(`{"error": "missing required --packages flag. Specify a subset of packages, e.g. --packages=pkgA,pkgB"}`)
+		os.Exit(1)
+	}
+
+	pkgs := strings.Split(packagesArg, ",")
+	opts := subset.DefaultCloneOptions()
+	opts.IncludeDeps = includeDeps
+	opts.Branch = branch
+
+	res, err := subset.Clone(remoteURL, destDir, pkgs, opts)
+	if err != nil {
+		fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
+		os.Exit(1)
+	}
+
+	data, _ := json.MarshalIndent(res, "", "  ")
+	fmt.Println(string(data))
+}
+
+func handleSubset(rootDir string) {
+	if len(os.Args) < 3 {
+		fmt.Println(`{"error": "usage: monoflow subset set --packages=<pkg1,pkg2,...> | list | reset"}`)
+		os.Exit(1)
+	}
+
+	sub := os.Args[2]
+	switch sub {
+	case "set":
+		packagesArg := ""
+		includeDeps := true
+		for i := 3; i < len(os.Args); i++ {
+			arg := os.Args[i]
+			if strings.HasPrefix(arg, "--packages=") {
+				packagesArg = strings.TrimPrefix(arg, "--packages=")
+			} else if arg == "--packages" && i+1 < len(os.Args) {
+				packagesArg = os.Args[i+1]
+				i++
+			} else if strings.HasPrefix(arg, "--include-deps=") {
+				val := strings.TrimPrefix(arg, "--include-deps=")
+				includeDeps = val != "false" && val != "0"
+			}
+		}
+
+		if packagesArg == "" {
+			fmt.Println(`{"error": "missing required --packages flag"}`)
+			os.Exit(1)
+		}
+
+		pkgs := strings.Split(packagesArg, ",")
+		res, err := subset.Apply(rootDir, pkgs, includeDeps)
+		if err != nil {
+			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
+			os.Exit(1)
+		}
+		data, _ := json.MarshalIndent(res, "", "  ")
+		fmt.Println(string(data))
+
+	case "list", "status":
+		st, err := subset.Status(rootDir)
+		if err != nil {
+			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
+			os.Exit(1)
+		}
+		data, _ := json.MarshalIndent(st, "", "  ")
+		fmt.Println(string(data))
+
+	case "reset":
+		err := subset.Reset(rootDir)
+		if err != nil {
+			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
+			os.Exit(1)
+		}
+		fmt.Println(`{"status": "reset", "message": "Sparse checkout disabled. Full monorepo restored."}`)
+
+	default:
+		fmt.Printf(`{"error": "unknown subset subcommand '%s' (use set | list | reset)"}`+"\n", sub)
+		os.Exit(1)
+	}
 }

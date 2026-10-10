@@ -243,3 +243,75 @@ func TestWorktreeHeartbeatAndGC(t *testing.T) {
 		t.Fatalf("expected 0 active worktrees after GC, got %d", len(list))
 	}
 }
+
+func TestWorktreeSparsePackageSubset(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "monoflow_wt_sparse_*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	run := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = tmpDir
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v failed: %v (%s)", args, err, string(out))
+		}
+	}
+
+	run("init")
+	run("config", "user.name", "Test Agent")
+	run("config", "user.email", "agent@monoflow.dev")
+
+	_ = os.MkdirAll(filepath.Join(tmpDir, "pkgA"), 0755)
+	_ = os.MkdirAll(filepath.Join(tmpDir, "pkgB"), 0755)
+	_ = os.MkdirAll(filepath.Join(tmpDir, ".agents"), 0755)
+	_ = os.WriteFile(filepath.Join(tmpDir, "pkgA", "a.go"), []byte("package pkgA\n"), 0644)
+	_ = os.WriteFile(filepath.Join(tmpDir, "pkgB", "b.go"), []byte("package pkgB\n"), 0644)
+	_ = os.WriteFile(filepath.Join(tmpDir, "root.go"), []byte("package root\n"), 0644)
+
+	configJSON := `{
+  "version": "1.0",
+  "packages": [
+    {"name": "pkgA", "path": "pkgA", "language": "go", "dependencies": []},
+    {"name": "pkgB", "path": "pkgB", "language": "go", "dependencies": []}
+  ]
+}`
+	_ = os.WriteFile(filepath.Join(tmpDir, ".agents", "monoflow.config.json"), []byte(configJSON), 0644)
+
+	run("add", ".")
+	run("commit", "-m", "init multi-package monorepo")
+
+	mgr := NewManager(tmpDir)
+
+	// Create worktree for worker-a requesting ONLY pkgA
+	info, err := mgr.CreateWithOpts("worker-a", CreateOptions{
+		Packages:    []string{"pkgA"},
+		IncludeDeps: true,
+	})
+	if err != nil {
+		t.Fatalf("failed to create sparse worktree: %v", err)
+	}
+
+	if !info.IsSparse {
+		t.Errorf("expected info.IsSparse to be true")
+	}
+	if len(info.Packages) != 1 || info.Packages[0] != "pkgA" {
+		t.Errorf("expected pkgA in info.Packages, got: %v", info.Packages)
+	}
+
+	// Verify pkgA and root.go exist in the worktree
+	if _, err := os.Stat(filepath.Join(info.Path, "pkgA", "a.go")); err != nil {
+		t.Errorf("expected pkgA to exist in worktree: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(info.Path, "root.go")); err != nil {
+		t.Errorf("expected root.go to exist in worktree: %v", err)
+	}
+
+	// Verify pkgB is OMITTED from the worktree
+	if _, err := os.Stat(filepath.Join(info.Path, "pkgB")); !os.IsNotExist(err) {
+		t.Errorf("expected pkgB to be omitted from sparse worktree, but it exists")
+	}
+}
+

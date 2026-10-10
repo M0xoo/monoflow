@@ -1767,6 +1767,16 @@ input[type="range"]::-webkit-slider-thumb {
               <td><code>--json</code>, <code>--config &lt;path&gt;</code></td>
             </tr>
             <tr>
+              <td><code>monoflow clone &lt;url&gt;</code></td>
+              <td>Partial clone of a package subset + transitive dependencies (omits rest)</td>
+              <td><code>--packages &lt;p1,p2&gt;</code>, <code>--include-deps</code></td>
+            </tr>
+            <tr>
+              <td><code>monoflow subset [set|list|reset]</code></td>
+              <td>Projects current workspace to specific package subset (&lt; 50ms switch)</td>
+              <td><code>--packages &lt;p1,p2&gt;</code>, <code>--include-deps</code></td>
+            </tr>
+            <tr>
               <td><code>monoflow run &lt;task&gt;</code></td>
               <td>Executes tasks only on affected DAG dependencies</td>
               <td><code>--scope affected|all</code>, <code>--parallel &lt;n&gt;</code></td>
