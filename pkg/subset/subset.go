@@ -12,6 +12,7 @@ import (
 
 	"github.com/antigravity/monoflow/pkg/checkpoint"
 	"github.com/antigravity/monoflow/pkg/graph"
+	"github.com/antigravity/monoflow/pkg/runtimestate"
 )
 
 // DepStrategy defines how upstream monorepo dependencies are handled.
@@ -49,15 +50,15 @@ func DefaultCloneOptions() CloneOptions {
 
 // SubsetResult records the outcome of a subset clone or checkout.
 type SubsetResult struct {
-	Status              string   `json:"status"`               // "success", "already_subset", "error"
-	TargetDir           string   `json:"target_dir"`           // Path to the repository
-	RequestedPackages   []string `json:"requested_packages"`   // Packages requested by the user/agent
-	IncludedPackages    []string `json:"included_packages"`    // Target packages + upstream dependencies
-	OmittedPackages     []string `json:"omitted_packages"`     // Monorepo packages omitted from disk
-	SparsePaths         []string `json:"sparse_paths"`         // Directory paths included in sparse checkout
-	TotalPackagesCount  int      `json:"total_packages_count"` // Total packages in monorepo
-	SubsetPackagesCount int      `json:"subset_packages_count"`// Number of packages checked out
-	DiskSavingsPct      float64  `json:"disk_savings_pct"`     // Estimated or calculated savings %
+	Status              string   `json:"status"`                // "success", "already_subset", "error"
+	TargetDir           string   `json:"target_dir"`            // Path to the repository
+	RequestedPackages   []string `json:"requested_packages"`    // Packages requested by the user/agent
+	IncludedPackages    []string `json:"included_packages"`     // Target packages + upstream dependencies
+	OmittedPackages     []string `json:"omitted_packages"`      // Monorepo packages omitted from disk
+	SparsePaths         []string `json:"sparse_paths"`          // Directory paths included in sparse checkout
+	TotalPackagesCount  int      `json:"total_packages_count"`  // Total packages in monorepo
+	SubsetPackagesCount int      `json:"subset_packages_count"` // Number of packages checked out
+	DiskSavingsPct      float64  `json:"disk_savings_pct"`      // Estimated or calculated savings %
 	DurationMs          float64  `json:"duration_ms"`
 	Strategy            string   `json:"strategy,omitempty"`
 	Method              string   `json:"method"` // e.g. "git-partial-sparse-cone"
@@ -123,15 +124,15 @@ type DepStatus struct {
 
 // SubsetCheckResult reports dependency health, completeness, and version compatibility in a subset.
 type SubsetCheckResult struct {
-	Status              string                 `json:"status"` // "healthy", "warning", "error"
-	IsSparse            bool                   `json:"is_sparse"`
-	Strategy            string                 `json:"strategy,omitempty"`
-	ActivePackages      []string               `json:"active_packages"`
-	OmittedPackages     []string               `json:"omitted_packages"`
+	Status              string                `json:"status"` // "healthy", "warning", "error"
+	IsSparse            bool                  `json:"is_sparse"`
+	Strategy            string                `json:"strategy,omitempty"`
+	ActivePackages      []string              `json:"active_packages"`
+	OmittedPackages     []string              `json:"omitted_packages"`
 	MissingDependencies []MissingDepViolation `json:"missing_dependencies,omitempty"`
-	VersionMismatches   []VersionMismatch      `json:"version_mismatches,omitempty"`
-	DurationMs          float64                `json:"duration_ms"`
-	Verdict             string                 `json:"verdict"`
+	VersionMismatches   []VersionMismatch     `json:"version_mismatches,omitempty"`
+	DurationMs          float64               `json:"duration_ms"`
+	Verdict             string                `json:"verdict"`
 }
 
 // MissingDepViolation details an upstream dependency required by an active package that is omitted or missing.
@@ -521,6 +522,8 @@ func ApplyWithOptions(repoDir string, targets []string, strategy DepStrategy) (*
 	cmdCheckout := exec.Command("git", "checkout", "HEAD")
 	cmdCheckout.Dir = absRepo
 	_, _ = cmdCheckout.CombinedOutput()
+
+	_ = SyncGoWork(absRepo)
 
 	durMs := float64(time.Since(start).Microseconds()) / 1000.0
 	totalCount := len(g.GetAllPackages())
@@ -1083,8 +1086,8 @@ func CheckSubsetHealth(repoDir string) (*SubsetCheckResult, error) {
 						missingDeps = append(missingDeps, MissingDepViolation{
 							ConsumerPackage:   activeName,
 							MissingDependency: up,
-							ExpectedPath:     upPkg.Path,
-							RemediationHint:  hint,
+							ExpectedPath:      upPkg.Path,
+							RemediationHint:   hint,
 						})
 					}
 				}
@@ -1126,12 +1129,81 @@ func Reset(repoDir string) error {
 		return fmt.Errorf("git sparse-checkout disable failed: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
 
+	restoreGoWork(absRepo)
 	cmdCheckout := exec.Command("git", "checkout", "HEAD")
 	cmdCheckout.Dir = absRepo
 	_, _ = cmdCheckout.CombinedOutput()
 
 	_ = os.Remove(filepath.Join(absRepo, ".agents", "subset.json"))
 	return nil
+}
+
+// SyncGoWork rewrites a sparse checkout's go.work so it only "use"s modules that are
+// present on disk; otherwise every go command fails on the omitted modules. The rewrite
+// is derived from the committed go.work each time and hidden from git (skip-worktree)
+// so it never leaks into commits.
+func SyncGoWork(repoDir string) error {
+	show := exec.Command("git", "show", "HEAD:go.work")
+	show.Dir = repoDir
+	orig, err := show.Output()
+	if err != nil {
+		return nil // no committed go.work
+	}
+	var out []string
+	inUse := false
+	pruned := false
+	keep := func(entry string) bool {
+		_, err := os.Stat(filepath.Join(repoDir, strings.Trim(entry, `"`), "go.mod"))
+		return err == nil
+	}
+	for _, line := range strings.Split(string(orig), "\n") {
+		t := strings.TrimSpace(line)
+		if i := strings.Index(t, "//"); i >= 0 {
+			t = strings.TrimSpace(t[:i])
+		}
+		switch {
+		case t == "use (":
+			inUse = true
+		case inUse && t == ")":
+			inUse = false
+		case inUse && t != "" && !keep(t):
+			pruned = true
+			continue
+		case strings.HasPrefix(t, "use ") && !strings.HasSuffix(t, "(") && !keep(strings.TrimSpace(strings.TrimPrefix(t, "use "))):
+			pruned = true
+			continue
+		}
+		out = append(out, line)
+	}
+	if !pruned {
+		restoreGoWork(repoDir)
+		return nil
+	}
+	projected := []byte(strings.Join(out, "\n"))
+	if err := os.WriteFile(filepath.Join(repoDir, "go.work"), projected, 0644); err != nil {
+		return err
+	}
+	// assume-unchanged hides the projection from git status (git clears skip-worktree on
+	// files present in a sparse checkout); commit,
+	// checkpoint and change detection also recognise the projection by content hash.
+	_ = os.MkdirAll(filepath.Join(repoDir, ".agents"), 0755)
+	_ = os.WriteFile(filepath.Join(repoDir, runtimestate.GoWorkMarker), []byte(runtimestate.HashBytes(projected)), 0644)
+	cmd := exec.Command("git", "update-index", "--assume-unchanged", "go.work")
+	cmd.Dir = repoDir
+	return cmd.Run()
+}
+
+// restoreGoWork undoes SyncGoWork, bringing back the committed go.work.
+func restoreGoWork(repoDir string) {
+	_ = os.Remove(filepath.Join(repoDir, runtimestate.GoWorkMarker))
+	cmd := exec.Command("git", "update-index", "--no-assume-unchanged", "go.work")
+	cmd.Dir = repoDir
+	if cmd.Run() != nil {
+		return
+	}
+	co := exec.Command("git", "checkout", "HEAD", "--", "go.work")
+	co.Dir = repoDir
+	_ = co.Run()
 }
 
 func loadGraphFromGit(repoDir string) (*graph.DependencyGraph, error) {

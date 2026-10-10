@@ -83,6 +83,8 @@ func TestCIWatcherAsyncStart(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	cw := NewCIWatcher(tmpDir)
+	spawned := 0
+	cw.Spawn = func(*WatchJob, WatchOptions) error { spawned++; return nil }
 
 	start := time.Now()
 	job, err := cw.StartWatch(WatchOptions{
@@ -105,6 +107,14 @@ func TestCIWatcherAsyncStart(t *testing.T) {
 
 	if job.Status != WatchStatusMonitoring {
 		t.Errorf("expected initial status 'monitoring', got '%s'", job.Status)
+	}
+	if spawned != 1 {
+		t.Errorf("expected one detached supervisor, got %d", spawned)
+	}
+	// A second watch of the same commit reuses the active job instead of spawning again.
+	again, _ := cw.StartWatch(WatchOptions{CommitSHA: "abcdef1234567890", Branch: "main", Async: true})
+	if again == nil || again.ID != job.ID || spawned != 1 {
+		t.Errorf("expected watcher reuse for the same commit, got %+v (spawned %d)", again, spawned)
 	}
 
 	// Verify job persisted

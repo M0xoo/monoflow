@@ -6,85 +6,23 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/antigravity/monoflow/pkg/graph"
+	"github.com/antigravity/monoflow/pkg/release"
+	"github.com/antigravity/monoflow/pkg/semver"
 	"github.com/antigravity/monoflow/pkg/task"
 )
 
 // Current MonoFlow engine version
 const EngineVersion = "1.0.0"
 
-// SemVer represents a semantic version (major.minor.patch).
-type SemVer struct {
-	Major int
-	Minor int
-	Patch int
-	Raw   string
-}
+// SemVer is a semantic version; see pkg/semver.
+type SemVer = semver.SemVer
 
-// ParseSemVer parses a SemVer string, ignoring optional leading 'v'.
-func ParseSemVer(v string) (*SemVer, error) {
-	clean := strings.TrimPrefix(strings.TrimSpace(v), "v")
-	parts := strings.Split(clean, ".")
-	if len(parts) < 3 {
-		// Try fallback like 1.0 -> 1.0.0
-		for len(parts) < 3 {
-			parts = append(parts, "0")
-		}
-	}
-
-	major, err := strconv.Atoi(parts[0])
-	if err != nil {
-		return nil, fmt.Errorf("invalid major version in %q: %w", v, err)
-	}
-	minor, err := strconv.Atoi(parts[1])
-	if err != nil {
-		return nil, fmt.Errorf("invalid minor version in %q: %w", v, err)
-	}
-
-	// In case of patch with prerelease (e.g. 0-alpha)
-	patchStr := parts[2]
-	if idx := strings.IndexAny(patchStr, "-+"); idx != -1 {
-		patchStr = patchStr[:idx]
-	}
-	patch, err := strconv.Atoi(patchStr)
-	if err != nil {
-		return nil, fmt.Errorf("invalid patch version in %q: %w", v, err)
-	}
-
-	return &SemVer{
-		Major: major,
-		Minor: minor,
-		Patch: patch,
-		Raw:   v,
-	}, nil
-}
-
-// String returns formatted SemVer.
-func (s *SemVer) String() string {
-	return fmt.Sprintf("%d.%d.%d", s.Major, s.Minor, s.Patch)
-}
-
-// Bump increments version by bumpType ("patch", "minor", "major").
-func (s *SemVer) Bump(bumpType string) error {
-	switch strings.ToLower(bumpType) {
-	case "patch":
-		s.Patch++
-	case "minor":
-		s.Minor++
-		s.Patch = 0
-	case "major":
-		s.Major++
-		s.Minor = 0
-		s.Patch = 0
-	default:
-		return fmt.Errorf("unknown bump type %q (must be 'patch', 'minor', or 'major')", bumpType)
-	}
-	return nil
-}
+// ParseSemVer parses a SemVer string, ignoring an optional leading 'v'.
+func ParseSemVer(v string) (*SemVer, error) { return semver.Parse(v) }
 
 // PackageVersionInfo records details about a package's version and dependencies.
 type PackageVersionInfo struct {
@@ -107,14 +45,15 @@ type VersionReport struct {
 
 // BumpResult records the outcome of a version bump operation.
 type BumpResult struct {
-	Package            string   `json:"package"`
-	OldVersion         string   `json:"old_version"`
-	NewVersion         string   `json:"new_version"`
-	BumpType           string   `json:"bump_type"`
-	FilesModified      []string `json:"files_modified"`
-	CascadedDependents []string `json:"cascaded_dependents,omitempty"`
-	DurationMs         float64  `json:"duration_ms"`
-	Status             string   `json:"status"`
+	Package            string           `json:"package"`
+	OldVersion         string           `json:"old_version"`
+	NewVersion         string           `json:"new_version"`
+	BumpType           string           `json:"bump_type"`
+	FilesModified      []string         `json:"files_modified"`
+	CascadedDependents []string         `json:"cascaded_dependents,omitempty"`
+	DurationMs         float64          `json:"duration_ms"`
+	Status             string           `json:"status"`
+	Consumers          []ConsumerImpact `json:"consumers,omitempty"`
 }
 
 // ApplyResult details the outcome of applying pending changesets.
@@ -247,9 +186,29 @@ func BumpPackageVersion(rootDir, pkgName, bumpType string, cascade bool) (*BumpR
 		modifiedFiles = append(modifiedFiles, ".agents/monoflow.config.json")
 	}
 
-	// 3. Cascade version constraint update to downstream dependents if requested
+	// 3. Consumers are never rewritten implicitly: a major bump used to force every
+	// consumer onto the breaking version. Report how each consumer is affected instead;
+	// ranges change only through an explicit --cascade (or the consumer's own upgrade).
 	var cascaded []string
-	if cascade || strings.ToLower(bumpType) == "major" {
+	var impact []ConsumerImpact
+	for _, e := range g.ScanEdges() {
+		if e.Dependency != targetPkg.Name {
+			continue
+		}
+		ci := ConsumerImpact{Consumer: e.Consumer, Mode: e.Mode, Constraint: e.Constraint}
+		switch {
+		case e.Mode == graph.EdgePinned:
+			ci.Action = "none: stays on its pinned release; it is notified of the new release and upgrades at its own pace"
+		case e.Constraint != "" && !satisfiesNew(e, newVerStr):
+			ci.Action = fmt.Sprintf("BLOCKED: its range %q excludes %s; update the range in the same change or pin it to the previous release (monoflow version pin %s %s)", e.Constraint, newVerStr, e.Consumer, targetPkg.Name)
+		case strings.ToLower(bumpType) == "major":
+			ci.Action = "builds against the live code: migrate it in this change (verify --affected proves it) or evolve the API expand → contract"
+		default:
+			ci.Action = "compatible: builds against the live code, verified with --affected"
+		}
+		impact = append(impact, ci)
+	}
+	if cascade {
 		downstream := g.GetDownstream(targetPkg.Name)
 		for _, down := range downstream {
 			downPkg, ok := g.GetPackage(down)
@@ -274,9 +233,24 @@ func BumpPackageVersion(rootDir, pkgName, bumpType string, cascade bool) (*BumpR
 		BumpType:           strings.ToLower(bumpType),
 		FilesModified:      modifiedFiles,
 		CascadedDependents: cascaded,
+		Consumers:          impact,
 		DurationMs:         durMs,
 		Status:             "bumped",
 	}, nil
+}
+
+// ConsumerImpact explains what a version bump means for one consumer.
+type ConsumerImpact struct {
+	Consumer   string `json:"consumer"`
+	Mode       string `json:"mode"`
+	Constraint string `json:"constraint,omitempty"`
+	Action     string `json:"action"`
+}
+
+func satisfiesNew(e graph.Edge, v string) bool {
+	eco := semver.Ecosystem(e.Ecosystem)
+	ok, err := semver.Satisfies(eco, e.Constraint, v)
+	return err != nil || ok
 }
 
 // ApplyChangesets reads all pending changesets, applies appropriate SemVer bumps, and archives them.
@@ -423,6 +397,22 @@ func CheckVersionConsistency(rootDir string) (*ConsistencyReport, error) {
 		}
 	}
 
+	for _, f := range release.Tampered(rootDir, g) {
+		violations = append(violations, VersionViolation{Severity: "ERROR", Message: "vendored release snapshot modified: " + f})
+	}
+
+	// Internal edges: a range that excludes the version it resolves to breaks install/build.
+	for _, e := range g.ScanEdges() {
+		if e.Problem != "" {
+			violations = append(violations, VersionViolation{
+				ConsumerPackage: e.Consumer,
+				Dependency:      e.Dependency,
+				Severity:        "ERROR",
+				Message:         e.Problem,
+			})
+		}
+	}
+
 	// In subset mode, check that active packages don't depend on omitted packages with incompatible versions
 	if isSubsetActive {
 		activeSet := make(map[string]bool)
@@ -543,25 +533,43 @@ func updatePackageManifestVersion(pkgDir, newVersion string) (string, error) {
 		}
 	}
 
-	// 2. Cargo.toml
+	// 2. Cargo.toml ([package] only — [dependencies.x] tables also have version keys)
 	cargoPath := filepath.Join(pkgDir, "Cargo.toml")
 	if data, err := os.ReadFile(cargoPath); err == nil {
-		re := regexp.MustCompile(`(?m)^version\s*=\s*["'][^"']+["']`)
-		updated := re.ReplaceAllString(string(data), fmt.Sprintf(`version = "%s"`, newVersion))
-		_ = os.WriteFile(cargoPath, []byte(updated), 0644)
+		_ = os.WriteFile(cargoPath, []byte(setTomlVersion(string(data), []string{"package"}, newVersion)), 0644)
 		return cargoPath, nil
 	}
 
-	// 3. pyproject.toml
+	// 3. pyproject.toml ([project] or [tool.poetry])
 	pyPath := filepath.Join(pkgDir, "pyproject.toml")
 	if data, err := os.ReadFile(pyPath); err == nil {
-		re := regexp.MustCompile(`(?m)^version\s*=\s*["'][^"']+["']`)
-		updated := re.ReplaceAllString(string(data), fmt.Sprintf(`version = "%s"`, newVersion))
-		_ = os.WriteFile(pyPath, []byte(updated), 0644)
+		_ = os.WriteFile(pyPath, []byte(setTomlVersion(string(data), []string{"project", "tool.poetry"}, newVersion)), 0644)
 		return pyPath, nil
 	}
 
 	return "", nil
+}
+
+// setTomlVersion rewrites `version = "..."` only inside the given sections.
+func setTomlVersion(content string, sections []string, newVersion string) string {
+	want := map[string]bool{}
+	for _, s := range sections {
+		want[s] = true
+	}
+	lines := strings.Split(content, "\n")
+	cur := ""
+	re := regexp.MustCompile(`^(\s*version\s*=\s*)["'][^"']*["']`)
+	for i, l := range lines {
+		t := strings.TrimSpace(l)
+		if strings.HasPrefix(t, "[") && strings.HasSuffix(t, "]") && !strings.HasPrefix(t, "[[") {
+			cur = strings.TrimSpace(strings.Trim(t, "[]"))
+			continue
+		}
+		if want[cur] && re.MatchString(l) {
+			lines[i] = re.ReplaceAllString(l, `${1}"`+newVersion+`"`)
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func updateDownstreamDependencyVersion(pkgDir, depName, newVersion string) (string, error) {
@@ -574,7 +582,15 @@ func updateDownstreamDependencyVersion(pkgDir, depName, newVersion string) (stri
 				if deps, ok := raw[sec].(map[string]any); ok {
 					for k := range deps {
 						if k == depName || strings.HasSuffix(k, "/"+depName) {
-							deps[k] = "^" + newVersion
+							cur, _ := deps[k].(string)
+							switch {
+							case strings.HasPrefix(cur, "file:"), strings.HasPrefix(cur, "link:"), cur == "workspace:*", cur == "*":
+								continue // tracks the live package (or a pinned snapshot): nothing to rewrite
+							case strings.HasPrefix(cur, "workspace:"):
+								deps[k] = "workspace:^" + newVersion
+							default:
+								deps[k] = "^" + newVersion
+							}
 							modified = true
 						}
 					}

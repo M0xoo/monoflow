@@ -56,16 +56,16 @@ type ArtifactRecord struct {
 
 // Stats summarizes cache efficiency and storage.
 type Stats struct {
-	Enabled       bool    `json:"enabled"`
-	Hits          int     `json:"hits"`
-	Misses        int     `json:"misses"`
-	HitRatio      float64 `json:"hit_ratio"`
-	LocalDir      string  `json:"local_dir"`
-	TotalArtifacts int    `json:"total_artifacts"`
-	TotalVerifies int     `json:"total_verifications"`
-	TotalBytes    int64   `json:"total_bytes"`
-	RemoteEnabled bool    `json:"remote_enabled"`
-	RemoteURL     string  `json:"remote_url,omitempty"`
+	Enabled        bool    `json:"enabled"`
+	Hits           int     `json:"hits"`
+	Misses         int     `json:"misses"`
+	HitRatio       float64 `json:"hit_ratio"`
+	LocalDir       string  `json:"local_dir"`
+	TotalArtifacts int     `json:"total_artifacts"`
+	TotalVerifies  int     `json:"total_verifications"`
+	TotalBytes     int64   `json:"total_bytes"`
+	RemoteEnabled  bool    `json:"remote_enabled"`
+	RemoteURL      string  `json:"remote_url,omitempty"`
 }
 
 // Manager orchestrates local and remote caching for monoflow packages.
@@ -200,6 +200,29 @@ func (m *Manager) SetHTTPClient(client *http.Client) {
 	m.httpClient = client
 }
 
+// UpstreamKeys returns source hashes of pkg's transitive live (source) dependencies, for
+// use as ComputePackageKey's upstreamKeys: a changed dependency must invalidate the
+// dependent's cached verification and build artifact. Pinned dependencies need no entry:
+// the pinned version is part of the consumer's own (hashed) manifest.
+func (m *Manager) UpstreamKeys(g *graph.DependencyGraph, pkg *graph.PackageNode) map[string]string {
+	keys := map[string]string{}
+	visited := map[string]bool{pkg.Name: true}
+	queue := g.GetUpstream(pkg.Name)
+	for len(queue) > 0 {
+		name := queue[0]
+		queue = queue[1:]
+		if visited[name] {
+			continue
+		}
+		visited[name] = true
+		if dep, ok := g.GetPackage(name); ok {
+			keys[name], _ = m.ComputePackageKey(dep, nil, "", "source")
+		}
+		queue = append(queue, g.GetUpstream(name)...)
+	}
+	return keys
+}
+
 // ComputePackageKey calculates the deterministic cryptographic fingerprint of a package's inputs:
 // 1. Recursive hash of all package source files (ignoring non-source/transient directories)
 // 2. Package manifest / configuration (name, language, version)
@@ -247,21 +270,21 @@ func (m *Manager) ComputePackageKey(pkg *graph.PackageNode, upstreamKeys map[str
 func collectSourceFiles(dir string) ([]string, error) {
 	var files []string
 	ignoreDirs := map[string]bool{
-		".git":         true,
-		"node_modules": true,
-		"target":       true,
-		".agents":      true,
-		"dist":         true,
-		".dist":        true,
-		".next":        true,
-		".turbo":       true,
-		".venv":        true,
-		"venv":         true,
-		"__pycache__":  true,
+		".git":          true,
+		"node_modules":  true,
+		"target":        true,
+		".agents":       true,
+		"dist":          true,
+		".dist":         true,
+		".next":         true,
+		".turbo":        true,
+		".venv":         true,
+		"venv":          true,
+		"__pycache__":   true,
 		".pytest_cache": true,
-		".mypy_cache":  true,
-		".idea":        true,
-		".vscode":      true,
+		".mypy_cache":   true,
+		".idea":         true,
+		".vscode":       true,
 	}
 
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
@@ -326,7 +349,7 @@ func (m *Manager) GetVerification(key string) (*VerificationRecord, bool) {
 	if data, err := os.ReadFile(localPath); err == nil {
 		var rec VerificationRecord
 		if json.Unmarshal(data, &rec) == nil {
-			m.stats.Hits++
+			m.recordStat("hits")
 			return &rec, true
 		}
 	}
@@ -338,13 +361,13 @@ func (m *Manager) GetVerification(key string) (*VerificationRecord, bool) {
 			if json.Unmarshal(data, &rec) == nil {
 				// Write through to local cache
 				_ = os.WriteFile(localPath, data, 0644)
-				m.stats.Hits++
+				m.recordStat("hits")
 				return &rec, true
 			}
 		}
 	}
 
-	m.stats.Misses++
+	m.recordStat("misses")
 	return nil, false
 }
 
@@ -400,7 +423,7 @@ func (m *Manager) GetArtifact(key string, targetDir string) (*ArtifactRecord, bo
 		if json.Unmarshal(metaData, &rec) == nil {
 			if _, err := os.Stat(archivePath); err == nil {
 				if err := extractTarGz(archivePath, targetDir); err == nil {
-					m.stats.Hits++
+					m.recordStat("hits")
 					return &rec, true
 				}
 			}
@@ -416,7 +439,7 @@ func (m *Manager) GetArtifact(key string, targetDir string) (*ArtifactRecord, bo
 					_ = os.WriteFile(metaPath, metaData, 0644)
 					_ = os.WriteFile(archivePath, tarData, 0644)
 					if err := extractTarGzBytes(tarData, targetDir); err == nil {
-						m.stats.Hits++
+						m.recordStat("hits")
 						return &rec, true
 					}
 				}
@@ -424,7 +447,7 @@ func (m *Manager) GetArtifact(key string, targetDir string) (*ArtifactRecord, bo
 		}
 	}
 
-	m.stats.Misses++
+	m.recordStat("misses")
 	return nil, false
 }
 
@@ -556,9 +579,39 @@ func (m *Manager) Clean() error {
 
 	_ = os.RemoveAll(m.verifyDir)
 	_ = os.RemoveAll(m.artifactDir)
+	_ = os.Remove(filepath.Join(m.LocalDir, "stats.hits"))
+	_ = os.Remove(filepath.Join(m.LocalDir, "stats.misses"))
+	m.stats.Hits, m.stats.Misses = 0, 0
 	_ = os.MkdirAll(m.verifyDir, 0755)
 	_ = os.MkdirAll(m.artifactDir, 0755)
 	return nil
+}
+
+// recordStat persists one hit/miss by appending a byte to a counter file. O_APPEND
+// writes are atomic, so concurrent agent processes sharing the cache never lose counts
+// (in-memory counters died with each short-lived CLI process).
+func (m *Manager) recordStat(kind string) {
+	if kind == "hits" {
+		m.stats.Hits++
+	} else {
+		m.stats.Misses++
+	}
+	f, err := os.OpenFile(filepath.Join(m.LocalDir, "stats."+kind), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return
+	}
+	_, _ = f.Write([]byte{'.'})
+	_ = f.Close()
+}
+
+func (m *Manager) statCount(kind string) int {
+	if fi, err := os.Stat(filepath.Join(m.LocalDir, "stats."+kind)); err == nil {
+		return int(fi.Size())
+	}
+	if kind == "hits" {
+		return m.stats.Hits
+	}
+	return m.stats.Misses
 }
 
 // GetStats returns usage statistics of the local cache.
@@ -567,6 +620,8 @@ func (m *Manager) GetStats() Stats {
 	defer m.mu.RUnlock()
 
 	s := m.stats
+	s.Hits = m.statCount("hits")
+	s.Misses = m.statCount("misses")
 	if total := s.Hits + s.Misses; total > 0 {
 		s.HitRatio = float64(s.Hits) / float64(total)
 	}
@@ -576,6 +631,9 @@ func (m *Manager) GetStats() Stats {
 	var verCount int
 
 	_ = filepath.Walk(m.LocalDir, func(path string, info os.FileInfo, err error) error {
+		if err == nil && info.IsDir() && info.Name() == "baselines" {
+			return filepath.SkipDir // baseline checkouts are not cache entries
+		}
 		if err == nil && !info.IsDir() {
 			totalBytes += info.Size()
 			if strings.HasSuffix(path, ".tar.gz") {

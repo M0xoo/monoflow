@@ -7,13 +7,17 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	initialize "github.com/antigravity/monoflow/pkg/init"
 	"github.com/antigravity/monoflow/pkg/merge"
+	"github.com/antigravity/monoflow/pkg/graph"
+	"github.com/antigravity/monoflow/pkg/runtimestate"
 	"github.com/antigravity/monoflow/pkg/subset"
 )
 
@@ -35,6 +39,12 @@ type WorktreeInfo struct {
 	Strategy        string    `json:"strategy,omitempty"`
 	MonoflowBin     string    `json:"monoflow_bin,omitempty"`
 	ShieldHooks     bool      `json:"shield_hooks"`
+	Branch          string    `json:"branch,omitempty"`
+	// Live state (computed by List, not persisted)
+	Ahead    int    `json:"ahead,omitempty"`    // commits not yet on the base branch
+	Unpushed int    `json:"unpushed,omitempty"` // commits not yet on the remote branch
+	PR       string `json:"pr,omitempty"`       // MonoFlow PR id / GitHub URL for this branch
+	CI       string `json:"ci,omitempty"`       // latest CI result for this branch (CI_PASSED / CI_FAILED)
 }
 
 // CreateOptions configures worktree creation.
@@ -44,6 +54,7 @@ type CreateOptions struct {
 	Packages       []string
 	Strategy       subset.DepStrategy
 	IncludeDeps    bool
+	BaseBranch     string // branch to cut agent/<id> from (default: origin/HEAD, main, master)
 }
 
 // IsolateResult details the result of isolating dependencies for an agent worktree.
@@ -65,6 +76,7 @@ type Manager struct {
 
 // NewManager creates a worktree manager.
 func NewManager(rootDir string) *Manager {
+	rootDir = mainRepoRoot(rootDir)
 	wtDir := filepath.Join(rootDir, ".agents", "worktrees")
 	return &Manager{
 		RootDir:      rootDir,
@@ -103,13 +115,24 @@ func (m *Manager) CreateWithOpts(agentID string, opts CreateOptions) (*WorktreeI
 		return nil, err
 	}
 
-	// 1. git worktree add --detach <path> HEAD
-	_, err := m.runGit("worktree", "add", "--detach", wtPath, "HEAD")
-	if err != nil {
-		return nil, fmt.Errorf("failed to create git worktree: %w", err)
+	// 1. Each agent works on its own branch (agent/<id>) cut from the base branch, never on
+	// a detached copy of whatever the shared root happens to have checked out.
+	branch := "agent/" + agentID
+	if _, err := m.runGit("rev-parse", "--verify", "--quiet", "refs/heads/"+branch); err == nil {
+		if _, err := m.runGit("worktree", "add", wtPath, branch); err != nil {
+			return nil, fmt.Errorf("failed to create git worktree: %w", err)
+		}
+	} else {
+		base := opts.BaseBranch
+		if base == "" {
+			base = m.defaultBaseBranch()
+		}
+		if _, err := m.runGit("worktree", "add", "-b", branch, wtPath, base); err != nil {
+			return nil, fmt.Errorf("failed to create git worktree: %w", err)
+		}
 	}
 
-	// 2. Symlink or Clone dependencies
+	// 2. Symlink or Clone dependencies (go.work is tracked and handled by subset.SyncGoWork)
 	sharedTargets := []string{
 		"node_modules",
 		".pnpm-store",
@@ -117,8 +140,11 @@ func (m *Manager) CreateWithOpts(agentID string, opts CreateOptions) (*WorktreeI
 		".agents/cache",
 		".agents/prs",
 		".agents/proofs",
-		"go.work",
+		".agents/events",
 		".venv",
+	}
+	for _, d := range sharedStateDirs {
+		_ = os.MkdirAll(filepath.Join(m.RootDir, d), 0755)
 	}
 
 	// The package cache is content-addressed, so it is always shared with the root repo:
@@ -182,6 +208,7 @@ func (m *Manager) CreateWithOpts(agentID string, opts CreateOptions) (*WorktreeI
 
 	// Path symmetry: ./bin/monoflow must work inside the worktree exactly as at the root.
 	monoflowBin := m.linkMonoflowBinary(wtPath)
+	excludeFromGit(wtPath, append(runtimestate.IgnorePatterns(), sharedDepLinks...)...)
 
 	// Git Shield inheritance: if the root repo is shielded, the worktree must be too.
 	if initialize.HasShieldHooks(m.RootDir) && !initialize.HasShieldHooks(wtPath) {
@@ -198,14 +225,36 @@ func (m *Manager) CreateWithOpts(agentID string, opts CreateOptions) (*WorktreeI
 		targetPkgs = []string{opts.FocusedPackage}
 	}
 
+	// Upstream dependencies are always projected unless a strategy is requested
+	// explicitly: a sparse worktree missing them cannot build or verify.
 	strategy := opts.Strategy
 	if strategy == "" {
-		if opts.IncludeDeps {
-			strategy = subset.DepStrategySource
-		} else if len(targetPkgs) > 0 && !opts.IncludeDeps {
-			strategy = subset.DepStrategyNone
-		} else {
-			strategy = subset.DepStrategySource
+		strategy = subset.DepStrategySource
+	}
+
+	// verify --affected must also test the dependents of what the agent changes, so they
+	// are projected up front (otherwise every verify fails with package_not_projected).
+	if len(targetPkgs) > 0 {
+		if g, err := graph.LoadOrDiscover(wtPath); err == nil {
+			seen := map[string]bool{}
+			var expanded []string
+			add := func(n string) {
+				if !seen[n] {
+					seen[n] = true
+					expanded = append(expanded, n)
+				}
+			}
+			for _, t := range targetPkgs {
+				if p, ok := g.GetPackage(t); ok {
+					add(p.Name)
+					for _, d := range g.GetTransitiveDownstream(p.Name) {
+						add(d)
+					}
+				} else {
+					add(t)
+				}
+			}
+			targetPkgs = expanded
 		}
 	}
 
@@ -218,7 +267,10 @@ func (m *Manager) CreateWithOpts(agentID string, opts CreateOptions) (*WorktreeI
 		}
 	}
 
-	headSHA, _ := m.runGit("rev-parse", "HEAD")
+	// Sparse checkout and hook installation can replace links; re-assert them last.
+	m.ensureSharedState(wtPath)
+
+	headSHA, _ := m.runGit("-C", wtPath, "rev-parse", "HEAD")
 
 	info := WorktreeInfo{
 		AgentID:         agentID,
@@ -236,13 +288,61 @@ func (m *Manager) CreateWithOpts(agentID string, opts CreateOptions) (*WorktreeI
 		Strategy:        string(strategy),
 		MonoflowBin:     monoflowBin,
 		ShieldHooks:     shielded,
+		Branch:          branch,
 	}
 
+	defer m.lockRegistry()()
 	registry, _ := m.loadRegistry()
 	registry[agentID] = info
 	_ = m.saveRegistry(registry)
 
 	return &info, nil
+}
+
+// excludeFromGit appends patterns to the worktree's info/exclude (shared by all worktrees).
+func excludeFromGit(wtPath string, patterns ...string) {
+	pathCmd := exec.Command("git", "rev-parse", "--git-path", "info/exclude")
+	pathCmd.Dir = wtPath
+	out, err := pathCmd.Output()
+	if err != nil {
+		return
+	}
+	excludePath := strings.TrimSpace(string(out))
+	if !filepath.IsAbs(excludePath) {
+		excludePath = filepath.Join(wtPath, excludePath)
+	}
+	existing, _ := os.ReadFile(excludePath)
+	var missing []string
+	for _, p := range patterns {
+		if !strings.Contains("\n"+string(existing)+"\n", "\n"+p+"\n") {
+			missing = append(missing, p)
+		}
+	}
+	if len(missing) == 0 {
+		return
+	}
+	_ = os.MkdirAll(filepath.Dir(excludePath), 0755)
+	if f, err := os.OpenFile(excludePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
+		_, _ = f.WriteString("\n# MonoFlow runtime state\n" + strings.Join(missing, "\n") + "\n")
+		_ = f.Close()
+	}
+}
+
+// defaultBaseBranch picks the branch new agent worktrees start from.
+func (m *Manager) defaultBaseBranch() string {
+	if out, err := m.runGit("symbolic-ref", "--short", "refs/remotes/origin/HEAD"); err == nil && out != "" {
+		if b := strings.TrimPrefix(out, "origin/"); b != "" {
+			if _, err := m.runGit("rev-parse", "--verify", "--quiet", "refs/heads/"+b); err == nil {
+				return b
+			}
+		}
+	}
+	for _, b := range []string{"main", "master"} {
+		if _, err := m.runGit("rev-parse", "--verify", "--quiet", "refs/heads/"+b); err == nil {
+			return b
+		}
+	}
+	return "HEAD"
 }
 
 // resolveMonoflowBinary finds the monoflow binary the root repo uses.
@@ -337,6 +437,7 @@ func (m *Manager) Isolate(agentID string) (*IsolateResult, error) {
 	durMs := float64(time.Since(start).Microseconds()) / 1000.0
 
 	// Update registry
+	defer m.lockRegistry()()
 	reg, _ := m.loadRegistry()
 	if info, ok := reg[agentID]; ok {
 		info.Isolated = true
@@ -408,6 +509,7 @@ func (m *Manager) List() ([]WorktreeInfo, error) {
 				}
 				itemCopy.ModifiedFiles = files
 			}
+			m.fillLiveState(&itemCopy)
 		}
 		res = append(res, itemCopy)
 	}
@@ -511,6 +613,7 @@ func (m *Manager) Touch(agentID string) error {
 }
 
 func (m *Manager) touchInternal(agentID string) error {
+	defer m.lockRegistry()()
 	reg, err := m.loadRegistry()
 	if err != nil {
 		return err
@@ -525,17 +628,37 @@ func (m *Manager) touchInternal(agentID string) error {
 
 // Finish tears down the virtual worktree and prunes git records in ~20ms.
 func (m *Manager) Finish(agentID string) error {
+	return m.FinishSafe(agentID, true)
+}
+
+// FinishSafe removes an agent worktree. Unless force is set it refuses when the worktree
+// holds uncommitted changes or unpushed commits. The agent/<id> branch is deleted too
+// when nothing on it would be lost.
+func (m *Manager) FinishSafe(agentID string, force bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	wtPath := filepath.Join(m.worktreesDir, agentID)
+	unsaved := fileExists(wtPath) && hasUnsavedWork(wtPath)
+	if unsaved && !force {
+		return fmt.Errorf("worktree '%s' has uncommitted changes or unpushed commits; commit and push them (monoflow commit / monoflow push) or pass --force to discard", agentID)
+	}
+	branch := ""
+	if out, err := exec.Command("git", "-C", wtPath, "rev-parse", "--abbrev-ref", "HEAD").Output(); err == nil {
+		branch = strings.TrimSpace(string(out))
+	}
 
 	// 1. git worktree remove --force <path>
 	_, _ = m.runGit("worktree", "remove", "--force", wtPath)
 	_ = os.RemoveAll(wtPath)
 	_, _ = m.runGit("worktree", "prune")
 
+	if strings.HasPrefix(branch, "agent/") && !unsaved {
+		_, _ = m.runGit("branch", "-D", branch)
+	}
+
 	// 2. Remove from registry
+	defer m.lockRegistry()()
 	reg, _ := m.loadRegistry()
 	delete(reg, agentID)
 	_ = m.saveRegistry(reg)
@@ -543,19 +666,26 @@ func (m *Manager) Finish(agentID string) error {
 	return nil
 }
 
+// ValidAgentID reports whether id is usable as a directory and branch name.
+func ValidAgentID(id string) bool {
+	return regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`).MatchString(id)
+}
+
 // PruneStale cleans up worktrees that are older than maxAge or orphaned.
 func (m *Manager) PruneStale(maxAge time.Duration) ([]string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	defer m.lockRegistry()()
 	reg, _ := m.loadRegistry()
 	var pruned []string
 	now := time.Now().UTC()
 
 	for id, info := range reg {
-		lastSeen := info.LastHeartbeat
-		if lastSeen.IsZero() {
-			lastSeen = info.CreatedAt
+		lastSeen := lastActivity(info)
+		// Never discard work: a worktree with uncommitted changes or unpushed commits is kept.
+		if fileExists(info.Path) && hasUnsavedWork(info.Path) {
+			continue
 		}
 		if now.Sub(lastSeen) > maxAge {
 			wtPath := filepath.Join(m.worktreesDir, id)
@@ -605,13 +735,41 @@ func (m *Manager) loadRegistry() (map[string]WorktreeInfo, error) {
 	return reg, nil
 }
 
+// saveRegistry writes atomically (temp file + rename) so concurrent readers in other
+// agent processes never observe a partial file (which they would read as empty and then
+// overwrite, losing other agents' worktrees).
 func (m *Manager) saveRegistry(reg map[string]WorktreeInfo) error {
 	_ = os.MkdirAll(m.worktreesDir, 0755)
 	data, err := json.MarshalIndent(reg, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(m.registryFile, data, 0644)
+	tmp, err := os.CreateTemp(m.worktreesDir, ".registry-*.json")
+	if err != nil {
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmp.Name())
+		return err
+	}
+	tmp.Close()
+	return os.Rename(tmp.Name(), m.registryFile)
+}
+
+// lockRegistry takes a cross-process exclusive lock for a registry read-modify-write
+// (m.mu only serialises goroutines within one process). Use: defer m.lockRegistry()().
+func (m *Manager) lockRegistry() func() {
+	_ = os.MkdirAll(m.worktreesDir, 0755)
+	f, err := os.OpenFile(filepath.Join(m.worktreesDir, ".registry.lock"), os.O_CREATE|os.O_RDWR, 0644)
+	if err != nil {
+		return func() {}
+	}
+	lockFile(f)
+	return func() {
+		unlockFile(f)
+		f.Close()
+	}
 }
 
 func fileExists(path string) bool {
@@ -642,6 +800,7 @@ func (m *Manager) Focus(agentID string, targetPackage string, strategy subset.De
 		return nil, err
 	}
 
+	defer m.lockRegistry()()
 	reg, _ := m.loadRegistry()
 	info, ok := reg[agentID]
 	if !ok {
@@ -675,6 +834,7 @@ func (m *Manager) AddPackage(agentID string, packages []string, strategy subset.
 		return nil, err
 	}
 
+	defer m.lockRegistry()()
 	reg, _ := m.loadRegistry()
 	info, ok := reg[agentID]
 	if !ok {
@@ -709,6 +869,7 @@ func (m *Manager) RemovePackage(agentID string, packages []string, force bool) (
 		return nil, err
 	}
 
+	defer m.lockRegistry()()
 	reg, _ := m.loadRegistry()
 	info, ok := reg[agentID]
 	if !ok {
@@ -736,4 +897,201 @@ func (m *Manager) UpdateFromRemote(agentID string, packages []string, remote, br
 
 	_ = m.touchInternal(agentID)
 	return subset.Update(wtPath, packages, remote, branch)
+}
+
+// lastActivity is the most recent sign of life: registry heartbeat, last index write
+// (any add/commit/checkout) or last commit in the worktree.
+func lastActivity(info WorktreeInfo) time.Time {
+	last := info.LastHeartbeat
+	if last.IsZero() {
+		last = info.CreatedAt
+	}
+	if out, err := exec.Command("git", "-C", info.Path, "rev-parse", "--git-path", "index").Output(); err == nil {
+		p := strings.TrimSpace(string(out))
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(info.Path, p)
+		}
+		if fi, err := os.Stat(p); err == nil && fi.ModTime().After(last) {
+			last = fi.ModTime().UTC()
+		}
+	}
+	if out, err := exec.Command("git", "-C", info.Path, "log", "-1", "--format=%ct").Output(); err == nil {
+		if sec, err := strconv.ParseInt(strings.TrimSpace(string(out)), 10, 64); err == nil {
+			if t := time.Unix(sec, 0).UTC(); t.After(last) {
+				last = t
+			}
+		}
+	}
+	return last
+}
+
+// hasUnsavedWork reports uncommitted changes or commits missing from the remote branch.
+func hasUnsavedWork(path string) bool {
+	out, err := exec.Command("git", "-C", path, "status", "--porcelain").Output()
+	if err != nil {
+		return true
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if len(line) < 4 {
+			continue
+		}
+		p := strings.TrimSpace(line[3:])
+		// MonoFlow's own provisioning (config copies, state links, binary link) is not agent work.
+		if strings.HasPrefix(p, ".agents/") || p == ".agents" || p == "bin/monoflow" || p == "bin/" || isSharedDepLink(p) {
+			continue
+		}
+		return true
+	}
+	out, err = exec.Command("git", "-C", path, "rev-list", "--count", "@{upstream}..HEAD").Output()
+	if err != nil {
+		// No upstream: unsaved if it has commits not contained in any other branch
+		// (e.g. the base branch) or remote.
+		cur, _ := exec.Command("git", "-C", path, "symbolic-ref", "-q", "HEAD").Output()
+		args := []string{"-C", path, "rev-list", "--count", "HEAD", "--not", "--remotes"}
+		if refs, err := exec.Command("git", "-C", path, "for-each-ref", "--format=%(refname)", "refs/heads").Output(); err == nil {
+			for _, r := range strings.Fields(string(refs)) {
+				if r != strings.TrimSpace(string(cur)) {
+					args = append(args, r)
+				}
+			}
+		}
+		out, err = exec.Command("git", args...).Output()
+		if err != nil {
+			return true
+		}
+	}
+	n, _ := strconv.Atoi(strings.TrimSpace(string(out)))
+	return n > 0
+}
+
+// fillLiveState refreshes branch/HEAD from git and attaches PR and CI status, so one
+// `worktree list` call shows where every agent stands.
+func (m *Manager) fillLiveState(info *WorktreeInfo) {
+	git := func(args ...string) string {
+		out, err := exec.Command("git", append([]string{"-C", info.Path}, args...)...).Output()
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(string(out))
+	}
+	if b := git("rev-parse", "--abbrev-ref", "HEAD"); b != "" {
+		info.Branch = b
+	}
+	if h := git("rev-parse", "HEAD"); h != "" {
+		info.HeadSHA = h
+	}
+	info.LastHeartbeat = lastActivity(*info)
+	base := m.defaultBaseBranch()
+	info.Ahead, _ = strconv.Atoi(git("rev-list", "--count", base+"..HEAD"))
+	if n := git("rev-list", "--count", "@{upstream}..HEAD"); n != "" {
+		info.Unpushed, _ = strconv.Atoi(n)
+	} else {
+		info.Unpushed = info.Ahead
+	}
+
+	if entries, err := os.ReadDir(filepath.Join(m.RootDir, ".agents", "prs")); err == nil {
+		var newest time.Time
+		for _, e := range entries {
+			data, err := os.ReadFile(filepath.Join(m.RootDir, ".agents", "prs", e.Name()))
+			if err != nil {
+				continue
+			}
+			var pr struct {
+				ID         string    `json:"id"`
+				HeadBranch string    `json:"head_branch"`
+				GitHubURL  string    `json:"github_url"`
+				CreatedAt  time.Time `json:"created_at"`
+			}
+			if json.Unmarshal(data, &pr) == nil && pr.HeadBranch == info.Branch && pr.CreatedAt.After(newest) {
+				newest = pr.CreatedAt
+				info.PR = pr.ID
+				if pr.GitHubURL != "" {
+					info.PR = pr.GitHubURL
+				}
+			}
+		}
+	}
+	if entries, err := os.ReadDir(filepath.Join(m.RootDir, ".agents", "events")); err == nil {
+		var newest time.Time
+		for _, e := range entries {
+			data, err := os.ReadFile(filepath.Join(m.RootDir, ".agents", "events", e.Name()))
+			if err != nil {
+				continue
+			}
+			var evt struct {
+				Type      string    `json:"type"`
+				Branch    string    `json:"branch"`
+				CommitSHA string    `json:"commit_sha"`
+				CreatedAt time.Time `json:"created_at"`
+			}
+			if json.Unmarshal(data, &evt) == nil && evt.Branch == info.Branch && strings.HasPrefix(evt.Type, "CI_") && evt.CreatedAt.After(newest) {
+				newest = evt.CreatedAt
+				info.CI = evt.Type
+				if evt.CommitSHA != info.HeadSHA {
+					info.CI += " (older commit)"
+				}
+			}
+		}
+	}
+}
+
+// sharedStateDirs are MonoFlow state directories every worktree shares with the root so
+// PRs, proofs, CI events and the package cache are visible from anywhere in the repo.
+var sharedStateDirs = []string{".agents/cache", ".agents/prs", ".agents/proofs", ".agents/events"}
+
+// ensureSharedState makes each shared state dir in wtPath a symlink to the root's,
+// migrating anything already written to a private copy.
+func (m *Manager) ensureSharedState(wtPath string) {
+	for _, d := range sharedStateDirs {
+		src := filepath.Join(m.RootDir, d)
+		dst := filepath.Join(wtPath, d)
+		_ = os.MkdirAll(src, 0755)
+		if fi, err := os.Lstat(dst); err == nil {
+			if fi.Mode()&os.ModeSymlink != 0 {
+				continue
+			}
+			if fi.IsDir() {
+				entries, _ := os.ReadDir(dst)
+				for _, e := range entries {
+					_ = os.Rename(filepath.Join(dst, e.Name()), filepath.Join(src, e.Name()))
+				}
+			}
+			_ = os.RemoveAll(dst)
+		}
+		_ = os.MkdirAll(filepath.Dir(dst), 0755)
+		_ = os.Symlink(src, dst)
+	}
+}
+
+// sharedDepLinks are dependency dirs symlinked from the root into worktrees. Typical
+// ignore rules ("node_modules/") do not match symlinks, so they are excluded explicitly.
+var sharedDepLinks = []string{"/node_modules", "/.pnpm-store", "/target", "/.venv"}
+
+func isSharedDepLink(p string) bool {
+	for _, l := range sharedDepLinks {
+		if p == strings.TrimPrefix(l, "/") {
+			return true
+		}
+	}
+	return false
+}
+
+// mainRepoRoot resolves a linked worktree to the main repository root, where the worktree
+// registry lives (so `worktree list` works the same from inside any agent worktree).
+func mainRepoRoot(dir string) string {
+	out, err := exec.Command("git", "-C", dir, "rev-parse", "--path-format=absolute", "--git-common-dir").Output()
+	if err != nil {
+		return dir
+	}
+	common := strings.TrimSpace(string(out))
+	if filepath.Base(common) != ".git" {
+		return dir // bare or unusual layout: keep what we were given
+	}
+	main := filepath.Dir(common)
+	if real, err := filepath.EvalSymlinks(dir); err == nil {
+		if realMain, err := filepath.EvalSymlinks(main); err == nil && real == realMain {
+			return dir // already the main root: keep the caller's spelling of the path
+		}
+	}
+	return main
 }

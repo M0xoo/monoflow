@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/antigravity/monoflow/pkg/checkpoint"
+	"github.com/antigravity/monoflow/pkg/runtimestate"
 )
 
 // CircuitBreaker prevents infinite self-healing loops and runaway token spend.
@@ -23,11 +24,12 @@ type CircuitBreaker struct {
 
 // CircuitState tracks attempts for an agent task.
 type CircuitState struct {
-	TaskID       string    `json:"task_id"`
-	Target       string    `json:"target"`
-	Attempts     int       `json:"attempts"`
+	TaskID        string    `json:"task_id"`
+	Target        string    `json:"target"`
+	Attempts      int       `json:"attempts"`
 	LastAttemptAt time.Time `json:"last_attempt_at"`
-	Tripped      bool      `json:"tripped"`
+	Tripped       bool      `json:"tripped"`
+	SnapshotID    string    `json:"snapshot_id,omitempty"`
 }
 
 // NewCircuitBreaker creates a circuit breaker manager.
@@ -65,9 +67,13 @@ func (cb *CircuitBreaker) RecordFailure(rootDir, taskID, target string) (*Circui
 		st.Tripped = true
 		tripped = true
 
-		// Auto-revert to clean state
+		// Never revert automatically: the latest checkpoint is not known to be green and
+		// reverting silently destroys the agent's work. Snapshot the current state instead
+		// so the agent (or a human) can choose to roll back explicitly.
 		chkMgr := checkpoint.NewManager(rootDir)
-		_ = chkMgr.Revert("latest")
+		if c, err := chkMgr.Save(fmt.Sprintf("circuit-breaker: %s failed %d times", target, st.Attempts)); err == nil {
+			st.SnapshotID = c.ID
+		}
 	}
 
 	states[key] = st
@@ -113,7 +119,7 @@ type IntegrityViolation struct {
 }
 
 // CheckTestIntegrity ensures agents didn't delete assertions or cheat tests to pass CI.
-func CheckTestIntegrity(rootDir string) ([]IntegrityViolation, error) {
+func CheckTestIntegrity(rootDir string) (violations []IntegrityViolation, err error) {
 	cmd := exec.Command("git", "diff", "HEAD")
 	cmd.Dir = rootDir
 	out, err := cmd.CombinedOutput()
@@ -122,14 +128,33 @@ func CheckTestIntegrity(rootDir string) ([]IntegrityViolation, error) {
 	}
 
 	diffText := string(out)
-	var violations []IntegrityViolation
 
 	deletedAssertRegex := regexp.MustCompile(`^-\s*(.*[{\s;])?(expect\(|assert\s+|assert\.|self\.assert|assertEquals|assert_eq!|t\.(Fatal|Fatalf|Error|Errorf|Fail|FailNow))`)
 	tautologicalRegex := regexp.MustCompile(`\+\s*(expect\(true\)\.toBe\(true\)|assert\s+True|assert\s+1\s*==\s*1)`)
-	commentedAssertRegex := regexp.MustCompile(`\+\s*(//|#|/\*)\s*(.*[{\s;])?(expect\(|assert|it\(|test\(|t\.(Fatal|Fatalf|Error|Errorf|Fail|FailNow))`)
+	commentedAssertRegex := regexp.MustCompile(`\+\s*(//|#|/\*)\s*(.*[{\s;])?(expect\(|\bassert(\.|\(|_|Equals|\s+[^\s]+\s*(==|!=|<|>|is\b|in\b))|\bit\(|\btest\(|t\.(Fatal|Fatalf|Error|Errorf|Fail|FailNow)\()`)
 
 	lines := strings.Split(diffText, "\n")
 	currentFile := ""
+
+	// A deleted assertion only weakens a test when the file ends up with fewer assertions;
+	// rewriting checks (e.g. into a table-driven test) adds at least as many back.
+	addedAssertRegex := regexp.MustCompile(`^\+\s*(.*[{\s;])?(expect\(|assert\s+|assert\.|self\.assert|assertEquals|assert_eq!|t\.(Fatal|Fatalf|Error|Errorf|Fail|FailNow))`)
+	tautologyAnywhere := regexp.MustCompile(`expect\(true\)\.toBe\(true\)|assert\s+True\b|assert\s+1\s*==\s*1`)
+	deletedByFile := map[string][]string{}
+	addedByFile := map[string]int{}
+	var fileOrder []string
+	defer func() {
+		for _, f := range fileOrder {
+			if del := deletedByFile[f]; len(del) > addedByFile[f] {
+				violations = append(violations, IntegrityViolation{
+					Severity: "CRITICAL",
+					Type:     "test_weakened",
+					File:     f,
+					Message:  fmt.Sprintf("Existing assertion was deleted: '%s' (%d removed, %d added)", del[0], len(del), addedByFile[f]),
+				})
+			}
+		}
+	}()
 
 	for _, l := range lines {
 		if strings.HasPrefix(l, "diff --git") {
@@ -141,19 +166,20 @@ func CheckTestIntegrity(rootDir string) ([]IntegrityViolation, error) {
 		}
 
 		// Only inspect test files
-		isTestFile := strings.Contains(currentFile, "test") || strings.Contains(currentFile, "spec")
+		// Vendored release snapshots are managed by MonoFlow (pruned on upgrade), not edited tests.
+		isTestFile := (strings.Contains(currentFile, "test") || strings.Contains(currentFile, "spec")) && !strings.HasPrefix(currentFile, ".agents/releases/")
 		if !isTestFile {
 			continue
 		}
 
-		// 1. Deleted assertions
+		// 1. Deleted assertions (reported per file once additions are known)
 		if deletedAssertRegex.MatchString(l) {
-			violations = append(violations, IntegrityViolation{
-				Severity: "CRITICAL",
-				Type:     "test_weakened",
-				File:     currentFile,
-				Message:  fmt.Sprintf("Existing assertion was deleted: '%s'", strings.TrimSpace(l)),
-			})
+			if _, seen := deletedByFile[currentFile]; !seen {
+				fileOrder = append(fileOrder, currentFile)
+			}
+			deletedByFile[currentFile] = append(deletedByFile[currentFile], strings.TrimSpace(l))
+		} else if addedAssertRegex.MatchString(l) && !commentedAssertRegex.MatchString(l) && !tautologyAnywhere.MatchString(l) {
+			addedByFile[currentFile]++
 		}
 
 		// 2. Commented out assertions
@@ -292,11 +318,19 @@ func FastAgentCommit(rootDir, message string) (*CommitResult, error) {
 	}
 
 	// 3. Stage changes
-	cmdAdd := exec.Command("git", "add", "-A")
+	// A deliberately edited go.work must be committed even in a sparse worktree, where the
+	// projection is hidden with assume-unchanged.
+	if _, err := os.Stat(filepath.Join(rootDir, "go.work")); err == nil && !runtimestate.ProjectedGoWork(rootDir) {
+		_ = exec.Command("git", "-C", rootDir, "update-index", "--no-assume-unchanged", "go.work").Run()
+	}
+	cmdAdd := exec.Command("git", runtimestate.AddArgs()...)
 	cmdAdd.Dir = rootDir
 	if out, err := cmdAdd.CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("git add failed: %w (%s)", err, string(out))
 	}
+	unstage := exec.Command("git", runtimestate.UnstageArgs(rootDir)...)
+	unstage.Dir = rootDir
+	_ = unstage.Run()
 
 	// 4. Commit bypassing slow or interactive hooks (--no-verify)
 	cmdCommit := exec.Command("git", "commit", "--no-verify", "-m", message)
@@ -319,4 +353,3 @@ func FastAgentCommit(rootDir, message string) (*CommitResult, error) {
 		DurationMs: durMs,
 	}, nil
 }
-

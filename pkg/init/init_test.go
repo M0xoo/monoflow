@@ -3,6 +3,7 @@ package initialize
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -45,5 +46,28 @@ func TestInitRepo(t *testing.T) {
 		if _, err := os.Stat(ef); os.IsNotExist(err) {
 			t.Errorf("missing expected generated file: %s", ef)
 		}
+	}
+}
+
+func TestMergeSectionKeepsProjectInstructions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "AGENTS.md")
+	_ = os.WriteFile(path, []byte("# Project rules\n\nUse tabs.\n"), 0644)
+	for i := 0; i < 2; i++ { // idempotent
+		if err := mergeSection(path, AgentRuleTemplate, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	data, _ := os.ReadFile(path)
+	s := string(data)
+	if !strings.HasPrefix(s, "# Project rules\n\nUse tabs.\n") {
+		t.Fatalf("existing instructions must be preserved, got:\n%s", s[:80])
+	}
+	if strings.Count(s, sectionStart) != 1 || !strings.Contains(s, "monoflow verify --affected") {
+		t.Fatalf("expected exactly one MonoFlow section")
+	}
+	missing := filepath.Join(t.TempDir(), "CLAUDE.md")
+	_ = mergeSection(missing, ClaudePointer, false)
+	if _, err := os.Stat(missing); err == nil {
+		t.Fatalf("CLAUDE.md must not be created when absent")
 	}
 }

@@ -8,7 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/antigravity/monoflow/pkg/agenthooks"
 	"github.com/antigravity/monoflow/pkg/graph"
+	"github.com/antigravity/monoflow/pkg/runtimestate"
 )
 
 // InitResult details what was discovered and initialized.
@@ -86,11 +88,10 @@ func InitRepo(targetDir string, binarySrcPath string) (*InitResult, error) {
 		return nil, err
 	}
 
-	// Also mirror into workspace root GEMINI.md or AGENTS.md if not present
-	agentsMD := filepath.Join(absTarget, "AGENTS.md")
-	if _, err := os.Stat(agentsMD); os.IsNotExist(err) {
-		_ = os.WriteFile(agentsMD, []byte(AgentRuleTemplate), 0644)
-	}
+	// Agent instructions: merge a delimited MonoFlow section into AGENTS.md (keeping any
+	// existing project instructions) and point CLAUDE.md at it when the repo has one.
+	_ = mergeSection(filepath.Join(absTarget, "AGENTS.md"), AgentRuleTemplate, true)
+	_ = mergeSection(filepath.Join(absTarget, "CLAUDE.md"), ClaudePointer, false)
 
 	skillPath := filepath.Join(agentsDir, "skills", "monoflow", "SKILL.md")
 	if err := os.WriteFile(skillPath, []byte(AgentSkillTemplate), 0644); err != nil {
@@ -125,14 +126,17 @@ func InitRepo(targetDir string, binarySrcPath string) (*InitResult, error) {
 
 	// 9. Update .gitignore
 	gitignorePath := filepath.Join(absTarget, ".gitignore")
-	ignoreBlock := "\n# MonoFlow Agent Sandbox & Ephemeral Checkpoints\n.agents/worktrees/\n.agents/traces/\n.agents/checkpoints.json\n"
+	ignoreBlock := "\n# MonoFlow runtime state (never committed)\n" + strings.Join(runtimestate.IgnorePatterns(), "\n") + "\n"
 	if data, err := os.ReadFile(gitignorePath); err == nil {
-		if !strings.Contains(string(data), ".agents/worktrees/") {
+		if !strings.Contains(string(data), "/.agents/cache") {
 			_ = os.WriteFile(gitignorePath, append(data, []byte(ignoreBlock)...), 0644)
 		}
 	} else {
 		_ = os.WriteFile(gitignorePath, []byte(ignoreBlock), 0644)
 	}
+
+	// 9b. Agent harness hooks: redirect raw build/test/git commands to MonoFlow.
+	_ = InstallAgentHooks(absTarget)
 
 	// 10. Install Git Shield Hooks into the repository's effective hooks directory
 	if _, err := InstallShieldHooks(absTarget); err != nil {
@@ -237,4 +241,83 @@ func HasShieldHooks(dir string) bool {
 		}
 	}
 	return true
+}
+
+// InstallAgentHooks installs harness-level hooks (Claude Code PreToolUse in
+// .claude/settings.json, an opencode plugin) that deny raw build/test/git commands and
+// name the MonoFlow replacement. Existing Claude settings are merged, never overwritten.
+func InstallAgentHooks(repoRoot string) error {
+	settingsPath := filepath.Join(repoRoot, ".claude", "settings.json")
+	settings := map[string]any{}
+	if data, err := os.ReadFile(settingsPath); err == nil {
+		if err := json.Unmarshal(data, &settings); err != nil {
+			return fmt.Errorf("cannot merge into %s: %w", settingsPath, err)
+		}
+	}
+	hooks, _ := settings["hooks"].(map[string]any)
+	if hooks == nil {
+		hooks = map[string]any{}
+	}
+	pre, _ := hooks["PreToolUse"].([]any)
+	installed := false
+	for _, h := range pre {
+		if b, _ := json.Marshal(h); strings.Contains(string(b), "hook pretooluse") {
+			installed = true
+		}
+	}
+	if !installed {
+		hooks["PreToolUse"] = append(pre, agenthooks.ClaudeSettingsHook())
+		settings["hooks"] = hooks
+		data, _ := json.MarshalIndent(settings, "", "  ")
+		_ = os.MkdirAll(filepath.Dir(settingsPath), 0755)
+		if err := os.WriteFile(settingsPath, append(data, '\n'), 0644); err != nil {
+			return err
+		}
+	}
+
+	pluginPath := filepath.Join(repoRoot, ".opencode", "plugin", "monoflow.js")
+	if _, err := os.Stat(pluginPath); os.IsNotExist(err) {
+		_ = os.MkdirAll(filepath.Dir(pluginPath), 0755)
+		return os.WriteFile(pluginPath, []byte(agenthooks.OpencodePlugin), 0644)
+	}
+	return nil
+}
+
+const (
+	sectionStart = "<!-- monoflow:start (managed by monoflow init) -->"
+	sectionEnd   = "<!-- monoflow:end -->"
+)
+
+// ClaudePointer is merged into an existing CLAUDE.md (Claude Code reads CLAUDE.md, not AGENTS.md).
+const ClaudePointer = `## MonoFlow
+This monorepo is governed by MonoFlow; follow the MonoFlow section of AGENTS.md.
+Use ` + "`.agents/bin/monoflow verify --affected`" + ` for checks and ` + "`monoflow commit` / `monoflow pr create`" + ` instead of raw git/gh.
+`
+
+// mergeSection inserts or replaces the MonoFlow-managed section of a markdown file,
+// leaving everything else untouched. When create is false a missing file is left absent.
+func mergeSection(path, content string, create bool) error {
+	block := sectionStart + "\n" + strings.TrimSpace(content) + "\n" + sectionEnd + "\n"
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if !create {
+			return nil
+		}
+		return os.WriteFile(path, []byte(block), 0644)
+	}
+	s := string(data)
+	if i := strings.Index(s, sectionStart); i >= 0 {
+		if j := strings.Index(s[i:], sectionEnd); j >= 0 {
+			end := i + j + len(sectionEnd)
+			if end < len(s) && s[end] == '\n' {
+				end++
+			}
+			return os.WriteFile(path, []byte(s[:i]+block+s[end:]), 0644)
+		}
+	}
+	// Legacy installs wrote the bare template as the whole file: replace it.
+	if strings.HasPrefix(strings.TrimSpace(s), "# MonoFlow") {
+		return os.WriteFile(path, []byte(block), 0644)
+	}
+	return os.WriteFile(path, []byte(strings.TrimRight(s, "\n")+"\n\n"+block), 0644)
 }

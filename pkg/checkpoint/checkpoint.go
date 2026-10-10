@@ -3,6 +3,7 @@ package checkpoint
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/antigravity/monoflow/pkg/runtimestate"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -52,9 +53,10 @@ func (m *Manager) Save(message string) (*Checkpoint, error) {
 
 	// 1. Stage modified & untracked files temporarily into the index
 	// We use git add -A to ensure index reflects all working tree changes
-	if _, err := m.runGit("add", "-A"); err != nil {
+	if _, err := m.runGit(runtimestate.AddArgs()...); err != nil {
 		return nil, fmt.Errorf("failed to stage changes for checkpoint: %w", err)
 	}
+	_, _ = m.runGit(runtimestate.UnstageArgs(m.RootDir)...)
 
 	// 2. Write tree object (pure git plumbing)
 	treeHash, err := m.runGit("write-tree")
@@ -90,18 +92,24 @@ func (m *Manager) Save(message string) (*Checkpoint, error) {
 
 // Revert restores the working directory and index to the specified checkpoint in ~20ms.
 func (m *Manager) Revert(checkpointID string) error {
+	_, err := m.RevertCheckpoint(checkpointID)
+	return err
+}
+
+// RevertCheckpoint restores a checkpoint and returns which one it restored.
+func (m *Manager) RevertCheckpoint(checkpointID string) (*Checkpoint, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	history, err := m.loadHistory()
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	var target *Checkpoint
 	if checkpointID == "" || checkpointID == "latest" {
 		if len(history) == 0 {
-			return fmt.Errorf("no checkpoints available to revert")
+			return nil, fmt.Errorf("no checkpoints available to revert")
 		}
 		target = &history[len(history)-1]
 	} else {
@@ -114,15 +122,15 @@ func (m *Manager) Revert(checkpointID string) error {
 	}
 
 	if target == nil {
-		return fmt.Errorf("checkpoint '%s' not found", checkpointID)
+		return nil, fmt.Errorf("checkpoint '%s' not found", checkpointID)
 	}
 
 	// Restore using git read-tree -u --reset <TreeHash>
 	if _, err := m.runGit("read-tree", "-u", "--reset", target.TreeHash); err != nil {
-		return fmt.Errorf("git read-tree reset failed: %w", err)
+		return nil, fmt.Errorf("git read-tree reset failed: %w", err)
 	}
 
-	return nil
+	return target, nil
 }
 
 // List returns all recorded checkpoints.

@@ -11,6 +11,7 @@ import (
 
 	"github.com/antigravity/monoflow/pkg/cache"
 	"github.com/antigravity/monoflow/pkg/graph"
+	"github.com/antigravity/monoflow/pkg/release"
 )
 
 // VerifyOptions configures the inner loop runner.
@@ -21,6 +22,10 @@ type VerifyOptions struct {
 	SpecificFile string // for fine-grained TIA
 	Mode         string // "fast" (typecheck/lint), "test", "lint", "all"
 	NoCache      bool
+	// Strict disables baseline comparison: by default a failure that also happens on the
+	// merge-base (pre-existing in the repo, not caused by this change) does not block.
+	Strict  bool
+	BaseRef string // base for the baseline (default: origin/main, main, origin/master, master)
 }
 
 // TargetResult holds the result of verifying a single package.
@@ -32,6 +37,8 @@ type TargetResult struct {
 	Cached      bool              `json:"cached,omitempty"`
 	Errors      []DiagnosticError `json:"errors,omitempty"`
 	Quarantined []string          `json:"quarantined,omitempty"`
+	// Preexisting holds failures that also occur on the merge-base: reported, not blocking.
+	Preexisting []DiagnosticError `json:"preexisting,omitempty"`
 	CommandRun  string            `json:"command_run,omitempty"`
 }
 
@@ -45,6 +52,7 @@ type SuiteResult struct {
 	CachedTargets    int            `json:"cached_targets"`
 	AffectedPackages []string       `json:"affected_packages"`
 	Results          []TargetResult `json:"results"`
+	Hint             string         `json:"hint,omitempty"`
 }
 
 // Runner executes verification tasks with maximum parallelism, caching, and minimal latency.
@@ -52,6 +60,7 @@ type Runner struct {
 	RootDir    string
 	Quarantine *QuarantineManager
 	cacheMgr   *cache.Manager
+	graph      *graph.DependencyGraph
 }
 
 // NewRunner creates an inner-loop runner.
@@ -78,45 +87,27 @@ func (r *Runner) VerifyTarget(pkg *graph.PackageNode, opt VerifyOptions) TargetR
 		Errors:   make([]DiagnosticError, 0),
 	}
 
-	// 1. Determine command based on stage and mode:
-	// - Mode "test" or Stage "outer": prioritize TestCmd
-	// - Mode "lint": prioritize LintCmd
-	// - Default (inner loop fast): prioritize TypecheckCmd -> LintCmd -> TestCmd
-	var cmdStr string
-	if opt.Mode == "test" || opt.Stage == "outer" {
-		cmdStr = pkg.TestCmd
-		if cmdStr == "" {
-			cmdStr = pkg.TypecheckCmd
-		}
-		if cmdStr == "" {
-			cmdStr = pkg.LintCmd
-		}
-	} else if opt.Mode == "lint" {
-		cmdStr = pkg.LintCmd
-		if cmdStr == "" {
-			cmdStr = pkg.TypecheckCmd
-		}
-	} else {
-		// Fast inner loop
-		cmdStr = pkg.TypecheckCmd
-		if cmdStr == "" {
-			cmdStr = pkg.TestCmd
-		}
-		if cmdStr == "" {
-			cmdStr = pkg.LintCmd
-		}
-	}
-
-	if cmdStr == "" {
+	// 1. Determine the checks to run (see checkCommands).
+	cmds := checkCommands(pkg, opt)
+	if len(cmds) == 0 {
 		res.DurationMs = float64(time.Since(start).Microseconds()) / 1000.0
 		return res
 	}
+	cmdStr := strings.Join(cmds, " && ")
 
 	res.CommandRun = cmdStr
 	absPkgPath := filepath.Join(r.RootDir, pkg.Path)
 	if _, err := os.Stat(absPkgPath); os.IsNotExist(err) {
+		// An affected package that is not projected into this (sparse) worktree cannot be
+		// vouched for; reporting it as passed let breakages reach remote CI.
 		res.DurationMs = float64(time.Since(start).Microseconds()) / 1000.0
-		res.Status = "passed"
+		res.Status = "failed"
+		res.Errors = append(res.Errors, DiagnosticError{
+			File:    pkg.Path,
+			Line:    1,
+			Code:    "package_not_projected",
+			Message: fmt.Sprintf("affected package %s is not present in this worktree; add it with 'monoflow subset add %s'", pkg.Name, pkg.Name),
+		})
 		return res
 	}
 
@@ -124,7 +115,7 @@ func (r *Runner) VerifyTarget(pkg *graph.PackageNode, opt VerifyOptions) TargetR
 	var cacheKey string
 	if r.cacheMgr != nil {
 		modeTag := opt.Stage + ":" + opt.Mode
-		cacheKey, _ = r.cacheMgr.ComputePackageKey(pkg, nil, cmdStr, modeTag)
+		cacheKey, _ = r.cacheMgr.ComputePackageKey(pkg, r.upstreamKeys(pkg), cmdStr, modeTag)
 		if !opt.NoCache && cacheKey != "" {
 			if rec, hit := r.cacheMgr.GetVerification(cacheKey); hit && rec.Status == "passed" {
 				res.Status = "passed"
@@ -135,11 +126,20 @@ func (r *Runner) VerifyTarget(pkg *graph.PackageNode, opt VerifyOptions) TargetR
 		}
 	}
 
-	// 3. Cache Miss: Execute command via shell
-	cmd := exec.Command("sh", "-c", cmdStr)
-	cmd.Dir = absPkgPath
-
-	out, err := cmd.CombinedOutput()
+	// 3. Cache Miss: run each check in order, stopping at the first failure.
+	var out []byte
+	var err error
+	for _, c := range cmds {
+		cmd := exec.Command("sh", "-c", c)
+		cmd.Dir = absPkgPath
+		var o []byte
+		o, err = cmd.CombinedOutput()
+		out = append(out, o...)
+		if err != nil {
+			res.CommandRun = c
+			break
+		}
+	}
 	durationMs := float64(time.Since(start).Microseconds()) / 1000.0
 	res.DurationMs = durationMs
 
@@ -175,7 +175,7 @@ func (r *Runner) VerifyTarget(pkg *graph.PackageNode, opt VerifyOptions) TargetR
 				File:    pkg.Path,
 				Line:    1,
 				Code:    "execution_failure",
-				Message: strings.TrimSpace(StripANSI(rawOutput)),
+				Message: CompactFailure(StripANSI(rawOutput)),
 			})
 		}
 	} else {
@@ -197,9 +197,58 @@ func (r *Runner) VerifyTarget(pkg *graph.PackageNode, opt VerifyOptions) TargetR
 	return res
 }
 
+// checkCommands returns the commands for the requested checks, in run order.
+// The default (and "all") runs typecheck, lint and tests so the inner loop catches
+// everything remote CI would; --typecheck/--lint/--test narrow it to a single check.
+func checkCommands(pkg *graph.PackageNode, opt VerifyOptions) []string {
+	first := func(cands ...string) []string {
+		for _, c := range cands {
+			if c != "" {
+				return []string{c}
+			}
+		}
+		return nil
+	}
+	switch {
+	case opt.Mode == "test":
+		return first(pkg.TestCmd, pkg.TypecheckCmd, pkg.LintCmd)
+	case opt.Mode == "lint":
+		return first(pkg.LintCmd, pkg.TypecheckCmd)
+	case opt.Mode == "fast":
+		return first(pkg.TypecheckCmd, pkg.LintCmd, pkg.TestCmd)
+	}
+	var cmds []string
+	seen := map[string]bool{}
+	for _, c := range []string{pkg.TypecheckCmd, pkg.LintCmd, pkg.TestCmd} {
+		if c != "" && !seen[c] {
+			seen[c] = true
+			cmds = append(cmds, c)
+		}
+	}
+	return cmds
+}
+
+// SetGraph lets cache keys incorporate upstream dependency sources.
+func (r *Runner) SetGraph(g *graph.DependencyGraph) {
+	r.graph = g
+}
+
+// upstreamKeys hashes the sources of every transitive upstream dependency so a change
+// in a dependency invalidates cached results of its dependents.
+func (r *Runner) upstreamKeys(pkg *graph.PackageNode) map[string]string {
+	if r.graph == nil || r.cacheMgr == nil {
+		return nil
+	}
+	return r.cacheMgr.UpstreamKeys(r.graph, pkg)
+}
+
 // VerifyAffected runs verification in parallel for all affected packages.
 func (r *Runner) VerifyAffected(g *graph.DependencyGraph, changedFiles []string, opt VerifyOptions) SuiteResult {
 	start := time.Now()
+	if r.graph == nil {
+		r.graph = g
+	}
+	_ = release.EnsurePinned(r.RootDir, g)
 	affected := g.ComputeAffected(changedFiles)
 
 	if len(affected.AllAffected) == 0 {
@@ -235,6 +284,10 @@ func (r *Runner) VerifyAffected(g *graph.DependencyGraph, changedFiles []string,
 	}
 
 	wg.Wait()
+
+	if !opt.Strict {
+		r.classifyPreexisting(g, results, opt)
+	}
 
 	totalDur := float64(time.Since(start).Microseconds()) / 1000.0
 	passedCount := 0

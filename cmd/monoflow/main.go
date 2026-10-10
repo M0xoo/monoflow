@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/antigravity/monoflow/pkg/agenthooks"
 	"github.com/antigravity/monoflow/pkg/cache"
 	"github.com/antigravity/monoflow/pkg/checkpoint"
 	"github.com/antigravity/monoflow/pkg/cihealth"
@@ -23,7 +24,9 @@ import (
 	"github.com/antigravity/monoflow/pkg/pr"
 	"github.com/antigravity/monoflow/pkg/proof"
 	"github.com/antigravity/monoflow/pkg/queue"
+	"github.com/antigravity/monoflow/pkg/release"
 	"github.com/antigravity/monoflow/pkg/review"
+	"github.com/antigravity/monoflow/pkg/runtimestate"
 	"github.com/antigravity/monoflow/pkg/scenario"
 	"github.com/antigravity/monoflow/pkg/subset"
 	"github.com/antigravity/monoflow/pkg/task"
@@ -50,7 +53,10 @@ func main() {
 		}
 		os.Exit(0)
 	}
-	if len(os.Args) > 2 && isHelpArg(os.Args[2]) && printCommandUsage(cmd) {
+	// A help flag anywhere after the command must never execute it: agents probe
+	// `monoflow pr create --help` and would otherwise create PRs, branches or worktrees.
+	if len(os.Args) > 2 && hasHelpArg(os.Args[2:]) {
+		printCommandUsage(cmd)
 		os.Exit(0)
 	}
 
@@ -137,6 +143,9 @@ func main() {
 	case "cache":
 		handleCache(rootDir)
 
+	case "hook":
+		handleHook()
+
 	default:
 		fmt.Printf("Unknown command: %s\n\n", cmd)
 		printUsage()
@@ -152,7 +161,7 @@ func usageText(w io.Writer) {
 	fmt.Fprintln(w, `MonoFlow — The Agent-Native Monorepo & Ultra-Fast CI Engine
 
 Usage:
-  monoflow init [dir]                 Install MonoFlow into an existing or new repo
+  monoflow init [dir] [--setup-gh-actions]  Install MonoFlow (+ economical affected-only GitHub Actions CI)
   monoflow clone <url> [dest] --packages=<p1,p2> Clone subset of monorepo packages (< 1s partial clone)
   monoflow subset [set|add|remove|update|deps|check|status|reset] Manage package subset projection & dependency health
   monoflow graph [query|impact]       Query upstream/downstream dependencies & impact
@@ -177,11 +186,83 @@ Usage:
   monoflow pr [create|list|view|status|review|test|local|merge] Full agent-native PR suite with affected packages
   monoflow quarantine [list|add]      Manage flaky test quarantine
   monoflow version [list|bump|apply|check] SemVer package versioning, changesets & cascade
+  monoflow hook [pretooluse|check]    Agent harness hook: redirect raw build/test/git commands to MonoFlow
   monoflow help [command]             Show this help (also --help, -h)`)
 }
 
 func isHelpArg(arg string) bool {
 	return arg == "--help" || arg == "-h" || arg == "help"
+}
+
+// hasHelpArg reports whether any argument is a help flag. The bare word "help" only
+// counts in subcommand position so it can still be used as a value (e.g. a PR title).
+func hasHelpArg(args []string) bool {
+	for i, a := range args {
+		if a == "--help" || a == "-h" || (a == "help" && i == 0) {
+			return true
+		}
+	}
+	return false
+}
+
+// commandDetails documents subcommands and flags so agents can discover them via --help
+// instead of guessing (guessing previously executed side-effecting commands).
+var commandDetails = map[string]string{
+	"graph": `  graph query <package|path>          Upstream deps, direct & transitive dependents (name or directory path)
+  graph impact <file>                 Owning package and dependents affected by editing <file>
+  graph affected                      Packages affected by the current uncommitted changes`,
+	"checkpoint": `  checkpoint save "<hypothesis>"      Snapshot the working tree (not git history)
+  checkpoint revert [id]              Restore the latest (or given) checkpoint
+  checkpoint list                     List checkpoints`,
+	"verify": `  verify --affected                   Test/lint/typecheck packages affected by your changes (+ dependents)
+  verify --package=<p> | --all        Verify one package / every package
+  verify --test | --lint | --typecheck | --all-checks   Restrict or widen the check kinds
+  verify --no-cache | --force         Ignore cached results
+  verify --base=<ref>                 Changes since the merge-base with <ref> (CI: the PR base)
+  verify --strict                     Also block on failures that pre-exist on the base branch
+  verify --proof=<task-id>            Verify a Proof-of-Work receipt`,
+	"worktree": `  worktree create <agent-id> --packages=<p1,p2> [--deps=<strategy>] [--isolated-deps]
+                                      Isolated worktree on branch agent/<agent-id>
+  worktree list                       List registered worktrees
+  worktree focus|update <agent-id> --packages=<...>   Change the projected packages
+  worktree sync --to=<agent> --from=<agent>   AST-merge another agent's changes into a worktree
+                                      (to update your branch from main, run 'monoflow sync' inside it)
+  worktree finish <agent-id> [--force] Remove the worktree and its registry entry
+  worktree isolate <agent-id>         Materialize per-worktree dependencies`,
+	"pr": `  pr create --title="<t>" [--body="<b>"] [--base=<b>] [--head=<b>] [--draft] [--stack] [--no-push]
+                                      Gate-checked PR (blocked unless DoD proof is VERIFIED)
+  pr list [--state=<s>] [--limit=<n>] List PRs
+  pr view <id> | pr status [id] [--json]   Show a PR / bridged local+remote status
+  pr review <id> --approve|--reject|--request-changes [--comment="<c>"]
+  pr test <id> [--base=<b>]           Hot-mount delta test of a PR
+  pr local <id> [--worktree] [--deps=<s>]  Check out a PR's affected packages locally
+  pr merge <id> [--strategy=squash|merge|rebase] [--queue] [--delete-branch]`,
+	"push": `  push [remote] [branch] [--remote=<r>] [--branch=<b>] [--no-watch]
+                                      Push the current branch (main/master blocked) and start the CI watcher`,
+	"events": `  events unread                       Unread events (CI results, regressions, PRs)
+  events list                         All events
+  events ack <id|all>                 Mark events read
+  events watch <sha> [--branch=<b>] [--timeout=<d>]   Background CI watcher (do not poll)`,
+	"outer": `  outer start [--commit=<sha>] [--branch=<b>] [--push] [--revert] [--async]
+  outer status | outer list | outer wait [--timeout=<d>]`,
+	"version": `  version list | check                Versions and range compatibility of every internal edge
+  version edges                       Every in-repo dependency: mode (source = live code, pinned = release) and range
+  version suggest [pkg] [--base=<ref>] Required bump from the exported-API diff (removed/changed = major)
+  version bump <pkg> <patch|minor|major> [--cascade]   Bump; reports each consumer's impact, never rewrites them implicitly
+  version release <pkg>               Tag <pkg>@<version>; notify consumers (compatible / breaking + impact)
+  version pin <consumer> <dep> [--version=<v>]   Consume a release: isolated from later changes to <dep>
+  version unpin <consumer> <dep>      Back to the live code
+  version upgrades [consumer]         Newer releases for pinned edges, with the API changes the consumer uses
+  version upgrade <consumer> <dep> [--to=<v>]    Move the pin and run the consumer's verify`,
+	"commit": `  commit -m "<msg>"                   Verified commit of all changes in the current worktree`,
+	"cache":  `  cache status | cache clean | cache serve [--port=<n>] [--dir=<d>] [--token=<t>]`,
+	"task":   `  task check | task slice | task prove [task-id] | task changeset`,
+	"sync": `  sync                                On an agent/feature branch: rebase onto origin/<base> (aborts cleanly on conflict)
+                                      On the base branch: fast-forward from the remote
+  sync --merge                        Merge the base instead (resolve conflicts once, then 'monoflow commit')
+  sync [remote] [branch] [--rebase] [--autostash]   Explicit remote/branch`,
+	"branch": `  branch                              List branches
+  branch <name> [-c|--create]         Switch to (or create) a branch`,
 }
 
 // printCommandUsage prints the usage lines for a single top-level command and reports
@@ -202,6 +283,10 @@ func printCommandUsage(cmd string) bool {
 	}
 	fmt.Println("Usage:")
 	fmt.Println(strings.Join(lines, "\n"))
+	if d, ok := commandDetails[cmd]; ok {
+		fmt.Println("\nSubcommands & flags:")
+		fmt.Println(d)
+	}
 	return true
 }
 
@@ -216,8 +301,13 @@ func findRepoRoot() (string, error) {
 
 func handleInit(rootDir string) {
 	targetDir := "."
-	if len(os.Args) > 2 {
-		targetDir = os.Args[2]
+	setupGH := false
+	for _, a := range os.Args[2:] {
+		if a == "--setup-gh-actions" {
+			setupGH = true
+		} else if !strings.HasPrefix(a, "-") {
+			targetDir = a
+		}
 	}
 
 	selfBin, _ := os.Executable()
@@ -225,6 +315,13 @@ func handleInit(rootDir string) {
 	if err != nil {
 		fmt.Printf("Error initializing repo: %v\n", err)
 		os.Exit(1)
+	}
+	workflowPath := ""
+	if setupGH {
+		if workflowPath, err = initialize.WriteGitHubWorkflow(res.RepoRoot); err != nil {
+			fmt.Printf("Error writing GitHub Actions workflow: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	data, _ := json.MarshalIndent(map[string]any{
@@ -235,6 +332,7 @@ func handleInit(rootDir string) {
 		"config_path":         res.ConfigPath,
 		"rule_file":           filepath.Join(res.RepoRoot, ".agents", "rules", "agentic-monorepo.md"),
 		"skill_file":          filepath.Join(res.RepoRoot, ".agents", "skills", "monoflow", "SKILL.md"),
+		"workflow_file":       workflowPath,
 	}, "", "  ")
 
 	fmt.Println(string(data))
@@ -299,8 +397,10 @@ func handleGraph(rootDir string) {
 			"path":                  pkg.Path,
 			"language":              pkg.Language,
 			"upstream_dependencies": g.GetUpstream(pkg.Name),
+			"pinned_dependencies":   pkg.PinnedDependencies,
 			"downstream_dependents": g.GetDownstream(pkg.Name),
 			"transitive_dependents": g.GetTransitiveDownstream(pkg.Name),
+			"pinned_dependents":     pinnedDependents(g, pkg.Name),
 		}, "", "  ")
 		fmt.Println(string(data))
 
@@ -320,6 +420,8 @@ func handleGraph(rootDir string) {
 			"owning_package":        pkg.Name,
 			"direct_dependents":     g.GetDownstream(pkg.Name),
 			"transitive_dependents": g.GetTransitiveDownstream(pkg.Name),
+			"pinned_dependents":     pinnedDependents(g, pkg.Name),
+			"note":                  "pinned dependents build against a release of this package: unaffected now, notified on its next release",
 		}, "", "  ")
 		fmt.Println(string(data))
 
@@ -368,7 +470,7 @@ func handleCheckpoint(rootDir string) {
 			targetID = os.Args[3]
 		}
 		start := time.Now()
-		err := mgr.Revert(targetID)
+		cp, err := mgr.RevertCheckpoint(targetID)
 		durMs := float64(time.Since(start).Microseconds()) / 1000.0
 		if err != nil {
 			fmt.Printf(`{"error": "%s"}`+"\n", err)
@@ -376,7 +478,9 @@ func handleCheckpoint(rootDir string) {
 		}
 		data, _ := json.MarshalIndent(map[string]any{
 			"status":      "reverted",
-			"target":      targetID,
+			"checkpoint":  cp.ID,
+			"message":     cp.Message,
+			"files":       cp.Files,
 			"duration_ms": durMs,
 		}, "", "  ")
 		fmt.Println(string(data))
@@ -392,6 +496,7 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 	opts := verify.VerifyOptions{}
 	targetPkg := ""
 	verifyAll := false
+	verifyBase := ""
 
 	// Check flags
 	for _, arg := range os.Args[2:] {
@@ -415,6 +520,11 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 			opts.Mode = "lint"
 		} else if arg == "--all-checks" {
 			opts.Mode = "all"
+		} else if strings.HasPrefix(arg, "--base=") {
+			verifyBase = strings.TrimPrefix(arg, "--base=")
+			opts.BaseRef = verifyBase
+		} else if arg == "--strict" {
+			opts.Strict = true
 		}
 	}
 
@@ -425,6 +535,7 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 	}
 
 	runner := verify.NewRunner(rootDir)
+	runner.SetGraph(g)
 	start := time.Now()
 
 	var res verify.SuiteResult
@@ -494,26 +605,43 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 		}
 	} else {
 		changedFiles := getGitChangedFiles(rootDir)
+		if verifyBase != "" {
+			changedFiles = changedFilesSince(rootDir, verifyBase)
+		}
 		res = runner.VerifyAffected(g, changedFiles, opts)
 		res.DurationMs = float64(time.Since(start).Microseconds()) / 1000.0
+	}
+
+	if res.TotalTargets == 0 {
+		res.Hint = "No package is affected by the current changes (docs/config-only or no changes): nothing to verify."
+		if entries, err := os.ReadDir(filepath.Join(rootDir, ".agents", "worktrees")); err == nil {
+			var ids []string
+			for _, e := range entries {
+				if e.IsDir() {
+					ids = append(ids, e.Name())
+				}
+			}
+			if len(ids) > 0 {
+				res.Hint = fmt.Sprintf("No changes in %s. Agent work lives in worktrees (%s): run verify inside .agents/worktrees/<id>.", rootDir, strings.Join(ids, ", "))
+			}
+		}
 	}
 
 	data, _ := json.MarshalIndent(res, "", "  ")
 	fmt.Println(string(data))
 
-	cb := guard.NewCircuitBreaker(rootDir, 3)
+	cb := guard.NewCircuitBreaker(rootDir, 5)
 	targetKey := strings.Join(res.AffectedPackages, ",")
 
 	if res.Status == "failed" {
 		st, tripped, _ := cb.RecordFailure(rootDir, "active_task", targetKey)
 		if tripped {
 			circuitMsg, _ := json.MarshalIndent(map[string]any{
-				"circuit_breaker":   "TRIPPED",
-				"attempts":          st.Attempts,
-				"max_attempts":      3,
-				"action":            "Auto-reverted working tree to latest green checkpoint to prevent hallucination loop",
-				"escalate_to_human": true,
-				"reason":            fmt.Sprintf("Target '%s' failed %d consecutive times without passing", targetKey, st.Attempts),
+				"circuit_breaker": "TRIPPED",
+				"attempts":        st.Attempts,
+				"snapshot":        st.SnapshotID,
+				"advice":          "Same targets failed repeatedly. Step back: re-read the first error, check 'monoflow graph impact <file>', or 'monoflow checkpoint list' / 'checkpoint revert <id>' to restart from a known state. Your current work is saved as the snapshot above and was NOT reverted.",
+				"reason":          fmt.Sprintf("Target '%s' failed %d consecutive times without passing", targetKey, st.Attempts),
 			}, "", "  ")
 			fmt.Println(string(circuitMsg))
 		}
@@ -906,7 +1034,6 @@ func handlePR(rootDir string) {
 	}
 }
 
-
 func handleQuarantine(rootDir string) {
 	qm := verify.NewQuarantineManager(rootDir)
 	if len(os.Args) < 3 || os.Args[2] == "list" {
@@ -938,7 +1065,12 @@ func handleWorktree(rootDir string) {
 			os.Exit(1)
 		}
 		agentID := os.Args[3]
+		if !worktree.ValidAgentID(agentID) {
+			fmt.Printf(`{"error": "invalid agent-id %q (letters, digits, . _ -): usage: monoflow worktree create <agent-id> --packages=<p1,p2>"}`+"\n", agentID)
+			os.Exit(1)
+		}
 		isolated := false
+		baseBranch := ""
 		var pkgs []string
 		focusedPkg := ""
 		strategy := subset.DepStrategySource
@@ -960,11 +1092,14 @@ func handleWorktree(rootDir string) {
 			} else if strings.HasPrefix(arg, "--include-deps=") {
 				val := strings.TrimPrefix(arg, "--include-deps=")
 				includeDeps = val != "false" && val != "0"
+			} else if strings.HasPrefix(arg, "--base=") {
+				baseBranch = strings.TrimPrefix(arg, "--base=")
 			}
 		}
 
 		start := time.Now()
 		info, err := mgr.CreateWithOpts(agentID, worktree.CreateOptions{
+			BaseBranch:     baseBranch,
 			IsolatedDeps:   isolated,
 			FocusedPackage: focusedPkg,
 			Packages:       pkgs,
@@ -977,16 +1112,17 @@ func handleWorktree(rootDir string) {
 			os.Exit(1)
 		}
 		resMap := map[string]any{
-			"status":           "created",
-			"agent_id":         info.AgentID,
-			"path":             info.Path,
-			"head_sha":         info.HeadSHA,
-			"symlinks_count":   info.SymlinksCount,
-			"isolated":         info.Isolated,
-			"isolation_method": info.IsolationMethod,
-			"is_sparse":        info.IsSparse,
-			"duration_ms":      durMs,
-			"verdict":          "Virtual worktree provisioned (< 60ms shared, or ~400ms CoW cloned)",
+			"status":         "created",
+			"agent_id":       info.AgentID,
+			"path":           info.Path,
+			"head_sha":       info.HeadSHA,
+			"symlinks_count": info.SymlinksCount,
+			"isolation":      "own git worktree on branch " + info.Branch + " (packages projected via sparse checkout)",
+			"deps_isolated":  info.Isolated,
+			"deps_isolation": info.IsolationMethod,
+			"is_sparse":      info.IsSparse,
+			"duration_ms":    durMs,
+			"verdict":        "Virtual worktree provisioned (< 60ms shared, or ~400ms CoW cloned)",
 		}
 		if info.FocusedPackage != "" {
 			resMap["focused_package"] = info.FocusedPackage
@@ -1148,8 +1284,14 @@ func handleWorktree(rootDir string) {
 			os.Exit(1)
 		}
 		agentID := os.Args[3]
+		force := false
+		for _, a := range os.Args[4:] {
+			if a == "--force" {
+				force = true
+			}
+		}
 		start := time.Now()
-		err := mgr.Finish(agentID)
+		err := mgr.FinishSafe(agentID, force)
 		durMs := float64(time.Since(start).Microseconds()) / 1000.0
 		if err != nil {
 			fmt.Printf(`{"error": "%s"}`+"\n", err)
@@ -1383,6 +1525,7 @@ func handleCIHealth(rootDir string) {
 }
 
 func handleCommit(rootDir string) {
+	refuseSharedRoot(rootDir, "commit")
 	msg := "agent checkpoint commit"
 	for i, arg := range os.Args[2:] {
 		if arg == "-m" && i+1 < len(os.Args[2:]) {
@@ -1562,30 +1705,18 @@ func handlePush(rootDir string) {
 		os.Exit(1)
 	}
 
-	// 1b. Pre-push Concurrency Data Race Gate (< 1.8s)
-	if _, err := os.Stat(filepath.Join(rootDir, "go.mod")); err == nil {
-		cmdRace := exec.Command("go", "test", "-race", "-short", "./pkg/...")
-		cmdRace.Dir = rootDir
-		if raceOut, raceErr := cmdRace.CombinedOutput(); raceErr != nil {
-			data, _ := json.MarshalIndent(map[string]any{
-				"status":  "blocked",
-				"verdict": "Pre-push race detector gate failed: concurrency data race detected in tests. Cannot push racy code to remote.",
-				"output":  strings.TrimSpace(string(raceOut)),
-			}, "", "  ")
-			fmt.Println(string(data))
-			os.Exit(1)
-		}
-	}
-
 	remote := "origin"
 	branch := ""
 	noWatch := false
 	forceDirect := false
 	var positional []string
 
+	skipVerify := false
 	for _, arg := range os.Args[2:] {
 		if arg == "--no-watch" {
 			noWatch = true
+		} else if arg == "--skip-verify" {
+			skipVerify = true
 		} else if arg == "--force" || arg == "--direct" {
 			forceDirect = true
 		} else if strings.HasPrefix(arg, "--remote=") {
@@ -1631,11 +1762,25 @@ func handlePush(rootDir string) {
 		headSHA = strings.TrimSpace(string(out))
 	}
 
+	// 1d. Remote CI protection: everything remote CI would run on the affected packages
+	// (typecheck, lint, tests incl. dependents) must pass locally before the push.
+	if !skipVerify {
+		if res, base, ok := verifyBranchAgainstBase(rootDir); ok && res.Status != "passed" {
+			data, _ := json.MarshalIndent(map[string]any{
+				"status":  "blocked",
+				"verdict": fmt.Sprintf("Pre-push verification failed for %d/%d affected packages (changes vs %s). Remote CI would fail; fix locally first.", res.FailedTargets, res.TotalTargets, base),
+				"results": failedResults(res),
+			}, "", "  ")
+			fmt.Println(string(data))
+			os.Exit(1)
+		}
+	}
+
 	// 2. Perform push
 	start := time.Now()
-	pushArgs := []string{"push", remote, branch}
+	pushArgs := []string{"push", "-u", remote, branch}
 	if forceDirect && branch != "main" && branch != "master" {
-		pushArgs = []string{"push", "--force-with-lease", remote, branch}
+		pushArgs = []string{"push", "-u", "--force-with-lease", remote, branch}
 	}
 	cmdPush := exec.Command("git", pushArgs...)
 	cmdPush.Dir = rootDir
@@ -1661,6 +1806,7 @@ func handlePush(rootDir string) {
 		job, err := cw.StartWatch(events.WatchOptions{
 			CommitSHA: headSHA,
 			Branch:    branch,
+			Remote:    remote,
 			Async:     true, // Detach in background!
 		})
 		if err == nil {
@@ -1682,11 +1828,14 @@ func handleSync(rootDir string) {
 	branch := ""
 	rebase := false
 	autostash := false
+	mergeMode := false
 
 	var positional []string
 	for _, arg := range os.Args[2:] {
 		if arg == "--rebase" {
 			rebase = true
+		} else if arg == "--merge" {
+			mergeMode = true
 		} else if arg == "--autostash" {
 			autostash = true
 		} else if strings.HasPrefix(arg, "--remote=") {
@@ -1705,13 +1854,24 @@ func handleSync(rootDir string) {
 		branch = positional[1]
 	}
 
+	current := "main"
+	if out, err := exec.Command("git", "-C", rootDir, "rev-parse", "--abbrev-ref", "HEAD").Output(); err == nil {
+		current = strings.TrimSpace(string(out))
+	}
 	if branch == "" {
-		cmdRev := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
-		cmdRev.Dir = rootDir
-		if out, err := cmdRev.CombinedOutput(); err == nil {
-			branch = strings.TrimSpace(string(out))
-		} else {
-			branch = "main"
+		// On a feature/agent branch "sync" means: bring my branch up to date with the base
+		// branch (rebase). On the base branch itself it fast-forwards from the remote.
+		base := "main"
+		if out, err := exec.Command("git", "-C", rootDir, "symbolic-ref", "--short", "refs/remotes/"+remote+"/HEAD").Output(); err == nil {
+			base = strings.TrimPrefix(strings.TrimSpace(string(out)), remote+"/")
+		} else if exec.Command("git", "-C", rootDir, "rev-parse", "--verify", "--quiet", "refs/remotes/"+remote+"/master").Run() == nil &&
+			exec.Command("git", "-C", rootDir, "rev-parse", "--verify", "--quiet", "refs/remotes/"+remote+"/main").Run() != nil {
+			base = "master"
+		}
+		branch = base
+		if current != base && !mergeMode {
+			rebase = true
+			autostash = true
 		}
 	}
 
@@ -1727,7 +1887,10 @@ func handleSync(rootDir string) {
 	// 2. Fast-forward or Rebase
 	var mergeArgs []string
 	strategy := "fast-forward"
-	if rebase {
+	if mergeMode {
+		strategy = "merge"
+		mergeArgs = []string{"merge", "--no-edit", "FETCH_HEAD"}
+	} else if rebase {
 		strategy = "rebase"
 		mergeArgs = []string{"rebase"}
 		if autostash {
@@ -1741,7 +1904,26 @@ func handleSync(rootDir string) {
 	cmdMerge := exec.Command("git", mergeArgs...)
 	cmdMerge.Dir = rootDir
 	if out, err := cmdMerge.CombinedOutput(); err != nil {
-		fmt.Printf(`{"status": "sync_failed", "step": %q, "error": %q, "output": %q, "hint": "If branches have diverged, consider using --rebase or resolving local changes."}`+"\n", strategy, err.Error(), strings.TrimSpace(string(out)))
+		res := map[string]any{"status": "sync_failed", "step": strategy, "error": err.Error(), "output": verify.CompactFailure(string(out))}
+		conf, _ := exec.Command("git", "-C", rootDir, "diff", "--name-only", "--diff-filter=U").Output()
+		res["conflicting_files"] = strings.Fields(string(conf))
+		if mergeMode && len(res["conflicting_files"].([]string)) > 0 {
+			// Conflicts are resolved once, in place: the markers stay for the agent.
+			res["status"] = "conflicts"
+			res["hint"] = "Resolve the <<<<<<< markers in conflicting_files (keep both sides' intent), run 'monoflow verify --affected', then 'monoflow commit -m \"merge " + branch + "\"' to finish the merge."
+			data, _ := json.MarshalIndent(res, "", "  ")
+			fmt.Println(string(data))
+			os.Exit(1)
+		}
+		if rebase {
+			// Never leave the worktree mid-rebase: report the conflicts and restore the branch.
+			_ = exec.Command("git", "-C", rootDir, "rebase", "--abort").Run()
+			res["hint"] = fmt.Sprintf("Your branch conflicts with %s/%s; branch left unchanged. Run 'monoflow sync --merge' to merge %s once and resolve the conflicts in place (a rebase would replay every commit).", remote, branch, branch)
+		} else {
+			res["hint"] = "Branches have diverged; run 'monoflow sync' from your agent branch (rebases onto the base) or pass --rebase."
+		}
+		data, _ := json.MarshalIndent(res, "", "  ")
+		fmt.Println(string(data))
 		os.Exit(1)
 	}
 
@@ -1763,7 +1945,8 @@ func handleSync(rootDir string) {
 	res := map[string]any{
 		"status":        "synced",
 		"remote":        remote,
-		"branch":        branch,
+		"branch":        current,
+		"onto":          remote + "/" + branch,
 		"head_sha":      headSHA,
 		"strategy":      strategy,
 		"duration_ms":   durMs,
@@ -1856,9 +2039,46 @@ func handleEvents(rootDir string) {
 			fmt.Printf(`{"error": "%s"}`+"\n", err)
 			os.Exit(1)
 		}
+		showAll := false
+		for _, a := range os.Args[3:] {
+			if a == "--all" {
+				showAll = true
+			}
+		}
+		// On an agent/feature branch the inbox is that agent's: its branch's events plus
+		// repo-wide ones. Other agents' events only cost context (--all shows them).
+		scope := "all"
+		others := 0
+		if branch := currentBranch(rootDir); !showAll && branch != "" && branch != "main" && branch != "master" && branch != "HEAD" {
+			scope = branch
+			local := projectedPackages(rootDir)
+			mine := list[:0]
+			for _, e := range list {
+				relevant := e.Branch == branch
+				if e.Branch == "" {
+					relevant = true
+					// Release notices are for the consumer's owner: only worktrees that
+					// contain that consumer (or any worktree, if action is required).
+					if e.Type == events.EventDependencyReleased {
+						consumer, _ := e.Payload["consumer"].(string)
+						mode, _ := e.Payload["mode"].(string)
+						// Notes for source consumers need no action: --all shows them.
+						relevant = mode != graph.EdgeSource && (local == nil && e.RequiresAction || local[consumer])
+					}
+				}
+				if relevant {
+					mine = append(mine, e)
+				} else {
+					others++
+				}
+			}
+			list = mine
+		}
 		data, _ := json.MarshalIndent(map[string]any{
-			"unread_count": len(list),
-			"events":       list,
+			"scope":                scope,
+			"unread_count":         len(list),
+			"other_branches_count": others,
+			"events":               list,
 		}, "", "  ")
 		fmt.Println(string(data))
 
@@ -1893,9 +2113,15 @@ func handleEvents(rootDir string) {
 	case "watch":
 		commitSHA := ""
 		branch := ""
+		jobID := ""
+		remote := ""
 		timeoutMin := 25
 		for _, arg := range os.Args[3:] {
-			if strings.HasPrefix(arg, "--commit=") {
+			if strings.HasPrefix(arg, "--job=") {
+				jobID = strings.TrimPrefix(arg, "--job=")
+			} else if strings.HasPrefix(arg, "--remote=") {
+				remote = strings.TrimPrefix(arg, "--remote=")
+			} else if strings.HasPrefix(arg, "--commit=") {
 				commitSHA = strings.TrimPrefix(arg, "--commit=")
 			} else if strings.HasPrefix(arg, "--branch=") {
 				branch = strings.TrimPrefix(arg, "--branch=")
@@ -1909,12 +2135,19 @@ func handleEvents(rootDir string) {
 		}
 
 		cw := events.NewCIWatcher(rootDir)
-		job, err := cw.StartWatch(events.WatchOptions{
-			CommitSHA:  commitSHA,
-			Branch:     branch,
-			TimeoutMin: timeoutMin,
-			Async:      false,
-		})
+		var job *events.WatchJob
+		var err error
+		if jobID != "" {
+			job, err = cw.ResumeJob(jobID, events.WatchOptions{Remote: remote, TimeoutMin: timeoutMin})
+		} else {
+			job, err = cw.StartWatch(events.WatchOptions{
+				CommitSHA:  commitSHA,
+				Branch:     branch,
+				TimeoutMin: timeoutMin,
+				Remote:     remote,
+				Async:      false,
+			})
+		}
 		if err != nil {
 			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
 			os.Exit(1)
@@ -1949,6 +2182,17 @@ func getGitChangedFiles(rootDir string) []string {
 				files = append(files, parts[len(parts)-1])
 			}
 		}
+	}
+
+	// A sparse worktree's projected go.work is not a change.
+	if runtimestate.ProjectedGoWork(rootDir) {
+		kept := files[:0]
+		for _, f := range files {
+			if f != "go.work" {
+				kept = append(kept, f)
+			}
+		}
+		files = kept
 	}
 
 	// If working tree is clean, fallback to diff against base branch or HEAD~1 to capture committed branch edits
@@ -2265,6 +2509,7 @@ func handleVersion(rootDir string) {
 		fmt.Println(string(data))
 
 	case "bump":
+		refuseSharedRoot(rootDir, "version bump")
 		if len(os.Args) < 5 {
 			fmt.Println(`{"error": "usage: monoflow version bump <pkg> <patch|minor|major> [--cascade]"}`)
 			os.Exit(1)
@@ -2284,6 +2529,9 @@ func handleVersion(rootDir string) {
 		}
 		data, _ := json.MarshalIndent(res, "", "  ")
 		fmt.Println(string(data))
+
+	case "edges", "releases", "release", "pin", "unpin", "upgrades", "upgrade", "suggest":
+		handleReleases(rootDir, sub)
 
 	case "apply":
 		res, err := version.ApplyChangesets(rootDir)
@@ -2367,3 +2615,395 @@ func handleScenario(rootDir string) {
 	fmt.Printf("📁 Fixture Monorepo: %s\n", report.RepoDir)
 }
 
+// verifyBranchAgainstBase verifies packages affected by the commits on this branch
+// (plus uncommitted changes) relative to its merge-base with the default branch.
+func verifyBranchAgainstBase(rootDir string) (verify.SuiteResult, string, bool) {
+	base := ""
+	for _, cand := range []string{"origin/main", "main", "origin/master", "master"} {
+		if exec.Command("git", "-C", rootDir, "rev-parse", "--verify", "--quiet", cand).Run() == nil {
+			base = cand
+			break
+		}
+	}
+	if base == "" {
+		return verify.SuiteResult{}, "", false
+	}
+	mb, err := exec.Command("git", "-C", rootDir, "merge-base", base, "HEAD").Output()
+	if err != nil {
+		return verify.SuiteResult{}, base, false
+	}
+	out, _ := exec.Command("git", "-C", rootDir, "diff", "--name-only", strings.TrimSpace(string(mb))).Output()
+	var files []string
+	for _, f := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if f != "" {
+			files = append(files, f)
+		}
+	}
+	g, err := graph.LoadOrDiscover(rootDir)
+	if err != nil || len(files) == 0 {
+		return verify.SuiteResult{Status: "passed"}, base, err == nil
+	}
+	runner := verify.NewRunner(rootDir)
+	return runner.VerifyAffected(g, files, verify.VerifyOptions{}), base, true
+}
+
+func failedResults(res verify.SuiteResult) []verify.TargetResult {
+	var failed []verify.TargetResult
+	for _, r := range res.Results {
+		if r.Status == "failed" {
+			failed = append(failed, r)
+		}
+	}
+	return failed
+}
+
+// handleHook implements agent harness hooks. `pretooluse` speaks the Claude Code hook
+// protocol (JSON on stdin/stdout); `check` takes a raw command on stdin and exits 2 with
+// the replacement when it should go through MonoFlow (used by the opencode plugin).
+func handleHook() {
+	sub := ""
+	if len(os.Args) > 2 {
+		sub = os.Args[2]
+	}
+	switch sub {
+	case "pretooluse":
+		if out := agenthooks.ClaudePreToolUse(os.Stdin, hookStateDir()); out != nil {
+			fmt.Println(string(out))
+		}
+	case "check":
+		data, _ := io.ReadAll(os.Stdin)
+		if r := agenthooks.Decide(hookStateDir(), string(data)); r != nil {
+			fmt.Println(r.Reason())
+			os.Exit(2)
+		}
+	default:
+		fmt.Println(`{"error": "usage: monoflow hook pretooluse | check"}`)
+		os.Exit(1)
+	}
+}
+
+// hookStateDir holds per-repo nudge state for agent hooks.
+func hookStateDir() string {
+	root, err := findRepoRoot()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(root, ".agents", "hooks")
+}
+
+// changedFilesSince lists files changed since the merge-base with base (committed and
+// uncommitted). An unknown or all-zero base (first push of a branch) yields every file
+// via the global marker so nothing is skipped.
+func changedFilesSince(rootDir, base string) []string {
+	seen := map[string]bool{}
+	var files []string
+	add := func(out []byte) {
+		for _, f := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			if f = strings.TrimSpace(f); f != "" && !seen[f] {
+				seen[f] = true
+				files = append(files, f)
+			}
+		}
+	}
+	mb, err := exec.Command("git", "-C", rootDir, "merge-base", base, "HEAD").Output()
+	if err != nil || strings.Trim(base, "0") == "" {
+		return []string{"go.work"} // forces a full verification (global file)
+	}
+	if out, err := exec.Command("git", "-C", rootDir, "diff", "--name-only", strings.TrimSpace(string(mb))).Output(); err == nil {
+		add(out)
+	}
+	if out, err := exec.Command("git", "-C", rootDir, "ls-files", "--others", "--exclude-standard").Output(); err == nil {
+		add(out)
+	}
+	return files
+}
+
+func currentBranch(rootDir string) string {
+	out, err := exec.Command("git", "-C", rootDir, "rev-parse", "--abbrev-ref", "HEAD").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// handleReleases implements internal package releases and per-consumer pinning.
+func handleReleases(rootDir, sub string) {
+	g, err := graph.LoadOrDiscover(rootDir)
+	if err != nil {
+		fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
+		os.Exit(1)
+	}
+	args := os.Args[3:]
+	flag := func(name string) string {
+		for _, a := range args {
+			if strings.HasPrefix(a, "--"+name+"=") {
+				return strings.TrimPrefix(a, "--"+name+"=")
+			}
+		}
+		return ""
+	}
+	var pos []string
+	for _, a := range args {
+		if !strings.HasPrefix(a, "--") {
+			pos = append(pos, a)
+		}
+	}
+	out := func(v any) {
+		data, _ := json.MarshalIndent(v, "", "  ")
+		fmt.Println(string(data))
+	}
+	fail := func(err error) {
+		fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
+		os.Exit(1)
+	}
+	need := func(n int, usage string) {
+		if len(pos) < n {
+			fmt.Printf(`{"error": "usage: monoflow version %s"}`+"\n", usage)
+			os.Exit(1)
+		}
+	}
+
+	switch sub {
+	case "edges":
+		edges := g.ScanEdges()
+		var problems int
+		for _, e := range edges {
+			if e.Problem != "" {
+				problems++
+			}
+		}
+		out(map[string]any{"edges": edges, "problems": problems})
+		if problems > 0 {
+			os.Exit(1)
+		}
+
+	case "releases":
+		res := map[string]any{}
+		for _, p := range g.GetAllPackages() {
+			if len(pos) > 0 && p.Name != pos[0] {
+				continue
+			}
+			if v := release.List(rootDir, p.Name); len(v) > 0 || len(pos) > 0 {
+				res[p.Name] = map[string]any{"current": p.Version, "released": v}
+			}
+		}
+		out(res)
+
+	case "release":
+		need(1, "release <pkg>")
+		tag, err := release.Create(rootDir, g, pos[0])
+		if err != nil {
+			fail(err)
+		}
+		pkg, _ := g.GetPackage(pos[0])
+		notified := notifyConsumers(rootDir, g, pkg)
+		out(map[string]any{"status": "released", "tag": tag, "consumers_notified": notified,
+			"next": "push the tag with 'monoflow push' so CI and other clones can materialise it"})
+
+	case "pin", "unpin":
+		refuseSharedRoot(rootDir, "version "+sub)
+		need(2, sub+" <consumer> <dependency> [--version=<v>]")
+		ver := ""
+		if sub == "pin" {
+			if ver = flag("version"); ver == "" {
+				if dep, ok := g.GetPackage(pos[1]); ok {
+					ver = release.Latest(rootDir, dep.Name)
+				}
+			}
+			if ver == "" {
+				fail(fmt.Errorf("%s has no release to pin to; release it first (monoflow version release %s)", pos[1], pos[1]))
+			}
+			if _, err := release.Materialize(rootDir, g, pos[1], ver); err != nil {
+				fail(err)
+			}
+		}
+		file, err := release.Repoint(rootDir, g, pos[0], pos[1], ver)
+		if err != nil {
+			fail(err)
+		}
+		if g2, err := graph.LoadOrDiscover(rootDir); err == nil {
+			release.Prune(rootDir, g2)
+		}
+		mode := "source (live code)"
+		if ver != "" {
+			mode = "pinned@" + ver
+		}
+		out(map[string]any{"status": sub + "ned", "consumer": pos[0], "dependency": pos[1], "mode": mode, "file": file,
+			"next": "monoflow verify --affected, then monoflow commit"})
+
+	case "upgrades":
+		consumer := ""
+		if len(pos) > 0 {
+			consumer = pos[0]
+		}
+		ups := release.Available(rootDir, g, consumer)
+		out(map[string]any{"upgrades": ups, "count": len(ups)})
+
+	case "upgrade":
+		refuseSharedRoot(rootDir, "version upgrade")
+		need(2, "upgrade <consumer> <dependency> [--to=<v>]")
+		to := flag("to")
+		if to == "" {
+			for _, u := range release.Available(rootDir, g, pos[0]) {
+				if u.Dependency == pos[1] && u.Kind == "compatible" {
+					to = u.To
+				}
+			}
+		}
+		if to == "" {
+			fail(fmt.Errorf("no compatible release of %s newer than the pinned one; pass --to=<version> for a breaking upgrade", pos[1]))
+		}
+		if _, err := release.Materialize(rootDir, g, pos[1], to); err != nil {
+			fail(err)
+		}
+		if _, err := release.Repoint(rootDir, g, pos[0], pos[1], to); err != nil {
+			fail(err)
+		}
+		if g2, err := graph.LoadOrDiscover(rootDir); err == nil {
+			release.Prune(rootDir, g2)
+		}
+		// The consumer's own checks are its "CI" for the upgrade.
+		g2, _ := graph.LoadOrDiscover(rootDir)
+		cons, _ := g2.GetPackage(pos[0])
+		res := verify.NewRunner(rootDir).VerifyAffected(g2, []string{filepath.Join(cons.Path, "__upgrade__")}, verify.VerifyOptions{})
+		out(map[string]any{"status": "upgraded", "consumer": pos[0], "dependency": pos[1], "to": to, "verify": res.Status, "results": failedResults(res),
+			"next": "fix any failures, then monoflow commit"})
+		if res.Status != "passed" {
+			os.Exit(1)
+		}
+
+	case "suggest":
+		var targets []string
+		if len(pos) > 0 {
+			targets = pos
+		} else {
+			for _, f := range changedFilesSince(rootDir, firstNonEmpty(flag("base"), "main")) {
+				if p := g.MapFileToPackage(f); p != nil && !graph.IsNonCodeFile(f) && !containsStr(targets, p.Name) {
+					targets = append(targets, p.Name)
+				}
+			}
+		}
+		var res []*release.Suggestion
+		for _, t := range targets {
+			s, err := release.Suggest(rootDir, g, t, firstNonEmpty(flag("base"), "main"))
+			if err != nil {
+				fail(err)
+			}
+			res = append(res, s)
+		}
+		out(map[string]any{"suggestions": res})
+	}
+}
+
+// notifyConsumers emits a DEPENDENCY_RELEASED event per consumer, classified for it.
+func notifyConsumers(rootDir string, g *graph.DependencyGraph, pkg *graph.PackageNode) int {
+	em := events.NewEventManager(rootDir)
+	n := 0
+	for _, e := range g.ScanEdges() {
+		if e.Dependency != pkg.Name {
+			continue
+		}
+		evt := &events.Event{Type: events.EventDependencyReleased, Payload: map[string]any{
+			"dependency": pkg.Name, "version": pkg.Version, "consumer": e.Consumer, "mode": e.Mode}}
+		if e.Mode == graph.EdgeSource {
+			evt.Summary = fmt.Sprintf("%s@%s released; %s already builds against the live code (no action)", pkg.Name, pkg.Version, e.Consumer)
+		} else {
+			kind := "compatible"
+			for _, u := range release.Available(rootDir, g, e.Consumer) {
+				if u.Dependency == pkg.Name && u.To == pkg.Version {
+					kind = u.Kind
+					evt.Payload["impact"] = u.Impact
+					evt.SuggestedTask = u.Command
+				}
+			}
+			evt.RequiresAction = kind == "breaking"
+			evt.Summary = fmt.Sprintf("%s@%s released (%s for %s, pinned at %s)", pkg.Name, pkg.Version, kind, e.Consumer, e.Constraint)
+		}
+		if em.Emit(evt) == nil {
+			n++
+		}
+	}
+	return n
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func containsStr(list []string, s string) bool {
+	for _, x := range list {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}
+
+// refuseSharedRoot stops commands that edit files from running in the shared repository
+// root while agent worktrees exist (they would change every agent's base checkout).
+func refuseSharedRoot(rootDir, action string) {
+	for _, a := range os.Args {
+		if a == "--allow-root" {
+			return
+		}
+	}
+	gitDir, _ := exec.Command("git", "-C", rootDir, "rev-parse", "--git-dir").Output()
+	common, _ := exec.Command("git", "-C", rootDir, "rev-parse", "--git-common-dir").Output()
+	gd, cd := strings.TrimSpace(string(gitDir)), strings.TrimSpace(string(common))
+	if gd == "" || gd != cd {
+		return // inside a linked worktree: fine
+	}
+	entries, _ := os.ReadDir(filepath.Join(rootDir, ".agents", "worktrees"))
+	var ids []string
+	for _, e := range entries {
+		if e.IsDir() {
+			ids = append(ids, e.Name())
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	data, _ := json.MarshalIndent(map[string]any{
+		"status": "refused",
+		"error":  fmt.Sprintf("'%s' edits files, and this is the shared repository root used by agent worktrees (%s)", action, strings.Join(ids, ", ")),
+		"hint":   "run it inside your worktree (.agents/worktrees/<agent-id>), or pass --allow-root if you really mean the root",
+	}, "", "  ")
+	fmt.Println(string(data))
+	os.Exit(1)
+}
+
+// projectedPackages returns the packages of a sparse worktree (nil for a full checkout).
+func projectedPackages(rootDir string) map[string]bool {
+	data, err := os.ReadFile(filepath.Join(rootDir, ".agents", "subset.json"))
+	if err != nil {
+		return nil
+	}
+	var meta struct {
+		IncludedPackages []string `json:"included_packages"`
+	}
+	if json.Unmarshal(data, &meta) != nil || len(meta.IncludedPackages) == 0 {
+		return nil
+	}
+	set := map[string]bool{}
+	for _, p := range meta.IncludedPackages {
+		set[p] = true
+	}
+	return set
+}
+
+// pinnedDependents lists consumers that pin a release of pkg (they are not affected by
+// changes to its live code but must know about breaking releases).
+func pinnedDependents(g *graph.DependencyGraph, pkg string) []string {
+	out := []string{}
+	for _, p := range g.GetAllPackages() {
+		if containsStr(p.PinnedDependencies, pkg) {
+			out = append(out, p.Name)
+		}
+	}
+	return out
+}

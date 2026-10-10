@@ -25,6 +25,13 @@ coverage.html
 .agents/prs/
 .agents/subset.json
 .agents/cache/
+# Worktrees symlink shared state; "dir/" rules do not match symlinks
+/.agents/cache
+/.agents/prs
+/.agents/proofs
+/.agents/events
+/.agents/hooks
+/.agents/gowork.projection
 
 # OS and Editor metadata
 .DS_Store

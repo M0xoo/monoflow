@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Provision a realistic MonoFlow-governed monorepo for multi-agent simulation.
 # Usage: e2e/sim/setup.sh <workdir> <monoflow-binary>
+# With SIM_GH_REPO=<owner>/<name> the remote is a real (private) GitHub repo with a
+# MonoFlow-generated (affected-only) GitHub Actions workflow; it is created if missing and
+# reset otherwise. ci/run.sh is the full-CI ground truth the harness runs locally.
 set -euo pipefail
 WORK=${1:?workdir}; BIN=${2:?monoflow binary}
 rm -rf "$WORK"; mkdir -p "$WORK"
@@ -183,11 +186,33 @@ for m in libs/money services/billing services/ledger; do (cd "$m" && go vet ./..
 for p in packages/ui packages/api-client apps/web; do (cd "$p" && node test.js); done
 C
 chmod +x ci/run.sh
+printf '/bin/monoflow\n/.agents/bin/monoflow\n' > .gitignore
 
 git add -A && git commit -qm "chore: initial acme monorepo"
-"$BIN" init . >/dev/null
+"$BIN" init . --setup-gh-actions >/dev/null
+# CI installs this binary (built from the MonoFlow under test) instead of building from source.
+[ -n "${SIM_LINUX_BIN:-}" ] && install -m 0755 "$SIM_LINUX_BIN" .agents/bin/monoflow-linux-amd64
+tmp=$(mktemp) && jq '. + {ci_cmd: "bash ci/run.sh"}' .agents/monoflow.config.json > "$tmp" && mv "$tmp" .agents/monoflow.config.json
 git add -A && MONOFLOW_INTERNAL=1 git commit -qm "chore: install monoflow" --no-verify
-git remote add origin "$REMOTE"
-MONOFLOW_INTERNAL=1 git push -q origin main
+if [ -n "${SIM_GH_REPO:-}" ]; then
+  if ! gh repo view "$SIM_GH_REPO" >/dev/null 2>&1; then
+    gh repo create "$SIM_GH_REPO" --private --description "MonoFlow multi-agent simulation sandbox (generated)" >/dev/null
+  else
+    for n in $(gh pr list -R "$SIM_GH_REPO" --state open --json number -q '.[].number'); do
+      gh pr close -R "$SIM_GH_REPO" "$n" --delete-branch >/dev/null 2>&1 || true
+    done
+    for b in $(gh api "repos/$SIM_GH_REPO/branches" --paginate -q '.[].name' | grep -v '^main$' || true); do
+      gh api -X DELETE "repos/$SIM_GH_REPO/git/refs/heads/$b" >/dev/null 2>&1 || true
+    done
+    for tg in $(gh api "repos/$SIM_GH_REPO/tags" --paginate -q '.[].name' || true); do
+      gh api -X DELETE "repos/$SIM_GH_REPO/git/refs/tags/$tg" >/dev/null 2>&1 || true
+    done
+  fi
+  git remote add origin "https://github.com/$SIM_GH_REPO.git"
+  MONOFLOW_INTERNAL=1 git push -q --force origin main
+else
+  git remote add origin "$REMOTE"
+  MONOFLOW_INTERNAL=1 git push -q origin main
+fi
 mkdir -p bin && ln -sf "$BIN" bin/monoflow
 echo "$REPO"

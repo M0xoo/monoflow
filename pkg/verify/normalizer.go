@@ -215,3 +215,27 @@ func extractExpectedReceived(err *DiagnosticError) {
 		err.Expected = m[2]
 	}
 }
+
+// CompactFailure reduces raw tool output to the lines that explain a failure, so agents
+// get the failing test/assertion instead of a full verbose log (context is expensive).
+func CompactFailure(raw string) string {
+	const maxLen = 1500
+	lines := strings.Split(strings.TrimSpace(raw), "\n")
+	keep := make([]string, 0)
+	for _, l := range lines {
+		t := strings.TrimSpace(l)
+		if t == "" || strings.HasPrefix(t, "=== RUN") || strings.HasPrefix(t, "=== PAUSE") || strings.HasPrefix(t, "=== CONT") ||
+			strings.HasPrefix(t, "--- PASS") || strings.HasPrefix(t, "PASS") || strings.HasPrefix(t, "ok ") || strings.HasPrefix(t, "?   ") {
+			continue
+		}
+		keep = append(keep, l)
+	}
+	out := strings.Join(keep, "\n")
+	if out == "" {
+		out = strings.TrimSpace(raw)
+	}
+	if len(out) > maxLen {
+		out = "…" + out[len(out)-maxLen:]
+	}
+	return out
+}

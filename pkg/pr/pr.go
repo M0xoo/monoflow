@@ -1,8 +1,10 @@
 package pr
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -58,6 +60,19 @@ type PRMetadata struct {
 	IsStacked        bool                   `json:"is_stacked,omitempty"`
 	StackTiers       *task.StackedSlice     `json:"stack_tiers,omitempty"`
 	ReviewDecision   string                 `json:"review_decision,omitempty"`
+	Pushed           bool                   `json:"pushed,omitempty"`
+	CIWatcher        string                 `json:"ci_watcher,omitempty"`
+	RemotePR         *RemotePRResult        `json:"remote_pr,omitempty"`
+}
+
+// RemotePRResult reports how (or why not) the hosted PR was opened, so an agent in an
+// environment without an authenticated gh (cloud sandboxes) knows exactly what to do next.
+type RemotePRResult struct {
+	Status     string `json:"status"`        // "created", "not_created", "skipped"
+	Via        string `json:"via,omitempty"` // "gh", "api"
+	Reason     string `json:"reason,omitempty"`
+	CompareURL string `json:"compare_url,omitempty"`
+	Directive  string `json:"agent_directive,omitempty"`
 }
 
 // CreateOptions controls PR generation.
@@ -104,15 +119,15 @@ type TestOptions struct {
 
 // PRTestResult records hot-mount delta verification.
 type PRTestResult struct {
-	PRID                 string   `json:"pr_id"`
-	Status               string   `json:"status"` // "passed" or "failed"
-	BaseBranch           string   `json:"base_branch"`
-	MountMode            string   `json:"mount_mode"`
-	CompiledPackages     []string `json:"compiled_packages"`
-	UnchangedBasePkgs    int      `json:"unchanged_base_pkgs"`
-	VerificationTimeMs   float64  `json:"verification_time_ms"`
-	ConfidenceScore      float64  `json:"confidence_score"`
-	Verdict              string   `json:"verdict"`
+	PRID               string   `json:"pr_id"`
+	Status             string   `json:"status"` // "passed" or "failed"
+	BaseBranch         string   `json:"base_branch"`
+	MountMode          string   `json:"mount_mode"`
+	CompiledPackages   []string `json:"compiled_packages"`
+	UnchangedBasePkgs  int      `json:"unchanged_base_pkgs"`
+	VerificationTimeMs float64  `json:"verification_time_ms"`
+	ConfidenceScore    float64  `json:"confidence_score"`
+	Verdict            string   `json:"verdict"`
 }
 
 // MergeOptions defines PR merge parameters.
@@ -152,7 +167,6 @@ type PRLocalResult struct {
 	SavingsPct           float64  `json:"savings_pct"`
 	DurationMs           float64  `json:"duration_ms"`
 }
-
 
 // PRManager coordinates PR creation, testing, machine review, and merging.
 type PRManager struct {
@@ -220,12 +234,12 @@ func (m *PRManager) Create(opts CreateOptions) (*PRMetadata, error) {
 		}
 	}
 
-	// Switch or create head branch if not already on it
+	// Never switch branches: the checkout may be shared (repo root) or managed by the
+	// environment (cloud sandboxes). If the head branch differs from the current one,
+	// point a new branch at HEAD without checking it out; refuse to move an existing one.
 	if currentBranch != headBranch {
-		cmdSwitch := exec.Command("git", "checkout", "-B", headBranch)
-		cmdSwitch.Dir = m.RootDir
-		if out, err := cmdSwitch.CombinedOutput(); err != nil {
-			return nil, fmt.Errorf("failed to switch to head branch '%s': %v (%s)", headBranch, err, strings.TrimSpace(string(out)))
+		if err := m.ensureBranchAtHEAD(headBranch); err != nil {
+			return nil, err
 		}
 	}
 
@@ -307,10 +321,16 @@ func (m *PRManager) Create(opts CreateOptions) (*PRMetadata, error) {
 	fullBody := m.buildPRMarkdownBody(opts.Title, opts.Body, risk, proofReceipt, audit, affected, stackTiers)
 
 	// 10. Auto-push head branch if requested
+	pushed := false
+	var pushErr string
 	if opts.AutoPush {
-		cmdPush := exec.Command("git", "push", "-u", remote, headBranch)
+		cmdPush := exec.Command("git", "push", "-u", remote, headBranch+":"+headBranch)
 		cmdPush.Dir = m.RootDir
-		_ = cmdPush.Run()
+		if out, err := cmdPush.CombinedOutput(); err == nil {
+			pushed = true
+		} else {
+			pushErr = strings.TrimSpace(string(out))
+		}
 	}
 
 	// 11. Create Pull Request via GitHub CLI (gh) if available
@@ -321,23 +341,12 @@ func (m *PRManager) Create(opts CreateOptions) (*PRMetadata, error) {
 		state = StateDraft
 	}
 
-	if _, lookErr := exec.LookPath("gh"); lookErr == nil {
-		ghArgs := []string{"pr", "create", "--title", opts.Title, "--body", fullBody, "--base", baseBranch, "--head", headBranch}
-		if opts.Draft {
-			ghArgs = append(ghArgs, "--draft")
-		}
-		cmdGH := exec.Command("gh", ghArgs...)
-		cmdGH.Dir = m.RootDir
-		ghOut, ghErr := cmdGH.CombinedOutput()
-		if ghErr == nil {
-			outStr := strings.TrimSpace(string(ghOut))
-			ghURL = outStr
-			// Extract PR number from URL
-			reNum := regexp.MustCompile(`/pull/(\d+)`)
-			matches := reNum.FindStringSubmatch(outStr)
-			if len(matches) > 1 {
-				ghNumber, _ = strconv.Atoi(matches[1])
-			}
+	remotePR := m.openRemotePR(opts, fullBody, baseBranch, headBranch, pushed || !opts.AutoPush, pushErr)
+	if remotePR.Status == "created" {
+		ghURL = remotePR.CompareURL
+		remotePR.CompareURL = ""
+		if matches := regexp.MustCompile(`/pull/(\d+)`).FindStringSubmatch(ghURL); len(matches) > 1 {
+			ghNumber, _ = strconv.Atoi(matches[1])
 		}
 	}
 
@@ -374,6 +383,14 @@ func (m *PRManager) Create(opts CreateOptions) (*PRMetadata, error) {
 		Audit:            audit,
 		IsStacked:        opts.Stack,
 		StackTiers:       stackTiers,
+		Pushed:           pushed,
+		RemotePR:         remotePR,
+	}
+	// The PR push is the CI trigger: watch it here so agents need no separate `push`.
+	if pushed {
+		if job, err := events.NewCIWatcher(m.RootDir).StartWatch(events.WatchOptions{CommitSHA: headSHA, Branch: headBranch, Remote: remote, Async: true}); err == nil {
+			metadata.CIWatcher = job.ID
+		}
 	}
 
 	if err := m.save(metadata); err != nil {
@@ -1065,7 +1082,6 @@ func (m *PRManager) Local(id string, opts LocalOptions) (*PRLocalResult, error) 
 	}, nil
 }
 
-
 func (m *PRManager) getDiffFiles(base, head string) ([]string, error) {
 	// Try base...head diff
 	cmd := exec.Command("git", "diff", "--name-only", base+"..."+head)
@@ -1191,4 +1207,113 @@ func (m *PRManager) buildPRMarkdownBody(title, userBody string, risk *review.Ris
 	sb.WriteString("\n---\n*Authored autonomously and verified by [MonoFlow](https://github.com/M0xoo/monoflow)*\n")
 
 	return sb.String()
+}
+
+// ensureBranchAtHEAD creates branch at HEAD without checking it out. An existing branch
+// is only accepted if it already points at HEAD; it is never force-reset.
+func (m *PRManager) ensureBranchAtHEAD(branch string) error {
+	head, err := exec.Command("git", "-C", m.RootDir, "rev-parse", "HEAD").Output()
+	if err != nil {
+		return fmt.Errorf("cannot resolve HEAD: %w", err)
+	}
+	if cur, err := exec.Command("git", "-C", m.RootDir, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch).Output(); err == nil {
+		if strings.TrimSpace(string(cur)) != strings.TrimSpace(string(head)) {
+			return fmt.Errorf("branch '%s' already exists at a different commit; commit on it or pass --head=<new-branch>", branch)
+		}
+		return nil
+	}
+	if out, err := exec.Command("git", "-C", m.RootDir, "branch", branch, "HEAD").CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to create head branch '%s': %v (%s)", branch, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// openRemotePR opens the hosted PR via gh, falling back to the GitHub REST API with
+// GH_TOKEN/GITHUB_TOKEN. When neither works it returns a not_created result carrying the
+// reason and a compare URL instead of failing silently, so agents in cloud sandboxes can
+// hand the already gate-checked PR to their platform's GitHub integration.
+func (m *PRManager) openRemotePR(opts CreateOptions, body, base, head string, pushed bool, pushErr string) *RemotePRResult {
+	owner, repo, isGitHub := m.getRemoteOriginRepo()
+	res := &RemotePRResult{Status: "not_created"}
+	if isGitHub {
+		res.CompareURL = fmt.Sprintf("https://github.com/%s/%s/compare/%s...%s?expand=1", owner, repo, base, head)
+	}
+	if !pushed {
+		res.Reason = "head branch was not pushed: " + pushErr
+		res.Directive = "Fix the push error (or run 'monoflow push'), then re-run 'monoflow pr create'."
+		return res
+	}
+	if !isGitHub {
+		res.Status = "skipped"
+		res.Reason = "origin is not a GitHub remote; the MonoFlow PR dossier is the review record"
+		return res
+	}
+
+	var reasons []string
+	if _, err := exec.LookPath("gh"); err == nil {
+		args := []string{"pr", "create", "--title", opts.Title, "--body", body, "--base", base, "--head", head}
+		if opts.Draft {
+			args = append(args, "--draft")
+		}
+		cmd := exec.Command("gh", args...)
+		cmd.Dir = m.RootDir
+		out, err := cmd.CombinedOutput()
+		if err == nil {
+			return &RemotePRResult{Status: "created", Via: "gh", CompareURL: strings.TrimSpace(string(out))}
+		}
+		reasons = append(reasons, "gh: "+firstLine(string(out)))
+	} else {
+		reasons = append(reasons, "gh: not installed")
+	}
+
+	token := os.Getenv("GH_TOKEN")
+	if token == "" {
+		token = os.Getenv("GITHUB_TOKEN")
+	}
+	if token != "" {
+		url, err := createPRViaAPI(token, owner, repo, opts.Title, body, base, head, opts.Draft)
+		if err == nil {
+			return &RemotePRResult{Status: "created", Via: "api", CompareURL: url}
+		}
+		reasons = append(reasons, "api: "+err.Error())
+	} else {
+		reasons = append(reasons, "api: GH_TOKEN/GITHUB_TOKEN not set")
+	}
+
+	res.Reason = strings.Join(reasons, "; ")
+	res.Directive = "Branch is pushed and passed the MonoFlow gate. Open the PR with your environment's GitHub integration using this output's title and body (base " + base + ", head " + head + "), or set GH_TOKEN and re-run."
+	return res
+}
+
+func createPRViaAPI(token, owner, repo, title, body, base, head string, draft bool) (string, error) {
+	payload, _ := json.Marshal(map[string]any{"title": title, "body": body, "base": base, "head": head, "draft": draft})
+	req, err := http.NewRequest("POST", fmt.Sprintf("https://api.github.com/repos/%s/%s/pulls", owner, repo), bytes.NewReader(payload))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	var out struct {
+		HTMLURL string `json:"html_url"`
+		Message string `json:"message"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	if resp.StatusCode != http.StatusCreated {
+		return "", fmt.Errorf("HTTP %d %s", resp.StatusCode, out.Message)
+	}
+	return out.HTMLURL, nil
+}
+
+func firstLine(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
 }
