@@ -114,3 +114,13 @@ func TestDiffClassifiesBumps(t *testing.T) {
 		t.Errorf("internal change should be patch, got %s", b)
 	}
 }
+
+func TestTypeScriptSignatureChangesAreBreaking(t *testing.T) {
+	before, after := API{}, API{}
+	jsSurface(before, "pkg/src/index.ts", "pkg", "export function formatPrice(cents: number): string { return '' }\nexport const toCents = (v: string): number => 0\nexport interface Money { cents: number }\n")
+	jsSurface(after, "pkg/src/index.ts", "pkg", "export function formatPrice(cents: bigint): string { return '' }\nexport const toCents = (v: string): bigint => 0n\nexport interface Money { cents: number; currency: string }\n")
+	changes := Diff(before, after)
+	if RequiredBump(changes, true) != "major" || len(changes) != 3 {
+		t.Fatalf("type-only signature changes must be breaking, got %+v", changes)
+	}
+}

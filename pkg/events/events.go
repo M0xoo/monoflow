@@ -91,7 +91,7 @@ func (em *EventManager) Emit(evt *Event) error {
 		return fmt.Errorf("failed to serialize event: %w", err)
 	}
 
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := writeAtomic(path, data); err != nil {
 		return err
 	}
 	if (evt.Type == EventCIPassed || evt.Type == EventCIFailed) && evt.Branch != "" && evt.CommitSHA != "" {

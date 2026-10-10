@@ -604,7 +604,12 @@ func (om *OuterLoopManager) saveJob(job *OuterJob) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0644)
+	// Atomic: the job is read concurrently by push/pr/WaitJob and the hook process.
+	tmp := fmt.Sprintf("%s.%d.tmp", path, os.Getpid())
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 func (om *OuterLoopManager) getCommitChangedFiles(sha string) ([]string, error) {

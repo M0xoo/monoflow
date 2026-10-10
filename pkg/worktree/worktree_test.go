@@ -57,11 +57,10 @@ func TestWorktreeCreateListSyncFinish(t *testing.T) {
 		t.Errorf("unexpected agent ID: %s", infoA.AgentID)
 	}
 
-	// Verify node_modules was symlinked without copying!
-	symlinkPath := filepath.Join(infoA.Path, "node_modules")
-	fi, err := os.Lstat(symlinkPath)
-	if err != nil || fi.Mode()&os.ModeSymlink == 0 {
-		t.Errorf("expected symlink for node_modules in worktree")
+	// node_modules is an overlay: entries link to the root install, nothing is copied.
+	entry := filepath.Join(infoA.Path, "node_modules", "pkg.json")
+	if fi, err := os.Lstat(entry); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("expected node_modules entries linked to the root install")
 	}
 
 	// 2. Create worktree for Agent Beta

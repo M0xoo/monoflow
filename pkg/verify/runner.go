@@ -65,6 +65,42 @@ type Runner struct {
 	Quarantine *QuarantineManager
 	cacheMgr   *cache.Manager
 	graph      *graph.DependencyGraph
+	// rootRuns memoises repo-root commands (cd "$(git rev-parse --show-toplevel)" && …)
+	// within one run: they do not depend on the package, so N packages run them once.
+	rootMu   sync.Mutex
+	rootRuns map[string]*rootRun
+}
+
+type rootRun struct {
+	once sync.Once
+	out  []byte
+	err  error
+}
+
+const repoRootPrefix = `cd "$(git rev-parse --show-toplevel)" && `
+
+func (r *Runner) runCheck(c, dir string) ([]byte, error) {
+	if !strings.HasPrefix(c, repoRootPrefix) {
+		cmd := exec.Command("sh", "-c", c)
+		cmd.Dir = dir
+		return cmd.CombinedOutput()
+	}
+	r.rootMu.Lock()
+	if r.rootRuns == nil {
+		r.rootRuns = map[string]*rootRun{}
+	}
+	rr, ok := r.rootRuns[c]
+	if !ok {
+		rr = &rootRun{}
+		r.rootRuns[c] = rr
+	}
+	r.rootMu.Unlock()
+	rr.once.Do(func() {
+		cmd := exec.Command("sh", "-c", c)
+		cmd.Dir = dir
+		rr.out, rr.err = cmd.CombinedOutput()
+	})
+	return rr.out, rr.err
 }
 
 // NewRunner creates an inner-loop runner.
@@ -138,10 +174,8 @@ func (r *Runner) VerifyTarget(pkg *graph.PackageNode, opt VerifyOptions) TargetR
 	var out []byte
 	var err error
 	for _, c := range cmds {
-		cmd := exec.Command("sh", "-c", c)
-		cmd.Dir = absPkgPath
 		var o []byte
-		o, err = cmd.CombinedOutput()
+		o, err = r.runCheck(c, absPkgPath)
 		out = append(out, o...)
 		if err != nil {
 			res.CommandRun = c

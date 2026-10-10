@@ -81,8 +81,14 @@ func (g *DependencyGraph) discoverNodeWorkspaces(files []string) {
 		if node.LintCmd == "" {
 			node.LintCmd = root.scoped(root.lint, dir)
 		}
-		if node.TypecheckCmd == "" && fileExistsAt(filepath.Join(g.RootDir, dir, "tsconfig.json")) && root.tsc {
-			node.TypecheckCmd = root.exec + " tsc --noEmit -p tsconfig.json"
+		if node.TypecheckCmd == "" && root.tsc {
+			if fileExistsAt(filepath.Join(g.RootDir, dir, "tsconfig.json")) {
+				node.TypecheckCmd = root.exec + " tsc --noEmit -p tsconfig.json"
+			} else if lang == LangTypeScript && rootTS {
+				// Typed through the root tsconfig: one repo-wide check, run once per verify
+				// (the runner deduplicates repo-root commands across packages).
+				node.TypecheckCmd = `cd "$(git rev-parse --show-toplevel)" && ` + root.exec + " tsc --noEmit"
+			}
 		}
 		g.AddPackage(node)
 	}
