@@ -38,11 +38,13 @@ else
     ARCH="$(uname -m)"
     if [[ "${ARCH}" == "x86_64" ]]; then ARCH="amd64"; fi
     if [[ "${ARCH}" == "aarch64" ]]; then ARCH="arm64"; fi
-    # Fallback to local copy if available in downloads
-    if [[ -f "/Users/mokh/Downloads/monoflow/bin/monoflow" ]]; then
-        cp "/Users/mokh/Downloads/monoflow/bin/monoflow" "${BIN_DIR}/monoflow"
-    else
-        echo "❌ Unable to locate MonoFlow binary."
+    # Latest release by default; pin with MONOFLOW_VERSION=vX.Y.Z.
+    URL="https://github.com/M0xoo/monoflow/releases/latest/download/monoflow-${OS}-${ARCH}"
+    if [[ -n "${MONOFLOW_VERSION:-}" ]]; then
+        URL="https://github.com/M0xoo/monoflow/releases/download/${MONOFLOW_VERSION}/monoflow-${OS}-${ARCH}"
+    fi
+    if ! curl -fsSL "${URL}" -o "${BIN_DIR}/monoflow"; then
+        echo "❌ Unable to download ${URL} (no release for ${OS}/${ARCH}?). Install Go and re-run from a MonoFlow checkout to build from source."
         exit 1
     fi
 fi

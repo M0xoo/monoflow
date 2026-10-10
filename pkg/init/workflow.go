@@ -33,7 +33,7 @@ func GitHubWorkflow(g *graph.DependencyGraph) string {
           cache: false`, goVersionFile))
 	}
 	if !langs[graph.LangGo] {
-		// MonoFlow itself is built from source when no binary is committed.
+		// Fallback: MonoFlow is built from source when no release binary is available.
 		setup = append(setup, `      - uses: actions/setup-go@v5
         if: hashFiles('.agents/bin/monoflow-linux-amd64') == ''
         with:
@@ -88,6 +88,8 @@ jobs:
         run: |
           if [ -x .agents/bin/monoflow-linux-amd64 ]; then
             install -m 0755 .agents/bin/monoflow-linux-amd64 /usr/local/bin/monoflow
+          elif curl -fsSL -o /tmp/monoflow ` + MonoflowSourceRepo + `/releases/latest/download/monoflow-linux-amd64; then
+            install -m 0755 /tmp/monoflow /usr/local/bin/monoflow
           else
             command -v go >/dev/null || { echo "MonoFlow needs Go to build from source"; exit 1; }
             git clone -q --depth 1 ` + MonoflowSourceRepo + ` /tmp/monoflow-src
