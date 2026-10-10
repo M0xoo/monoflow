@@ -17,6 +17,7 @@ func TestBuildDeliverableAndOverlay(t *testing.T) {
 
 	pkgPath := filepath.Join(tmpDir, "services", "billing")
 	_ = os.MkdirAll(pkgPath, 0755)
+	_ = os.WriteFile(filepath.Join(pkgPath, "index.ts"), []byte("export const a = 1;"), 0644)
 
 	pkg := &graph.PackageNode{
 		Name:     "services/billing",
@@ -36,7 +37,19 @@ func TestBuildDeliverableAndOverlay(t *testing.T) {
 		t.Errorf("empty sha256 in manifest")
 	}
 
-	// Test Overlay
+	// 2. Second build of identical package should HIT cache and produce identical SHA256
+	manifest2, err := BuildDeliverable(tmpDir, pkg)
+	if err != nil {
+		t.Fatalf("second BuildDeliverable failed: %v", err)
+	}
+	if !manifest2.Cached {
+		t.Errorf("expected second build to hit cache (cached=true)")
+	}
+	if manifest.SHA256 != manifest2.SHA256 {
+		t.Errorf("expected deterministic sha256, got %s vs %s", manifest.SHA256, manifest2.SHA256)
+	}
+
+	// 3. Test Overlay
 	g := graph.New(tmpDir)
 	g.AddPackage(pkg)
 
@@ -47,5 +60,11 @@ func TestBuildDeliverableAndOverlay(t *testing.T) {
 
 	if _, err := os.Stat(overlayDir); os.IsNotExist(err) {
 		t.Errorf("overlayDir does not exist: %s", overlayDir)
+	}
+
+	// Check mounted package in overlay
+	mountedPkg := filepath.Join(overlayDir, "services", "billing")
+	if _, err := os.Stat(mountedPkg); os.IsNotExist(err) {
+		t.Errorf("expected mounted package at %s", mountedPkg)
 	}
 }

@@ -9,26 +9,30 @@ import (
 	"sync"
 	"time"
 
+	"github.com/antigravity/monoflow/pkg/cache"
 	"github.com/antigravity/monoflow/pkg/graph"
 )
 
 // VerifyOptions configures the inner loop runner.
 type VerifyOptions struct {
-	TimeoutSec    int
-	Concurrency   int
-	Stage         string // "inner" or "outer"
-	SpecificFile  string // for fine-grained TIA
+	TimeoutSec   int
+	Concurrency  int
+	Stage        string // "inner" or "outer"
+	SpecificFile string // for fine-grained TIA
+	Mode         string // "fast" (typecheck/lint), "test", "lint", "all"
+	NoCache      bool
 }
 
 // TargetResult holds the result of verifying a single package.
 type TargetResult struct {
-	Target       string            `json:"target"`
-	Language     string            `json:"language"`
-	Status       string            `json:"status"` // "passed" or "failed"
-	DurationMs   float64           `json:"duration_ms"`
-	Errors       []DiagnosticError `json:"errors,omitempty"`
-	Quarantined  []string          `json:"quarantined,omitempty"`
-	CommandRun   string            `json:"command_run,omitempty"`
+	Target      string            `json:"target"`
+	Language    string            `json:"language"`
+	Status      string            `json:"status"` // "passed" or "failed"
+	DurationMs  float64           `json:"duration_ms"`
+	Cached      bool              `json:"cached,omitempty"`
+	Errors      []DiagnosticError `json:"errors,omitempty"`
+	Quarantined []string          `json:"quarantined,omitempty"`
+	CommandRun  string            `json:"command_run,omitempty"`
 }
 
 // SuiteResult holds the aggregated verification results across all affected packages.
@@ -38,14 +42,16 @@ type SuiteResult struct {
 	TotalTargets     int            `json:"total_targets"`
 	PassedTargets    int            `json:"passed_targets"`
 	FailedTargets    int            `json:"failed_targets"`
+	CachedTargets    int            `json:"cached_targets"`
 	AffectedPackages []string       `json:"affected_packages"`
 	Results          []TargetResult `json:"results"`
 }
 
-// Runner executes verification tasks with maximum parallelism and minimal latency.
+// Runner executes verification tasks with maximum parallelism, caching, and minimal latency.
 type Runner struct {
 	RootDir    string
 	Quarantine *QuarantineManager
+	cacheMgr   *cache.Manager
 }
 
 // NewRunner creates an inner-loop runner.
@@ -53,10 +59,16 @@ func NewRunner(rootDir string) *Runner {
 	return &Runner{
 		RootDir:    rootDir,
 		Quarantine: NewQuarantineManager(rootDir),
+		cacheMgr:   cache.NewManager(rootDir, cache.DefaultConfig(rootDir)),
 	}
 }
 
-// VerifyTarget executes the fastest verification commands for a single package.
+// SetCacheManager allows injecting a customized cache manager (e.g. for testing).
+func (r *Runner) SetCacheManager(cm *cache.Manager) {
+	r.cacheMgr = cm
+}
+
+// VerifyTarget executes the fastest verification commands for a single package with caching.
 func (r *Runner) VerifyTarget(pkg *graph.PackageNode, opt VerifyOptions) TargetResult {
 	start := time.Now()
 	res := TargetResult{
@@ -66,13 +78,33 @@ func (r *Runner) VerifyTarget(pkg *graph.PackageNode, opt VerifyOptions) TargetR
 		Errors:   make([]DiagnosticError, 0),
 	}
 
-	// Determine command: prioritize Typecheck/Lint for L1, then Test for L2
-	cmdStr := pkg.TypecheckCmd
-	if cmdStr == "" {
+	// 1. Determine command based on stage and mode:
+	// - Mode "test" or Stage "outer": prioritize TestCmd
+	// - Mode "lint": prioritize LintCmd
+	// - Default (inner loop fast): prioritize TypecheckCmd -> LintCmd -> TestCmd
+	var cmdStr string
+	if opt.Mode == "test" || opt.Stage == "outer" {
 		cmdStr = pkg.TestCmd
-	}
-	if cmdStr == "" {
+		if cmdStr == "" {
+			cmdStr = pkg.TypecheckCmd
+		}
+		if cmdStr == "" {
+			cmdStr = pkg.LintCmd
+		}
+	} else if opt.Mode == "lint" {
 		cmdStr = pkg.LintCmd
+		if cmdStr == "" {
+			cmdStr = pkg.TypecheckCmd
+		}
+	} else {
+		// Fast inner loop
+		cmdStr = pkg.TypecheckCmd
+		if cmdStr == "" {
+			cmdStr = pkg.TestCmd
+		}
+		if cmdStr == "" {
+			cmdStr = pkg.LintCmd
+		}
 	}
 
 	if cmdStr == "" {
@@ -88,7 +120,22 @@ func (r *Runner) VerifyTarget(pkg *graph.PackageNode, opt VerifyOptions) TargetR
 		return res
 	}
 
-	// Execute command via shell
+	// 2. Check Verification Cache (Local and Remote)
+	var cacheKey string
+	if r.cacheMgr != nil {
+		modeTag := opt.Stage + ":" + opt.Mode
+		cacheKey, _ = r.cacheMgr.ComputePackageKey(pkg, nil, cmdStr, modeTag)
+		if !opt.NoCache && cacheKey != "" {
+			if rec, hit := r.cacheMgr.GetVerification(cacheKey); hit && rec.Status == "passed" {
+				res.Status = "passed"
+				res.Cached = true
+				res.DurationMs = float64(time.Since(start).Microseconds()) / 1000.0
+				return res
+			}
+		}
+	}
+
+	// 3. Cache Miss: Execute command via shell
 	cmd := exec.Command("sh", "-c", cmdStr)
 	cmd.Dir = absPkgPath
 
@@ -131,6 +178,20 @@ func (r *Runner) VerifyTarget(pkg *graph.PackageNode, opt VerifyOptions) TargetR
 				Message: strings.TrimSpace(StripANSI(rawOutput)),
 			})
 		}
+	} else {
+		// 4. Save to local & remote verification cache on success
+		if r.cacheMgr != nil && !opt.NoCache && cacheKey != "" {
+			_ = r.cacheMgr.PutVerification(&cache.VerificationRecord{
+				Key:        cacheKey,
+				Target:     pkg.Name,
+				Language:   string(pkg.Language),
+				Status:     "passed",
+				DurationMs: durationMs,
+				CommandRun: cmdStr,
+				Timestamp:  time.Now().UTC(),
+				Output:     string(out),
+			})
+		}
 	}
 
 	return res
@@ -148,6 +209,7 @@ func (r *Runner) VerifyAffected(g *graph.DependencyGraph, changedFiles []string,
 			TotalTargets:     0,
 			PassedTargets:    0,
 			FailedTargets:    0,
+			CachedTargets:    0,
 			AffectedPackages: []string{},
 			Results:          []TargetResult{},
 		}
@@ -177,6 +239,7 @@ func (r *Runner) VerifyAffected(g *graph.DependencyGraph, changedFiles []string,
 	totalDur := float64(time.Since(start).Microseconds()) / 1000.0
 	passedCount := 0
 	failedCount := 0
+	cachedCount := 0
 	overallStatus := "passed"
 
 	for _, res := range results {
@@ -185,6 +248,9 @@ func (r *Runner) VerifyAffected(g *graph.DependencyGraph, changedFiles []string,
 			overallStatus = "failed"
 		} else {
 			passedCount++
+			if res.Cached {
+				cachedCount++
+			}
 		}
 	}
 
@@ -194,6 +260,7 @@ func (r *Runner) VerifyAffected(g *graph.DependencyGraph, changedFiles []string,
 		TotalTargets:     len(results),
 		PassedTargets:    passedCount,
 		FailedTargets:    failedCount,
+		CachedTargets:    cachedCount,
 		AffectedPackages: affected.AllAffected,
 		Results:          results,
 	}

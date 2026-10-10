@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/antigravity/monoflow/pkg/cache"
 	"github.com/antigravity/monoflow/pkg/checkpoint"
 	"github.com/antigravity/monoflow/pkg/deliver"
 	"github.com/antigravity/monoflow/pkg/events"
@@ -116,6 +117,9 @@ func main() {
 	case "scenario":
 		handleScenario(rootDir)
 
+	case "cache":
+		handleCache(rootDir)
+
 	default:
 		fmt.Printf("Unknown command: %s\n\n", cmd)
 		printUsage()
@@ -145,7 +149,8 @@ Usage:
   monoflow commit -m "<msg>"          Sub-50ms verified agent commit bypassing slow hooks
   monoflow guard [check]              Test integrity guard (anti-cheating) & secret scanner
   monoflow task [check|prove|slice]   DoD contracts, Proof of Work receipts, & stacked diffs
-  monoflow deliver [--target=<pkg>]   Assemble hermetic deliverable artifact (.agents/dist)
+  monoflow deliver [--target=<p>]     Assemble hermetic deliverable artifact (.agents/dist)
+  monoflow cache [status|clean|serve] Local & remote package cache metrics, hit ratio & built-in HTTP daemon
   monoflow scenario [run] [--json]    Real end-to-end multi-agent enterprise monorepo simulation
   monoflow app test                   Delta compilation + symlink overlay (< 5s full-app)
   monoflow pr [create|list|view|review|test|local|merge] Full agent-native PR suite with affected packages
@@ -337,12 +342,32 @@ func handleCheckpoint(rootDir string) {
 }
 
 func handleVerify(rootDir string, metrics *telemetry.Collector) {
-	// Check for --proof=<task-id> (1-second reviewer verification)
+	opts := verify.VerifyOptions{}
+	targetPkg := ""
+	verifyAll := false
+
+	// Check flags
 	for _, arg := range os.Args[2:] {
 		if strings.HasPrefix(arg, "--proof=") {
 			taskID := strings.TrimPrefix(arg, "--proof=")
 			handleProofVerification(rootDir, taskID)
 			return
+		} else if strings.HasPrefix(arg, "--target=") {
+			targetPkg = strings.TrimPrefix(arg, "--target=")
+		} else if strings.HasPrefix(arg, "--package=") {
+			targetPkg = strings.TrimPrefix(arg, "--package=")
+		} else if arg == "--all" {
+			verifyAll = true
+		} else if arg == "--no-cache" || arg == "--force" {
+			opts.NoCache = true
+		} else if arg == "--test" {
+			opts.Mode = "test"
+		} else if arg == "--typecheck" {
+			opts.Mode = "fast"
+		} else if arg == "--lint" {
+			opts.Mode = "lint"
+		} else if arg == "--all-checks" {
+			opts.Mode = "all"
 		}
 	}
 
@@ -352,12 +377,79 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 		os.Exit(1)
 	}
 
-	changedFiles := getGitChangedFiles(rootDir)
 	runner := verify.NewRunner(rootDir)
-
 	start := time.Now()
-	res := runner.VerifyAffected(g, changedFiles, verify.VerifyOptions{})
-	res.DurationMs = float64(time.Since(start).Microseconds()) / 1000.0
+
+	var res verify.SuiteResult
+
+	if targetPkg != "" {
+		pkg, exists := g.GetPackage(targetPkg)
+		if !exists {
+			fmt.Printf(`{"status": "failed", "error": "package '%s' not found"}`+"\n", targetPkg)
+			os.Exit(1)
+		}
+		tRes := runner.VerifyTarget(pkg, opts)
+		durMs := float64(time.Since(start).Microseconds()) / 1000.0
+		passed := 0
+		failed := 0
+		cached := 0
+		if tRes.Status == "passed" {
+			passed = 1
+			if tRes.Cached {
+				cached = 1
+			}
+		} else {
+			failed = 1
+		}
+		res = verify.SuiteResult{
+			Status:           tRes.Status,
+			DurationMs:       durMs,
+			TotalTargets:     1,
+			PassedTargets:    passed,
+			FailedTargets:    failed,
+			CachedTargets:    cached,
+			AffectedPackages: []string{targetPkg},
+			Results:          []verify.TargetResult{tRes},
+		}
+	} else if verifyAll {
+		allPkgs := g.GetAllPackages()
+		results := make([]verify.TargetResult, 0, len(allPkgs))
+		allNames := make([]string, 0, len(allPkgs))
+		passed := 0
+		failed := 0
+		cached := 0
+		overallStatus := "passed"
+
+		for _, p := range allPkgs {
+			allNames = append(allNames, p.Name)
+			tRes := runner.VerifyTarget(p, opts)
+			results = append(results, tRes)
+			if tRes.Status == "failed" {
+				failed++
+				overallStatus = "failed"
+			} else {
+				passed++
+				if tRes.Cached {
+					cached++
+				}
+			}
+		}
+		durMs := float64(time.Since(start).Microseconds()) / 1000.0
+		res = verify.SuiteResult{
+			Status:           overallStatus,
+			DurationMs:       durMs,
+			TotalTargets:     len(results),
+			PassedTargets:    passed,
+			FailedTargets:    failed,
+			CachedTargets:    cached,
+			AffectedPackages: allNames,
+			Results:          results,
+		}
+	} else {
+		changedFiles := getGitChangedFiles(rootDir)
+		res = runner.VerifyAffected(g, changedFiles, opts)
+		res.DurationMs = float64(time.Since(start).Microseconds()) / 1000.0
+	}
 
 	data, _ := json.MarshalIndent(res, "", "  ")
 	fmt.Println(string(data))
@@ -473,14 +565,22 @@ func handleTask(rootDir string) {
 func handleDeliver(rootDir string) {
 	g, _ := graph.LoadOrDiscover(rootDir)
 	target := ""
-	if len(os.Args) > 2 {
-		target = strings.TrimPrefix(os.Args[2], "--target=")
+	opts := deliver.BuildOptions{}
+
+	for _, arg := range os.Args[2:] {
+		if strings.HasPrefix(arg, "--target=") {
+			target = strings.TrimPrefix(arg, "--target=")
+		} else if strings.HasPrefix(arg, "--package=") {
+			target = strings.TrimPrefix(arg, "--package=")
+		} else if arg == "--no-cache" || arg == "--force" {
+			opts.NoCache = true
+		}
 	}
 
 	pkgs := g.GetAllPackages()
 	for _, p := range pkgs {
 		if target == "" || p.Name == target {
-			manifest, err := deliver.BuildDeliverable(rootDir, p)
+			manifest, err := deliver.BuildDeliverableWithOptions(rootDir, p, opts)
 			if err == nil {
 				data, _ := json.MarshalIndent(manifest, "", "  ")
 				fmt.Println(string(data))
@@ -1190,6 +1290,22 @@ func handleGuard(rootDir string) {
 }
 
 func handleOuter(rootDir string) {
+	verify.DefaultE2ERunner = func(dir string) (*verify.E2EResult, error) {
+		rep, err := scenario.RunScenario("")
+		if err != nil {
+			return &verify.E2EResult{
+				Status: "failed",
+				Error:  err.Error(),
+			}, err
+		}
+		return &verify.E2EResult{
+			Status:       rep.Status,
+			DurationMs:   rep.TotalTimeMs,
+			TotalScenes:  rep.TotalScenes,
+			PassedScenes: rep.Passed,
+		}, nil
+	}
+
 	om := verify.NewOuterLoopManager(rootDir)
 	if len(os.Args) < 3 {
 		fmt.Println(`{"error": "usage: monoflow outer start [opts] | status <id> | wait <id> | list"}`)
@@ -1198,11 +1314,12 @@ func handleOuter(rootDir string) {
 
 	sub := os.Args[2]
 	switch sub {
-	case "start":
+	case "start", "run", "check":
 		opts := verify.OuterLoopOptions{
 			AutoPush:   false,
 			AutoRevert: false,
 			Async:      false,
+			IncludeE2E: true,
 		}
 		for _, arg := range os.Args[3:] {
 			if strings.HasPrefix(arg, "--commit=") {
@@ -1219,6 +1336,10 @@ func handleOuter(rootDir string) {
 				opts.AutoRevert = true
 			} else if arg == "--async" {
 				opts.Async = true
+			} else if arg == "--no-e2e" {
+				opts.IncludeE2E = false
+			} else if arg == "--e2e" {
+				opts.IncludeE2E = true
 			}
 		}
 
@@ -1403,7 +1524,9 @@ func handlePush(rootDir string) {
 		if err == nil {
 			res["status"] = "pushed_and_watching"
 			res["watcher_id"] = job.ID
-			res["agent_directive"] = "UNBLOCKED. Autonomous CI watcher is monitoring remote runs in the background. MonoFlow will emit an event upon CI completion. You may proceed immediately with the next task."
+			res["ci_watcher_command"] = fmt.Sprintf("./bin/monoflow events watch %s --branch=%s", headSHA, branch)
+			res["agent_action_required"] = "DO_NOT_WAIT"
+			res["agent_directive"] = "STOP POLLING. DO NOT schedule timers or loop waiting for CI. Dispatch 'monoflow events watch' as a background task and immediately end your turn. You will be automatically awakened by a system notification when remote CI finishes."
 		}
 	}
 
@@ -1625,8 +1748,43 @@ func handleEvents(rootDir string) {
 		_ = em.ClearAll()
 		fmt.Println(`{"status": "cleared"}`)
 
+	case "watch":
+		commitSHA := ""
+		branch := ""
+		timeoutMin := 25
+		for _, arg := range os.Args[3:] {
+			if strings.HasPrefix(arg, "--commit=") {
+				commitSHA = strings.TrimPrefix(arg, "--commit=")
+			} else if strings.HasPrefix(arg, "--branch=") {
+				branch = strings.TrimPrefix(arg, "--branch=")
+			} else if strings.HasPrefix(arg, "--timeout=") {
+				if t, err := strconv.Atoi(strings.TrimPrefix(arg, "--timeout=")); err == nil {
+					timeoutMin = t
+				}
+			} else if commitSHA == "" && !strings.HasPrefix(arg, "-") {
+				commitSHA = arg
+			}
+		}
+
+		cw := events.NewCIWatcher(rootDir)
+		job, err := cw.StartWatch(events.WatchOptions{
+			CommitSHA:  commitSHA,
+			Branch:     branch,
+			TimeoutMin: timeoutMin,
+			Async:      false,
+		})
+		if err != nil {
+			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
+			os.Exit(1)
+		}
+		data, _ := json.MarshalIndent(job, "", "  ")
+		fmt.Println(string(data))
+		if job.Status == events.WatchStatusCompletedFailed || job.Status == events.WatchStatusTimedOut {
+			os.Exit(1)
+		}
+
 	default:
-		fmt.Printf(`{"error": "unknown events subcommand: %s (use unread | list | ack <id> | clear)"}`+"\n", sub)
+		fmt.Printf(`{"error": "unknown events subcommand: %s (use unread | list | watch <sha> | ack <id> | clear)"}`+"\n", sub)
 		os.Exit(1)
 	}
 }
@@ -1650,7 +1808,84 @@ func getGitChangedFiles(rootDir string) []string {
 			}
 		}
 	}
+
+	// If working tree is clean, fallback to diff against base branch or HEAD~1 to capture committed branch edits
+	if len(files) == 0 {
+		cmdDiff := exec.Command("git", "diff", "--name-only", "origin/main...HEAD")
+		cmdDiff.Dir = rootDir
+		if diffOut, err := cmdDiff.CombinedOutput(); err == nil && len(strings.TrimSpace(string(diffOut))) > 0 {
+			for _, f := range strings.Split(strings.TrimSpace(string(diffOut)), "\n") {
+				if trimmed := strings.TrimSpace(f); trimmed != "" {
+					files = append(files, trimmed)
+				}
+			}
+		} else {
+			cmdDiffHead := exec.Command("git", "diff", "--name-only", "HEAD~1...HEAD")
+			cmdDiffHead.Dir = rootDir
+			if headOut, err := cmdDiffHead.CombinedOutput(); err == nil && len(strings.TrimSpace(string(headOut))) > 0 {
+				for _, f := range strings.Split(strings.TrimSpace(string(headOut)), "\n") {
+					if trimmed := strings.TrimSpace(f); trimmed != "" {
+						files = append(files, trimmed)
+					}
+				}
+			}
+		}
+	}
+
 	return files
+}
+
+func handleCache(rootDir string) {
+	if len(os.Args) < 3 {
+		fmt.Println(`MonoFlow Cache Commands:
+  monoflow cache status    Show local and remote cache efficiency, hit ratio, and disk usage
+  monoflow cache clean     Purge local cache storage
+  monoflow cache serve     Launch built-in HTTP Remote Cache server (--port=8080 --token=... --dir=...)`)
+		os.Exit(0)
+	}
+
+	sub := os.Args[2]
+	mgr := cache.NewManager(rootDir, cache.DefaultConfig(rootDir))
+
+	switch sub {
+	case "status":
+		stats := mgr.GetStats()
+		data, _ := json.MarshalIndent(stats, "", "  ")
+		fmt.Println(string(data))
+
+	case "clean", "purge":
+		if err := mgr.Clean(); err != nil {
+			fmt.Printf(`{"status": "error", "error": "%s"}`+"\n", err)
+			os.Exit(1)
+		}
+		fmt.Println(`{"status": "cleaned", "message": "Local verification and artifact cache purged"}`)
+
+	case "serve":
+		port := 8080
+		storageDir := filepath.Join(rootDir, ".agents", "cache", "remote_storage")
+		token := ""
+		for _, arg := range os.Args[3:] {
+			if strings.HasPrefix(arg, "--port=") {
+				if p, err := strconv.Atoi(strings.TrimPrefix(arg, "--port=")); err == nil {
+					port = p
+				}
+			} else if strings.HasPrefix(arg, "--dir=") {
+				storageDir = strings.TrimPrefix(arg, "--dir=")
+			} else if strings.HasPrefix(arg, "--token=") {
+				token = strings.TrimPrefix(arg, "--token=")
+			}
+		}
+		addr := fmt.Sprintf(":%d", port)
+		fmt.Printf(`{"status": "running", "addr": "%s", "storage_dir": %q, "token_protected": %t}`+"\n", addr, storageDir, token != "")
+		if err := cache.StartServer(addr, storageDir, token); err != nil {
+			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
+			os.Exit(1)
+		}
+
+	default:
+		fmt.Printf(`{"error": "unknown cache subcommand: %s (use status | clean | serve)"}`+"\n", sub)
+		os.Exit(1)
+	}
 }
 
 func handleClone() {

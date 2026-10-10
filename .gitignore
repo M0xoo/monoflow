@@ -24,6 +24,7 @@ coverage.html
 .agents/events/
 .agents/prs/
 .agents/subset.json
+.agents/cache/
 
 # OS and Editor metadata
 .DS_Store

@@ -70,7 +70,6 @@ func NewCIWatcher(rootDir string) *CIWatcher {
 // StartWatch initiates CI monitoring. If opts.Async is true, returns immediately in < 50ms.
 func (cw *CIWatcher) StartWatch(opts WatchOptions) (*WatchJob, error) {
 	cw.mu.Lock()
-	defer cw.mu.Unlock()
 
 	commitSHA := opts.CommitSHA
 	if commitSHA == "" {
@@ -108,8 +107,10 @@ func (cw *CIWatcher) StartWatch(opts WatchOptions) (*WatchJob, error) {
 	}
 
 	if err := cw.saveJob(job); err != nil {
+		cw.mu.Unlock()
 		return nil, fmt.Errorf("failed to save watch job: %w", err)
 	}
+	cw.mu.Unlock()
 
 	if opts.Async {
 		// Detach in background goroutine — zero agent blocking!

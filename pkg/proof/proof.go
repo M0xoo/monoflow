@@ -185,9 +185,8 @@ func ProveTask(rootDir string, taskID string, g *graph.DependencyGraph, modified
 	}
 
 	// Save receipt to .agents/proofs/<task-id>.json
-	proofsDir := filepath.Join(rootDir, ".agents", "proofs")
-	_ = os.MkdirAll(proofsDir, 0755)
-	receiptPath := filepath.Join(proofsDir, fmt.Sprintf("%s.json", taskID))
+	receiptPath := filepath.Join(rootDir, ".agents", "proofs", fmt.Sprintf("%s.json", taskID))
+	_ = os.MkdirAll(filepath.Dir(receiptPath), 0755)
 	receiptData, _ := json.MarshalIndent(receipt, "", "  ")
 	_ = os.WriteFile(receiptPath, receiptData, 0644)
 

@@ -44,3 +44,11 @@ Follow these strict rules to keep execution fast, prevent context blowup, and av
 * Project affected packages locally: `monoflow pr local <id> [--worktree]`.
 * Sign-off and merge: `monoflow pr review <id> --approve`, `monoflow pr merge <id> --strategy=squash`.
 
+## 8. Zero CI Polling & Reactive Asynchronous Wakeup
+* **STRICT PROHIBITION**: NEVER poll `gh pr checks`, `gh run watch`, or schedule artificial polling loops / timer wakeups while waiting for CI.
+* MonoFlow operates on a **fire-and-forget** reactive notification model:
+  - After `monoflow push` or `monoflow pr create`, dispatch the suggested background watcher (`monoflow events watch <commit_sha>`) or query `.agents/events/` in < 5ms via `monoflow events unread`.
+  - **Immediately end your turn** or proceed with other independent work.
+  - The runtime messaging system will automatically resume your execution with a high-priority notification when remote CI passes or fails.
+
+
