@@ -12,6 +12,7 @@
 
 *Stop blowing token budgets on ANSI terminal dumps. Stop waiting 45 minutes for CI. Stop dirtying Git history with trial-and-error edits.*
 
+[Documentation (Live)](https://m0xoo.github.io/monoflow/) •
 [Quickstart](#-quickstart-in-10-seconds) •
 [Why MonoFlow?](#-why-monoflow) •
 [Core Pillars](#-core-pillars) •
@@ -45,7 +46,7 @@ Install MonoFlow into any existing repository (Node, Go, Rust, Python, or Polygl
 ```bash
 curl -fsSL https://get.monoflow.dev/install.sh | bash
 # or from source:
-git clone https://github.com/antigravity/monoflow.git
+git clone https://github.com/M0xoo/monoflow.git
 cd monoflow && make build && ./install.sh
 ```
 
@@ -246,7 +247,7 @@ Measured on an Apple Silicon (M-series) workstation across a 5-package polyglot 
 Contributions are welcome!
 
 ```bash
-git clone https://github.com/antigravity/monoflow.git
+git clone https://github.com/M0xoo/monoflow.git
 cd monoflow
 
 # Run all unit and integration tests:

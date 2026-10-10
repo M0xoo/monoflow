@@ -1,0 +1,702 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MonoFlow — The Agent-Native Monorepo & Ultra-Fast CI Operating Environment</title>
+  <meta name="description" content="Sub-2s inner-loop verification, 15ms ephemeral checkpoints, multi-agent virtual worktrees with AST synthesis, PR review risk scoring, and two-tier CI gates.">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
+</head>
+<body>
+
+  <!-- Top Header HUD -->
+  <header class="header">
+    <div style="display: flex; align-items: center; gap: 1rem;">
+      <button class="mobile-menu-btn" id="mobile-menu-btn" aria-label="Toggle navigation">☰</button>
+      <a href="#" class="brand">
+        <span class="brand-icon">⚡</span> MonoFlow
+        <span class="brand-tag">v1.0.0</span>
+      </a>
+    </div>
+
+    <div class="header-nav">
+      <div class="search-bar">
+        <span style="color: var(--text-dim); margin-right: 0.4rem;">🔍</span>
+        <input type="text" id="search-input" placeholder="Query commands & docs..." autocomplete="off">
+        <span class="search-kbd">⌘K</span>
+      </div>
+
+      <nav class="header-links">
+        <a href="#quickstart" class="header-link">Quickstart</a>
+        <a href="#architecture" class="header-link">Architecture</a>
+        <a href="#multi-agent" class="header-link">Multi-Agent</a>
+        <a href="#review-safeguards" class="header-link">Reviews & CI</a>
+        <a href="#cli-reference" class="header-link">CLI</a>
+        <a href="https://github.com/M0xoo/monoflow" target="_blank" rel="noopener noreferrer" class="header-link" style="display: flex; align-items: center; gap: 0.35rem;">
+          <svg height="17" width="17" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path></svg>
+          GitHub
+        </a>
+        <button class="theme-toggle-btn" id="theme-toggle" aria-label="Toggle theme">☀️</button>
+      </nav>
+    </div>
+  </header>
+
+  <div class="layout">
+    <!-- Sidebar Navigation -->
+    <aside class="sidebar">
+      <div class="sidebar-group">
+        <div class="sidebar-title">Getting Started</div>
+        <a href="#quickstart" class="sidebar-link active">Quickstart in 10s</a>
+        <a href="#why-monoflow" class="sidebar-link">Why MonoFlow?</a>
+        <a href="#calculator" class="sidebar-link">Cost & Latency ROI</a>
+      </div>
+
+      <div class="sidebar-group">
+        <div class="sidebar-title">Core Architecture</div>
+        <a href="#inner-loop" class="sidebar-link">Sub-2s Inner Loop</a>
+        <a href="#checkpoints" class="sidebar-link">15ms Snapshots (Shadow)</a>
+        <a href="#dag-graph" class="sidebar-link">DAG Dependency Analysis</a>
+        <a href="#delta-assembly" class="sidebar-link">Delta Grafting (< 50ms)</a>
+        <a href="#proof-of-work" class="sidebar-link">1-Second Reviewer PoW</a>
+      </div>
+
+      <div class="sidebar-group">
+        <div class="sidebar-title">Multi-Agent Swarms</div>
+        <a href="#virtual-worktrees" class="sidebar-link">Virtual Worktrees (< 60ms)</a>
+        <a href="#cow-dependencies" class="sidebar-link">CoW Cache Cloning (APFS)</a>
+        <a href="#ast-synthesizer" class="sidebar-link">Same-File AST Synthesizer <span class="sidebar-pill">Zero Conflict</span></a>
+        <a href="#worktree-gc" class="sidebar-link">Heartbeats & Auto-GC</a>
+      </div>
+
+      <div class="sidebar-group">
+        <div class="sidebar-title">Review Safeguards & CI</div>
+        <a href="#risk-scoring" class="sidebar-link">Semantic Risk Scoring</a>
+        <a href="#anti-hallucination" class="sidebar-link">PR Scope & Slop Auditor</a>
+        <a href="#backpressure" class="sidebar-link">Agentic Backpressure</a>
+        <a href="#speculative-queue" class="sidebar-link">Speculative Merge Queue</a>
+        <a href="#two-tier-ci" class="sidebar-link">Two-Tier GitHub Actions CI</a>
+      </div>
+
+      <div class="sidebar-group">
+        <div class="sidebar-title">Safety & Circuit Breakers</div>
+        <a href="#test-guard" class="sidebar-link">Anti-Cheating Test Guard</a>
+        <a href="#secret-scanner" class="sidebar-link">Secret Leak Scanner</a>
+        <a href="#circuit-breaker" class="sidebar-link">Runaway Circuit Breaker</a>
+        <a href="#fast-commit" class="sidebar-link">Fast Agent Commit</a>
+      </div>
+
+      <div class="sidebar-group">
+        <div class="sidebar-title">Reference</div>
+        <a href="#cli-reference" class="sidebar-link">CLI Command Reference</a>
+        <a href="#polyglot-support" class="sidebar-link">Polyglot Toolchain Matrix</a>
+        <a href="#benchmarks" class="sidebar-link">Production Benchmarks</a>
+      </div>
+    </aside>
+
+    <!-- Main Content Area -->
+    <main class="content">
+
+      <!-- Hero Cyber-Banner -->
+      <section class="hero">
+        <div class="hero-radar-badge">
+          <span class="radar-pulse"></span>
+          SYS.STATUS // NOMINAL &bull; ENGINE // GO_NATIVE_v1.0 &bull; LATENCY // SUB_MS
+        </div>
+
+        <h1 class="hero-title">The Agent-Native Monorepo & Ultra-Fast CI Operating Environment</h1>
+        
+        <p class="hero-subtitle">
+          Built in native Go with zero external dependencies. Eliminates ANSI token waste, empowers multi-agent concurrent swarming without lock contention, stops "agentic slop" in code reviews, and slashes CI costs by 90%.
+        </p>
+
+        <!-- Live Metrics Strip -->
+        <div class="hero-metrics-strip">
+          <div class="metric-pill">
+            <span class="metric-val emerald">&lt; 0.16ms</span>
+            <span class="metric-lbl">Reviewer Verification</span>
+          </div>
+          <div class="metric-pill">
+            <span class="metric-val">15ms</span>
+            <span class="metric-lbl">Ephemeral Snapshot</span>
+          </div>
+          <div class="metric-pill">
+            <span class="metric-val purple">25.7ms</span>
+            <span class="metric-lbl">Same-File AST Sync</span>
+          </div>
+          <div class="metric-pill">
+            <span class="metric-val emerald">90%</span>
+            <span class="metric-lbl">CI Cost Reduction</span>
+          </div>
+        </div>
+
+        <div class="hero-buttons">
+          <a href="#quickstart" class="btn-primary">Initialize Repository →</a>
+          <a href="https://github.com/M0xoo/monoflow" target="_blank" rel="noopener noreferrer" class="btn-secondary">
+            View Source on GitHub
+          </a>
+        </div>
+
+        <div class="install-terminal">
+          <span class="prompt">$</span>
+          <span id="quick-curl">curl -fsSL https://get.monoflow.dev/install.sh | bash</span>
+          <button class="copy-btn" data-target="quick-curl" title="Copy install command">📋</button>
+        </div>
+      </section>
+
+      <!-- Interactive HUD Simulator -->
+      <section class="section">
+        <div class="section-tag">// TELEMETRY_SIMULATOR</div>
+        <h2 class="section-title">⚡ Interactive Engine Simulator</h2>
+        <p class="section-desc">Test how MonoFlow's sub-millisecond subsystems execute real-world enterprise multi-agent workflows:</p>
+
+        <div class="interactive-hud">
+          <div class="hud-topbar">
+            <div class="hud-status">
+              <span class="radar-pulse"></span>
+              KERNEL READY // LIVE VERIFICATION
+            </div>
+            <div class="hud-selector">
+              <button class="hud-tab active" data-scenario="ast">1. AST Swarm Merge</button>
+              <button class="hud-tab" data-scenario="slop">2. Anti-Slop Audit</button>
+              <button class="hud-tab" data-scenario="queue">3. Speculative Queue</button>
+              <button class="hud-tab" data-scenario="circuit">4. Circuit Breaker</button>
+              <button class="hud-tab" data-scenario="proof">5. 1s Reviewer PoW</button>
+            </div>
+          </div>
+          <pre class="hud-display" id="sim-output"></pre>
+        </div>
+      </section>
+
+      <!-- Interactive CI Latency & Cost Calculator -->
+      <section id="calculator" class="section">
+        <div class="section-tag">// ROI_CALCULATOR</div>
+        <h2 class="section-title">💰 CI Latency & Runner Cost Calculator</h2>
+        <p class="section-desc">Calculate your team's monthly CI compute savings and iteration acceleration:</p>
+
+        <div class="card" style="background: var(--mono-card); border-color: var(--mono-border-glow);">
+          <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem; margin-bottom: 1.5rem;">
+            <div>
+              <label style="font-family: var(--font-mono); font-size: 0.85rem; color: var(--text-secondary); display: block; margin-bottom: 0.4rem;">
+                Number of Packages in Monorepo:
+              </label>
+              <input type="number" id="calc-pkg-count" value="12" min="2" max="250" style="background: var(--mono-void); border: 1px solid var(--mono-border); color: var(--neon-cyan); padding: 0.5rem 0.8rem; border-radius: 6px; font-family: var(--font-mono); font-size: 1.1rem; width: 140px;">
+            </div>
+            <div style="display: flex; gap: 2rem; flex-wrap: wrap;">
+              <div>
+                <div style="font-family: var(--font-mono); font-size: 0.7rem; color: var(--text-dim); text-transform: uppercase;">Traditional Monorepo CI</div>
+                <div id="calc-ci-time" style="font-family: var(--font-mono); font-size: 1.3rem; font-weight: 800; color: var(--neon-rose);">34 mins</div>
+              </div>
+              <div>
+                <div style="font-family: var(--font-mono); font-size: 0.7rem; color: var(--text-dim); text-transform: uppercase;">MonoFlow Inner Loop</div>
+                <div id="calc-mf-time" style="font-family: var(--font-mono); font-size: 1.3rem; font-weight: 800; color: var(--neon-emerald);">1.6s</div>
+              </div>
+              <div>
+                <div style="font-family: var(--font-mono); font-size: 0.7rem; color: var(--text-dim); text-transform: uppercase;">Velocity Multiplier</div>
+                <div id="calc-speedup" style="font-family: var(--font-mono); font-size: 1.3rem; font-weight: 800; color: var(--neon-cyan);">1,275x</div>
+              </div>
+              <div>
+                <div style="font-family: var(--font-mono); font-size: 0.7rem; color: var(--text-dim); text-transform: uppercase;">Est. GitHub Runner Savings</div>
+                <div id="calc-savings" style="font-family: var(--font-mono); font-size: 1.3rem; font-weight: 800; color: var(--neon-emerald);">$1,380/mo</div>
+              </div>
+            </div>
+          </div>
+          <div style="font-size: 0.82rem; color: var(--text-dim); font-family: var(--font-mono);">
+            * Based on standard GitHub Actions cloud runner pricing ($0.008/min) and average agent commit frequency (15 PRs/day).
+          </div>
+        </div>
+      </section>
+
+      <!-- Architecture Pillars Grid -->
+      <div class="grid-3">
+        <div class="card">
+          <div class="card-tag">// 01 &bull; KERNEL_SPEED</div>
+          <div class="card-title">Sub-2s Inner Loop</div>
+          <div class="card-text">Executes strictly affected targets via in-memory DAG. Strips ANSI spinner junk and outputs compact normalized JSON compiler errors.</div>
+        </div>
+        <div class="card">
+          <div class="card-tag">// 02 &bull; SHADOW_WORKSPACE</div>
+          <div class="card-title">15ms Snapshots</div>
+          <div class="card-text">Snapshots working tree using <code>git write-tree</code> in 15ms. Roll back failed trial edits in 14ms with zero Git history pollution.</div>
+        </div>
+        <div class="card">
+          <div class="card-tag">// 03 &bull; MULTI_AGENT</div>
+          <div class="card-title">Symbol AST Synthesizer</div>
+          <div class="card-text">Multiple agents edit the same file concurrently in isolated worktrees. Synthesizes declarations in &lt; 25ms with 0 conflict markers.</div>
+        </div>
+        <div class="card">
+          <div class="card-tag">// 04 &bull; REVIEW_INTELLIGENCE</div>
+          <div class="card-title">Anti-Slop PR Auditor</div>
+          <div class="card-text">Machine risk scoring (0–100) and hallucination auditing. Blocks PRs claiming "minor typo" while touching database schemas.</div>
+        </div>
+        <div class="card">
+          <div class="card-tag">// 05 &bull; TWO_TIER_CI</div>
+          <div class="card-title">Speculative Merge Queue</div>
+          <div class="card-text">Simulates landing on <code>main</code> in 36ms, bypasses quarantined flaky tests, and activates GitHub Actions Fast-Path (&lt; 30s).</div>
+        </div>
+        <div class="card">
+          <div class="card-tag">// 06 &bull; GUARDRAILS</div>
+          <div class="card-title">Anti-Cheating Guard</div>
+          <div class="card-text">Stops agents from cheating CI by deleting assertions or adding <code>expect(true).toBe(true)</code>. Auto-reverts after 3 consecutive failures.</div>
+        </div>
+      </div>
+
+      <!-- Quickstart Section -->
+      <section id="quickstart" class="section">
+        <div class="section-tag">// DEPLOYMENT</div>
+        <h2 class="section-title">🚀 Quickstart in 10 Seconds</h2>
+        <p>Install MonoFlow into any existing repository (Node, Go, Rust, Python, or Polyglot) with a single command:</p>
+
+        <div class="code-container">
+          <div class="code-header">
+            <span>TERMINAL</span>
+            <button class="copy-btn">Copy</button>
+          </div>
+          <pre><code># 1. Install via automated installer
+curl -fsSL https://get.monoflow.dev/install.sh | bash
+
+# Or clone from official repository:
+git clone https://github.com/M0xoo/monoflow.git
+cd monoflow && make build && ./install.sh</code></pre>
+        </div>
+
+        <p>MonoFlow automatically:</p>
+        <ol style="margin-left: 1.5rem; color: var(--text-secondary); margin-bottom: 1.5rem;">
+          <li>Auto-discovers package boundaries, language toolchains, and test/lint scripts.</li>
+          <li>Builds the directed dependency graph in <code>.agents/monoflow.config.json</code>.</li>
+          <li>Installs the zero-dependency, statically compiled binary into <code>.agents/bin/monoflow</code>.</li>
+          <li>Provisions agent rules, Antigravity skills, task boundary contracts, and flaky test quarantine.</li>
+        </ol>
+      </section>
+
+      <!-- Why MonoFlow Section -->
+      <section id="why-monoflow" class="section">
+        <div class="section-tag">// COMPARISON</div>
+        <h2 class="section-title">💡 Why MonoFlow?</h2>
+        <p>When software engineers are <strong>autonomous AI agents</strong> (Google Antigravity, Cursor, Claude Code, Copilot Workspace), traditional human monorepo workflows collapse under throughput mismatch:</p>
+
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Traditional Human Monorepo</th>
+                <th>⚡ MonoFlow Agent-Native Environment</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>45-minute CI suites</strong> stall agent iteration velocity.</td>
+                <td><strong>Sub-2s Inner Loop:</strong> Verifies strictly affected packages in parallel.</td>
+              </tr>
+              <tr>
+                <td><strong>ANSI terminal dumps</strong> burn 5,000+ context tokens.</td>
+                <td><strong>Compact JSON Diagnostics:</strong> Emits clean <code>{ file, line, col, code, message }</code>.</td>
+              </tr>
+              <tr>
+                <td><strong>Standard Git commits</strong> dirty public history on experimental trial edits.</td>
+                <td><strong>15ms Ephemeral Checkpoints:</strong> Shadow workspace with 14ms instant rollback.</td>
+              </tr>
+              <tr>
+                <td><strong>Unreviewable 800-line PR slop</strong> touching 35 unexpected files.</td>
+                <td><strong>Automated Risk Scoring & Scope Auditor:</strong> Quantifies risk (0–100) and detects undeclared blast radius.</td>
+              </tr>
+              <tr>
+                <td><strong>Git merge conflict markers</strong> (<code>&lt;&lt;&lt;&lt;&lt;&lt;&lt; HEAD</code>) break multi-agent swarming.</td>
+                <td><strong>Semantic AST Synthesizer:</strong> Same-file concurrent editing merged in &lt; 25ms.</td>
+              </tr>
+              <tr>
+                <td><strong>Flaky tests serialize merge trains</strong>, wasting hours on retries.</td>
+                <td><strong>Speculative Local Queue & Two-Tier CI:</strong> Bypasses quarantined tests; enables &lt; 30s GitHub Actions smoke runs.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Core Architecture Section -->
+      <section id="architecture" class="section">
+        <div class="section-tag">// ARCHITECTURE</div>
+        <h2 class="section-title">🏛️ Core Architecture</h2>
+
+        <h3 id="inner-loop">1. The Sub-2s Inner Loop & Clean JSON Diagnostics</h3>
+        <p>Agents should never parse terminal progress spinners or ANSI color escape sequences. MonoFlow executes affected packages in parallel goroutines and normalizes diagnostics into structured JSON:</p>
+
+        <div class="code-container">
+          <div class="code-header">
+            <span>JSON DIAGNOSTIC PAYLOAD</span>
+            <button class="copy-btn">Copy</button>
+          </div>
+          <pre><code>{
+  "status": "failed",
+  "duration_ms": 137.13,
+  "affected_packages": ["services/billing-service"],
+  "results": [
+    {
+      "target": "services/billing-service",
+      "language": "go",
+      "status": "failed",
+      "errors": [
+        {
+          "file": "internal/billing/billing.go",
+          "line": 5,
+          "col": 1,
+          "code": "go-error",
+          "message": "syntax error: unexpected }, expected expression"
+        }
+      ],
+      "command_run": "go build ./..."
+    }
+  ]
+}</code></pre>
+        </div>
+
+        <h3 id="checkpoints">2. Ephemeral Checkpoints (Shadow Workspace)</h3>
+        <p>Captures the entire working tree state in <strong>15ms</strong> using low-level Git plumbing (<code>git write-tree</code>). When an agent trial edit fails, <code>monoflow checkpoint revert</code> restores the green workspace in <strong>14ms</strong> with zero public Git commits.</p>
+
+        <h3 id="proof-of-work">3. Machine-Checked DoD & Proof of Work (PoW)</h3>
+        <p>Before creating a pull request, the agent executes <code>monoflow task prove &lt;task-id&gt;</code> to verify boundary scopes, compile hermetic deliverables into <code>.agents/dist</code>, and sign the cryptographic Proof Receipt.</p>
+        <p>Reviewers verify the PR in <strong>under 1 second</strong>:</p>
+
+        <div class="code-container">
+          <div class="code-header">
+            <span>REVIEWER VERIFICATION</span>
+            <button class="copy-btn">Copy</button>
+          </div>
+          <pre><code>monoflow verify --proof=task-billing-discount
+# Output in 0.159 milliseconds:
+{
+  "status": "VERIFIED",
+  "task_id": "task-billing-discount",
+  "verified_in_ms": 0.159,
+  "dod_checks_passed": 4,
+  "confidence_verdict": "APPROVED (1-Second Instant Verification Passed)"
+}</code></pre>
+        </div>
+      </section>
+
+      <!-- Multi-Agent Swarms Section -->
+      <section id="multi-agent" class="section">
+        <div class="section-tag">// SWARM_CONCURRENCY</div>
+        <h2 class="section-title">🌿 Multi-Agent Swarms & Virtual Worktrees</h2>
+
+        <h3 id="virtual-worktrees">1. Virtual Worktrees (&lt; 60ms) & CoW Cache Cloning</h3>
+        <p>Autonomous agents operate in isolated Git worktrees under <code>.agents/worktrees/&lt;agent-id&gt;</code>. By default, heavy directories (<code>node_modules</code>, <code>.venv</code>, <code>target</code>) are shared via instant symlinks (&lt; 60ms). When an agent upgrades packages, Copy-on-Write cloning (<code>monoflow worktree isolate</code>) clones 2GB of dependencies in <strong>~68ms at 0 bytes disk cost</strong> using APFS <code>clonefile</code> on macOS and Linux <code>reflink</code>.</p>
+
+        <h3 id="ast-synthesizer">2. Semantic Symbol-Level AST Synthesizer</h3>
+        <p>Traditional line-based <code>git merge</code> fails with conflict markers whenever two agents edit the same file. MonoFlow’s AST synthesizer parses native ASTs (Go, TypeScript/JavaScript, Python):</p>
+        <div class="callout emerald">
+          <div class="callout-title">⚡ Zero Conflict Markers</div>
+          <div class="callout-text">If Agent A adds <code>func CancelOrder()</code> and Agent B adds <code>func RefundOrder()</code> to the same Go file, MonoFlow synthesizes both declarations and deduplicates imports automatically in <strong>25ms</strong>.</div>
+        </div>
+
+        <div class="code-container">
+          <div class="code-header">
+            <span>INTER-WORKTREE AST SYNC</span>
+            <button class="copy-btn">Copy</button>
+          </div>
+          <pre><code>monoflow worktree sync --to=agent-alpha --from=agent-beta
+# Result: packages/shared-go/logger/logger.go (synthesized AST) in 25.7ms</code></pre>
+        </div>
+
+        <h3 id="worktree-gc">3. Heartbeat Leases & Automatic Garbage Collection</h3>
+        <p>When an agent crashes or times out, orphaned worktrees lock Git branches. MonoFlow tracks activity heartbeats on every invocation. Running <code>monoflow worktree gc</code> automatically sweeps abandoned worktrees older than their TTL and unlocks Git state.</p>
+      </section>
+
+      <!-- Review Safeguards & CI Section -->
+      <section id="review-safeguards" class="section">
+        <div class="section-tag">// REVIEW_INTELLIGENCE</div>
+        <h2 class="section-title">🛡️ Review Safeguards & CI Guardrails</h2>
+
+        <h3 id="risk-scoring">1. Semantic Risk Scoring (0–100)</h3>
+        <p>Quantifies the architectural blast radius of every PR based on database migrations (+35), security/auth (+30), infrastructure workflows (+25), test deficits (+20), and DAG transitive fan-out (+5 per dependent package):</p>
+        <ul style="margin-left: 1.5rem; color: var(--text-secondary); margin-bottom: 1.2rem;">
+          <li><code>TIER_1_AUTO_APPROVABLE</code> (Score ≤ 20): Eligible for automated merge train (docs/tests only).</li>
+          <li><code>TIER_2_HUMAN_REVIEW_REQUIRED</code> (Score 21–65): Business logic modified; standard review required.</li>
+          <li><code>TIER_3_ELEVATED_RISK_BLOCKED</code> (Score &gt; 65): Touches critical schemas, auth, or high churn.</li>
+        </ul>
+
+        <h3 id="anti-hallucination">2. PR Intent & Scope Auditor</h3>
+        <p>Prevents "Agentic Slop" where an agent claims "docs: minor typo fix" while secretly modifying SQL migrations or auth tokens:</p>
+
+        <div class="code-container">
+          <div class="code-header">
+            <span>PR INTENT AUDIT COMMAND</span>
+            <button class="copy-btn">Copy</button>
+          </div>
+          <pre><code>monoflow review audit --title="docs: update readme" --desc="minor doc fixes"
+# Result: Exit code 1 (Blocked)
+# Undisclosed critical blast radius: 003_stripe_customer.sql modified in Git but omitted from PR description!</code></pre>
+        </div>
+
+        <h3 id="speculative-queue">3. Speculative Local Merge Queue & Two-Tier CI</h3>
+        <p>Pushing every agent micro-commit to GitHub Actions causes CI gridlock and burns thousands of dollars in runner time:</p>
+        <ol style="margin-left: 1.5rem; color: var(--text-secondary); margin-bottom: 1.5rem;">
+          <li><code>monoflow queue spec &lt;task-id&gt;</code> simulates landing on <code>main</code> locally in <strong>36ms</strong>, testing only affected targets and bypassing quarantined flaky tests.</li>
+          <li>Issues a signed cryptographic receipt (<code>.agents/queue/receipt_&lt;sha&gt;.json</code>).</li>
+          <li>In GitHub Actions, <code>monoflow ci check</code> validates the signature and activates <strong>Tier 1 Fast-Path (&lt; 30s)</strong> instead of a 30-minute full build, cutting CI costs by up to <strong>90%</strong>.</li>
+        </ol>
+      </section>
+
+      <!-- Safety Guardrails Section -->
+      <section id="safety" class="section">
+        <div class="section-tag">// SAFETY_CIRCUIT</div>
+        <h2 class="section-title">🔒 Safety Guardrails & Circuit Breakers</h2>
+
+        <h3 id="test-guard">1. Anti-Cheating Test Integrity Guard</h3>
+        <p>Autonomous agents frequently try to get CI green by deleting failing assertions, commenting out tests, or inserting hollow assertions like <code>expect(true).toBe(true)</code>. MonoFlow inspects diffs and rejects any commit where assertions were weakened or mocked away.</p>
+
+        <h3 id="circuit-breaker">2. Runaway Self-Correction Circuit Breaker</h3>
+        <p>Caps inner-loop self-correction attempts at 3 iterations. If attempt 3 fails, MonoFlow <strong>auto-reverts the workspace to the latest green checkpoint</strong> and emits a structured Human Escalation payload, stopping runaway token spend.</p>
+
+        <h3 id="fast-commit">3. Fast Agent Commit (<code>monoflow commit</code>)</h3>
+        <p>Standard human pre-commit hooks (Husky, lint-staged, prettier) hang agents waiting for interactive stdin or take 40s per micro-commit. <code>monoflow commit -m "..."</code> validates test integrity and secret scanning in &lt; 50ms, then commits with <code>--no-verify</code>.</p>
+      </section>
+
+      <!-- Complete CLI Reference -->
+      <section id="cli-reference" class="section">
+        <div class="section-tag">// CLI_REFERENCE</div>
+        <h2 class="section-title">📖 Complete CLI Reference</h2>
+
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Command</th>
+                <th>Description</th>
+                <th>Latency</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>monoflow init [dir]</code></td>
+                <td>Auto-discover repository architecture & initialize <code>.agents</code></td>
+                <td>~40ms</td>
+              </tr>
+              <tr>
+                <td><code>monoflow graph query &lt;pkg&gt;</code></td>
+                <td>Inspect upstream dependencies & downstream dependents</td>
+                <td>~3ms</td>
+              </tr>
+              <tr>
+                <td><code>monoflow graph impact &lt;file&gt;</code></td>
+                <td>Compute exact package impact matrix for a modified file</td>
+                <td>~3ms</td>
+              </tr>
+              <tr>
+                <td><code>monoflow checkpoint save "msg"</code></td>
+                <td>Ephemeral in-memory tree snapshot (shadow workspace)</td>
+                <td>~15ms</td>
+              </tr>
+              <tr>
+                <td><code>monoflow checkpoint revert [id]</code></td>
+                <td>Instant rollback of failed trial edits</td>
+                <td>~14ms</td>
+              </tr>
+              <tr>
+                <td><code>monoflow worktree create &lt;id&gt;</code></td>
+                <td>Provision virtual worktree (shared symlinks or CoW cloned)</td>
+                <td>50ms – 90ms</td>
+              </tr>
+              <tr>
+                <td><code>monoflow worktree sync --to=A --from=B</code></td>
+                <td><strong>Symbol-level AST synthesis</strong> across concurrent agent worktrees</td>
+                <td>~25ms</td>
+              </tr>
+              <tr>
+                <td><code>monoflow worktree gc</code></td>
+                <td>Clean up abandoned agent worktrees (&gt; TTL) and unlock Git refs</td>
+                <td>~15ms</td>
+              </tr>
+              <tr>
+                <td><code>monoflow review risk</code></td>
+                <td>Machine risk scoring (0–100) & blast radius classification</td>
+                <td>~10ms</td>
+              </tr>
+              <tr>
+                <td><code>monoflow review audit --title=...</code></td>
+                <td>Detect undisclosed blast radius & PR intent hallucination</td>
+                <td>~10ms</td>
+              </tr>
+              <tr>
+                <td><code>monoflow review throttle</code></td>
+                <td>Enforce agentic backpressure when human review queue is full</td>
+                <td>~5ms</td>
+              </tr>
+              <tr>
+                <td><code>monoflow queue spec [task-id]</code></td>
+                <td>Speculative local merge simulation & cryptographic receipt</td>
+                <td>~36ms</td>
+              </tr>
+              <tr>
+                <td><code>monoflow ci check [--head=&lt;sha&gt;]</code></td>
+                <td>Two-Tier CI Gate: Activate Tier 1 fast-path (&lt; 30s) on verified receipts</td>
+                <td>~5ms</td>
+              </tr>
+              <tr>
+                <td><code>monoflow commit -m "&lt;msg&gt;"</code></td>
+                <td>Sub-50ms verified agent commit bypassing slow interactive hooks</td>
+                <td>~40ms</td>
+              </tr>
+              <tr>
+                <td><code>monoflow verify --affected</code></td>
+                <td>Run affected inner loop with token-compact JSON output</td>
+                <td>&lt; 300ms</td>
+              </tr>
+              <tr>
+                <td><code>monoflow verify --proof=&lt;id&gt;</code></td>
+                <td><strong>1-Second Reviewer Verification</strong></td>
+                <td><strong>&lt; 1ms</strong></td>
+              </tr>
+              <tr>
+                <td><code>monoflow guard check</code></td>
+                <td>Check test integrity (anti-cheating) & scan for secrets</td>
+                <td>~15ms</td>
+              </tr>
+              <tr>
+                <td><code>monoflow task prove &lt;id&gt;</code></td>
+                <td>Run DoD checks, build deliverable, and emit PoW receipt</td>
+                <td>~250ms</td>
+              </tr>
+              <tr>
+                <td><code>monoflow app test</code></td>
+                <td>Assemble full-app symlink overlay (cached + delta)</td>
+                <td>~18ms</td>
+              </tr>
+              <tr>
+                <td><code>monoflow quarantine [list|add]</code></td>
+                <td>Isolate flaky tests from agent feedback loops & merge queues</td>
+                <td>~5ms</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Polyglot Support -->
+      <section id="polyglot-support" class="section">
+        <div class="section-tag">// TOOLCHAIN_MATRIX</div>
+        <h2 class="section-title">🌐 Polyglot Toolchain Matrix</h2>
+        <p>MonoFlow includes native fast runners for all major languages:</p>
+
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Language / Stack</th>
+                <th>Fast Check Tooling</th>
+                <th>Output Normalizer</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>TypeScript / Node</strong></td>
+                <td><code>tsc --incremental</code>, <code>biome check</code>, <code>vitest</code></td>
+                <td>TS error codes, file, line, col, expected, received</td>
+              </tr>
+              <tr>
+                <td><strong>Go</strong></td>
+                <td><code>go vet</code>, <code>go build</code>, <code>go test</code></td>
+                <td>Go compiler line errors and package failures</td>
+              </tr>
+              <tr>
+                <td><strong>Rust</strong></td>
+                <td><code>cargo check -p</code>, <code>cargo test -p</code></td>
+                <td>Type/borrow check diagnostics without LLVM codegen</td>
+              </tr>
+              <tr>
+                <td><strong>Python</strong></td>
+                <td><code>ruff check</code> (&lt; 20ms in Rust), <code>pytest</code></td>
+                <td>Ruff codes, Mypy type errors, Pytest failure asserts</td>
+              </tr>
+              <tr>
+                <td><strong>Protobuf / Contracts</strong></td>
+                <td><code>buf check</code>, proto validation</td>
+                <td>Cross-language downstream impact edges</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Benchmarks Section -->
+      <section id="benchmarks" class="section">
+        <div class="section-tag">// BENCHMARKS</div>
+        <h2 class="section-title">📊 Production Latency Benchmarks</h2>
+        <p>Measured on an Apple Silicon (M-series) workstation across a 12-package polyglot enterprise monorepo:</p>
+
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Operation</th>
+                <th>Traditional Monorepo Tooling</th>
+                <th>MonoFlow Engine</th>
+                <th>Speedup</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>Architecture Discovery</strong></td>
+                <td>2,500ms (Nx / Turborepo)</td>
+                <td><strong>40ms</strong></td>
+                <td><strong>~62x faster</strong></td>
+              </tr>
+              <tr>
+                <td><strong>State Snapshot</strong></td>
+                <td>850ms (<code>git stash</code> / <code>git commit</code>)</td>
+                <td><strong>15ms</strong> (<code>git write-tree</code>)</td>
+                <td><strong>~56x faster</strong></td>
+              </tr>
+              <tr>
+                <td><strong>State Rollback</strong></td>
+                <td>1,200ms (<code>git checkout -f</code>)</td>
+                <td><strong>14ms</strong> (<code>git read-tree -u</code>)</td>
+                <td><strong>~85x faster</strong></td>
+              </tr>
+              <tr>
+                <td><strong>Inner Loop Error Normalization</strong></td>
+                <td>4,500ms (ANSI terminal dump)</td>
+                <td><strong>137ms</strong> (clean JSON)</td>
+                <td><strong>~32x faster</strong></td>
+              </tr>
+              <tr>
+                <td><strong>Same-File Multi-Agent AST Sync</strong></td>
+                <td>Manual conflict resolution</td>
+                <td><strong>25.7ms</strong> (Zero Conflict Markers)</td>
+                <td><strong>Instant</strong></td>
+              </tr>
+              <tr>
+                <td><strong>Speculative Local Merge Queue</strong></td>
+                <td>25–45 minutes GitHub Actions run</td>
+                <td><strong>36.7ms</strong> (Pre-flight simulation)</td>
+                <td><strong>~40,000x faster</strong></td>
+              </tr>
+              <tr>
+                <td><strong>Full App Assembly (11 Packages)</strong></td>
+                <td>35–45 minutes full compile</td>
+                <td><strong>18.7ms</strong> (Symlink Overlay)</td>
+                <td><strong>Instant</strong></td>
+              </tr>
+              <tr>
+                <td><strong>PR Reviewer Verification</strong></td>
+                <td>10–15 minutes (re-compile & run)</td>
+                <td><strong>0.159ms</strong> (PoW verify)</td>
+                <td><strong>Instant</strong></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <p>⚡ MonoFlow is open source software licensed under the <a href="https://github.com/M0xoo/monoflow/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">MIT License</a>.</p>
+    <p style="margin-top: 0.5rem;">Official Repository: <a href="https://github.com/M0xoo/monoflow" target="_blank" rel="noopener noreferrer">https://github.com/M0xoo/monoflow</a></p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
