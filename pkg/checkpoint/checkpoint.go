@@ -92,18 +92,24 @@ func (m *Manager) Save(message string) (*Checkpoint, error) {
 
 // Revert restores the working directory and index to the specified checkpoint in ~20ms.
 func (m *Manager) Revert(checkpointID string) error {
+	_, err := m.RevertCheckpoint(checkpointID)
+	return err
+}
+
+// RevertCheckpoint restores a checkpoint and returns which one it restored.
+func (m *Manager) RevertCheckpoint(checkpointID string) (*Checkpoint, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	history, err := m.loadHistory()
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	var target *Checkpoint
 	if checkpointID == "" || checkpointID == "latest" {
 		if len(history) == 0 {
-			return fmt.Errorf("no checkpoints available to revert")
+			return nil, fmt.Errorf("no checkpoints available to revert")
 		}
 		target = &history[len(history)-1]
 	} else {
@@ -116,15 +122,15 @@ func (m *Manager) Revert(checkpointID string) error {
 	}
 
 	if target == nil {
-		return fmt.Errorf("checkpoint '%s' not found", checkpointID)
+		return nil, fmt.Errorf("checkpoint '%s' not found", checkpointID)
 	}
 
 	// Restore using git read-tree -u --reset <TreeHash>
 	if _, err := m.runGit("read-tree", "-u", "--reset", target.TreeHash); err != nil {
-		return fmt.Errorf("git read-tree reset failed: %w", err)
+		return nil, fmt.Errorf("git read-tree reset failed: %w", err)
 	}
 
-	return nil
+	return target, nil
 }
 
 // List returns all recorded checkpoints.

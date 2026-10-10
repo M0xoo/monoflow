@@ -317,6 +317,11 @@ func FastAgentCommit(rootDir, message string) (*CommitResult, error) {
 	}
 
 	// 3. Stage changes
+	// A deliberately edited go.work must be committed even in a sparse worktree, where the
+	// projection is hidden with assume-unchanged.
+	if _, err := os.Stat(filepath.Join(rootDir, "go.work")); err == nil && !runtimestate.ProjectedGoWork(rootDir) {
+		_ = exec.Command("git", "-C", rootDir, "update-index", "--no-assume-unchanged", "go.work").Run()
+	}
 	cmdAdd := exec.Command("git", runtimestate.AddArgs()...)
 	cmdAdd.Dir = rootDir
 	if out, err := cmdAdd.CombinedOutput(); err != nil {

@@ -79,6 +79,7 @@ type Suggestion struct {
 	// Consumers that build against the live code and use a removed/changed symbol: they
 	// must be migrated in the same change (or the API evolved expand → contract).
 	SourceConsumersAffected []string `json:"source_consumers_affected,omitempty"`
+	Note                    string   `json:"note,omitempty"`
 }
 
 // Suggest computes the required bump of pkg relative to its latest release (or base rev).
@@ -105,6 +106,9 @@ func Suggest(root string, g *graph.DependencyGraph, pkgName, baseRev string) (*S
 	changes := Diff(before, after)
 	diff, _ := git(root, "diff", "--name-only", since, "--", pkg.Path)
 	s := &Suggestion{Package: pkg.Name, Since: since, Changes: changes, Required: RequiredBump(changes, strings.TrimSpace(diff) != "")}
+	if s.Required == "" {
+		s.Note = "no changes to " + pkg.Name + " since " + since + ": no release needed"
+	}
 	var breaking []Change
 	for _, c := range changes {
 		if c.Kind != "added" {

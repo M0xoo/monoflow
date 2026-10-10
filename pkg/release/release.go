@@ -208,8 +208,10 @@ func Repoint(root string, g *graph.DependencyGraph, consumer, dep, version strin
 	switch c.Language {
 	case graph.LangGo:
 		// Go merges the replace directives of all go.work members, so a module that pins a
-		// release cannot stay in the workspace (it builds standalone, GOWORK=off).
+		// release cannot stay in the root workspace. It gets its own go.work ("use .") so
+		// plain go commands in it (IDE, scripts, CI) resolve natively to the snapshot.
 		setGoWorkMember(root, c.Path, version == "")
+		setOwnGoWork(root, cdir, version != "")
 		return repointGo(cdir, root, d, rel)
 	case graph.LangJavaScript, graph.LangTypeScript:
 		return repointNPM(cdir, root, d.Name, rel, version)
@@ -228,6 +230,16 @@ func repointGo(cdir, root string, d *graph.PackageNode, rel string) (string, err
 		return "", err
 	}
 	modPath := goModulePath(filepath.Join(root, d.Path, "go.mod"))
+	if modPath == "" {
+		// Not projected into this sparse worktree: read it from git.
+		if out, err := git(root, "show", "HEAD:"+filepath.ToSlash(filepath.Join(d.Path, "go.mod"))); err == nil {
+			for _, l := range strings.Split(out, "\n") {
+				if f := strings.Fields(l); len(f) >= 2 && f[0] == "module" {
+					modPath = strings.Trim(f[1], `"`)
+				}
+			}
+		}
+	}
 	if modPath == "" {
 		return "", fmt.Errorf("cannot read module path of %s", d.Name)
 	}
@@ -348,4 +360,28 @@ func setGoWorkMember(root, modPath string, member bool) {
 		}
 	}
 	_ = os.WriteFile(gw, []byte(strings.Join(out, "\n")), 0644)
+}
+
+// setOwnGoWork creates (or removes) a module-local go.work isolating a pinned module from
+// the root workspace. Only done when the repo uses a root go.work at all.
+func setOwnGoWork(root, moduleDir string, own bool) {
+	local := filepath.Join(moduleDir, "go.work")
+	if !own {
+		if strings.Contains(readFile(local), "MonoFlow") {
+			_ = os.Remove(local)
+		}
+		return
+	}
+	rootWork := readFile(filepath.Join(root, "go.work"))
+	if rootWork == "" {
+		return
+	}
+	goLine := "go 1.22"
+	for _, l := range strings.Split(rootWork, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(l), "go ") {
+			goLine = strings.TrimSpace(l)
+			break
+		}
+	}
+	_ = os.WriteFile(local, []byte("// MonoFlow: this module pins internal releases, so it builds outside the root\n// workspace. Managed by 'monoflow version pin/unpin'.\n"+goLine+"\n\nuse .\n"), 0644)
 }

@@ -464,7 +464,7 @@ func handleCheckpoint(rootDir string) {
 			targetID = os.Args[3]
 		}
 		start := time.Now()
-		err := mgr.Revert(targetID)
+		cp, err := mgr.RevertCheckpoint(targetID)
 		durMs := float64(time.Since(start).Microseconds()) / 1000.0
 		if err != nil {
 			fmt.Printf(`{"error": "%s"}`+"\n", err)
@@ -472,7 +472,9 @@ func handleCheckpoint(rootDir string) {
 		}
 		data, _ := json.MarshalIndent(map[string]any{
 			"status":      "reverted",
-			"target":      targetID,
+			"checkpoint":  cp.ID,
+			"message":     cp.Message,
+			"files":       cp.Files,
 			"duration_ms": durMs,
 		}, "", "  ")
 		fmt.Println(string(data))
@@ -1466,6 +1468,7 @@ func handleCI(rootDir string) {
 }
 
 func handleCommit(rootDir string) {
+	refuseSharedRoot(rootDir, "commit")
 	msg := "agent checkpoint commit"
 	for i, arg := range os.Args[2:] {
 		if arg == "-m" && i+1 < len(os.Args[2:]) {
@@ -1977,9 +1980,20 @@ func handleEvents(rootDir string) {
 		others := 0
 		if branch := currentBranch(rootDir); !showAll && branch != "" && branch != "main" && branch != "master" && branch != "HEAD" {
 			scope = branch
+			local := projectedPackages(rootDir)
 			mine := list[:0]
 			for _, e := range list {
-				if e.Branch == "" || e.Branch == branch {
+				relevant := e.Branch == branch
+				if e.Branch == "" {
+					relevant = true
+					// Release notices are for the consumer's owner: only worktrees that
+					// contain that consumer (or any worktree, if action is required).
+					if e.Type == events.EventDependencyReleased {
+						consumer, _ := e.Payload["consumer"].(string)
+						relevant = local == nil && e.RequiresAction || local[consumer]
+					}
+				}
+				if relevant {
 					mine = append(mine, e)
 				} else {
 					others++
@@ -2422,6 +2436,7 @@ func handleVersion(rootDir string) {
 		fmt.Println(string(data))
 
 	case "bump":
+		refuseSharedRoot(rootDir, "version bump")
 		if len(os.Args) < 5 {
 			fmt.Println(`{"error": "usage: monoflow version bump <pkg> <patch|minor|major> [--cascade]"}`)
 			os.Exit(1)
@@ -2713,6 +2728,7 @@ func handleReleases(rootDir, sub string) {
 			"next": "push the tag with 'monoflow push' so CI and other clones can materialise it"})
 
 	case "pin", "unpin":
+		refuseSharedRoot(rootDir, "version "+sub)
 		need(2, sub+" <consumer> <dependency> [--version=<v>]")
 		ver := ""
 		if sub == "pin" {
@@ -2748,6 +2764,7 @@ func handleReleases(rootDir, sub string) {
 		out(map[string]any{"upgrades": ups, "count": len(ups)})
 
 	case "upgrade":
+		refuseSharedRoot(rootDir, "version upgrade")
 		need(2, "upgrade <consumer> <dependency> [--to=<v>]")
 		to := flag("to")
 		if to == "" {
@@ -2846,4 +2863,56 @@ func containsStr(list []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// refuseSharedRoot stops commands that edit files from running in the shared repository
+// root while agent worktrees exist (they would change every agent's base checkout).
+func refuseSharedRoot(rootDir, action string) {
+	for _, a := range os.Args {
+		if a == "--allow-root" {
+			return
+		}
+	}
+	gitDir, _ := exec.Command("git", "-C", rootDir, "rev-parse", "--git-dir").Output()
+	common, _ := exec.Command("git", "-C", rootDir, "rev-parse", "--git-common-dir").Output()
+	gd, cd := strings.TrimSpace(string(gitDir)), strings.TrimSpace(string(common))
+	if gd == "" || gd != cd {
+		return // inside a linked worktree: fine
+	}
+	entries, _ := os.ReadDir(filepath.Join(rootDir, ".agents", "worktrees"))
+	var ids []string
+	for _, e := range entries {
+		if e.IsDir() {
+			ids = append(ids, e.Name())
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	data, _ := json.MarshalIndent(map[string]any{
+		"status": "refused",
+		"error":  fmt.Sprintf("'%s' edits files, and this is the shared repository root used by agent worktrees (%s)", action, strings.Join(ids, ", ")),
+		"hint":   "run it inside your worktree (.agents/worktrees/<agent-id>), or pass --allow-root if you really mean the root",
+	}, "", "  ")
+	fmt.Println(string(data))
+	os.Exit(1)
+}
+
+// projectedPackages returns the packages of a sparse worktree (nil for a full checkout).
+func projectedPackages(rootDir string) map[string]bool {
+	data, err := os.ReadFile(filepath.Join(rootDir, ".agents", "subset.json"))
+	if err != nil {
+		return nil
+	}
+	var meta struct {
+		IncludedPackages []string `json:"included_packages"`
+	}
+	if json.Unmarshal(data, &meta) != nil || len(meta.IncludedPackages) == 0 {
+		return nil
+	}
+	set := map[string]bool{}
+	for _, p := range meta.IncludedPackages {
+		set[p] = true
+	}
+	return set
 }

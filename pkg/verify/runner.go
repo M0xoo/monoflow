@@ -93,16 +93,6 @@ func (r *Runner) VerifyTarget(pkg *graph.PackageNode, opt VerifyOptions) TargetR
 		res.DurationMs = float64(time.Since(start).Microseconds()) / 1000.0
 		return res
 	}
-	// A Go module consuming pinned internal releases must build standalone: inside a
-	// go.work workspace every module resolves workspace members at HEAD, ignoring its
-	// replace directives into release snapshots.
-	if pkg.Language == graph.LangGo && len(pkg.PinnedDependencies) > 0 {
-		if _, err := os.Stat(filepath.Join(r.RootDir, "go.work")); err == nil {
-			for i, c := range cmds {
-				cmds[i] = "export GOWORK=off; " + c
-			}
-		}
-	}
 	cmdStr := strings.Join(cmds, " && ")
 
 	res.CommandRun = cmdStr

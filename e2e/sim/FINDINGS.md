@@ -163,3 +163,20 @@ E2E (Go sandbox): breaking change on HEAD → only money + billing (source) veri
 same change; ledger (pinned 1.0.0) untouched. `release 2.0.0` → ledger gets `breaking`, impact `removed Add`, exact
 upgrade command; billing gets an informational note. `upgrade` → ledger's own verify fails on `money.Add`; after
 migration it passes and the edge reads `pinned 2.0.0`.
+
+## Round 4 (2026-10-10) — versioning agents, real GitHub
+
+MonoFlow CI: 1 run per PR + 1 for main, all green; CI_PASSED delivered to every agent; 0 raw tool calls. Agents used
+`version edges / suggest / bump / upgrade` correctly: agent-money-break migrated only billing (source) and bumped major;
+agent-ledger-upgrade upgraded its pin 1.0.0 → 1.1.0 to get `Sub`.
+**Ground truth (`ci/run.sh`) was red on every head incl. main** once ledger was pinned.
+
+| # | Finding | Fix |
+|---|---------|-----|
+| R4-0 | Pinned Go module removed from root go.work → plain `go` commands in it fail (repo's own CI red); monoflow hid it with GOWORK=off | module-local `go.work` (`use .`): native tools work, no GOWORK=off |
+| R4-1 | `version upgrade` in a sparse worktree: "cannot read module path" when the dependency isn't projected | read go.mod from git |
+| R4-2 | Sparse worktrees show ` M go.work` from creation (git clears skip-worktree in sparse checkouts) | assume-unchanged + commit clears it when go.work was really edited |
+| R4-3 | `version upgrade` at the repo root silently edited the shared root | edit commands refuse the shared root while worktrees exist (`--allow-root`) |
+| R4-4 | `version suggest` → `""` without explanation | note "no changes since …" |
+| R4-5 | Every agent's inbox shows every DEPENDENCY_RELEASED | only worktrees containing the consumer |
+| R4-6 | `checkpoint revert` doesn't say what it restored | id, message, files |

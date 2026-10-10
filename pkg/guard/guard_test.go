@@ -131,7 +131,6 @@ func TestFastAgentCommit(t *testing.T) {
 	}
 }
 
-
 func TestCheckTestIntegrity_AllowsAssertionRewrite(t *testing.T) {
 	repoDir := setupTestGitRepoForGuard(t)
 	defer os.RemoveAll(repoDir)

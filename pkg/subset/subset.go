@@ -1183,11 +1183,12 @@ func SyncGoWork(repoDir string) error {
 	if err := os.WriteFile(filepath.Join(repoDir, "go.work"), projected, 0644); err != nil {
 		return err
 	}
-	// skip-worktree does not survive later sparse-checkout/index operations, so commit,
+	// assume-unchanged hides the projection from git status (git clears skip-worktree on
+	// files present in a sparse checkout); commit,
 	// checkpoint and change detection also recognise the projection by content hash.
 	_ = os.MkdirAll(filepath.Join(repoDir, ".agents"), 0755)
 	_ = os.WriteFile(filepath.Join(repoDir, runtimestate.GoWorkMarker), []byte(runtimestate.HashBytes(projected)), 0644)
-	cmd := exec.Command("git", "update-index", "--skip-worktree", "go.work")
+	cmd := exec.Command("git", "update-index", "--assume-unchanged", "go.work")
 	cmd.Dir = repoDir
 	return cmd.Run()
 }
@@ -1195,7 +1196,7 @@ func SyncGoWork(repoDir string) error {
 // restoreGoWork undoes SyncGoWork, bringing back the committed go.work.
 func restoreGoWork(repoDir string) {
 	_ = os.Remove(filepath.Join(repoDir, runtimestate.GoWorkMarker))
-	cmd := exec.Command("git", "update-index", "--no-skip-worktree", "go.work")
+	cmd := exec.Command("git", "update-index", "--no-assume-unchanged", "go.work")
 	cmd.Dir = repoDir
 	if cmd.Run() != nil {
 		return
