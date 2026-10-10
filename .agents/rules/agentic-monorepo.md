@@ -28,3 +28,19 @@ Follow these strict rules to keep execution fast, prevent context blowup, and av
 ## 5. Sliced Stacked Diffs
 * When completing a task, slice changes into stacked review tiers using:
   `.agents/bin/monoflow stack slice`
+
+## 6. Zero Raw Git Commands — Use MonoFlow Exclusively
+* **NEVER** run raw `git commit`, `git push`, `git pull`, or `git checkout`.
+* Use MonoFlow commands:
+  - Commit: `monoflow commit -m "..."` (sub-50ms verified commit)
+  - Push: `monoflow push` (enforces protected branch shield and pre-push race detector)
+  - Sync: `monoflow sync` (sub-second fast-forward / rebase respecting sparse subsets)
+  - Subsetting: `monoflow subset set|add|remove|update`
+
+## 7. Protected Branch Shield & Agent-Native PR Lifecycle
+* Direct pushes to `main` and `master` are strictly blocked.
+* Propose all changes via `monoflow pr create --title="..."`.
+* Test PRs with isolated hot-mount delta testing: `monoflow pr test <id>`.
+* Project affected packages locally: `monoflow pr local <id> [--worktree]`.
+* Sign-off and merge: `monoflow pr review <id> --approve`, `monoflow pr merge <id> --strategy=squash`.
+

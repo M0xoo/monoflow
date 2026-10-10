@@ -99,6 +99,12 @@ func main() {
 	case "push":
 		handlePush(rootDir)
 
+	case "sync", "pull":
+		handleSync(rootDir)
+
+	case "branch", "switch":
+		handleBranch(rootDir)
+
 	case "events":
 		handleEvents(rootDir)
 
@@ -125,6 +131,8 @@ Usage:
   monoflow verify [--affected|--proof] Sub-2s inner loop with compact JSON diagnostics
   monoflow outer [start|status|wait]  Async outer loop: transitive matrix & remote promotion barrier
   monoflow push [remote] [branch]     Fire-and-forget push with background autonomous CI watcher
+  monoflow sync [remote] [branch]     Fast remote sync (ff-only or rebase) keeping sparse subset
+  monoflow branch [name]              List, create, or switch branches without raw git commands
   monoflow events [unread|list|ack]   Asynchronous agent event inbox (check in < 5ms without polling)
   monoflow review [risk|audit|throttle] Machine risk scoring, anti-hallucination & backpressure
   monoflow queue [spec|verify]        Speculative local merge queue with flaky quarantine
@@ -1393,6 +1401,172 @@ func handlePush(rootDir string) {
 	}
 
 	data, _ := json.MarshalIndent(res, "", "  ")
+	fmt.Println(string(data))
+}
+
+func handleSync(rootDir string) {
+	start := time.Now()
+	remote := "origin"
+	branch := ""
+	rebase := false
+	autostash := false
+
+	var positional []string
+	for _, arg := range os.Args[2:] {
+		if arg == "--rebase" {
+			rebase = true
+		} else if arg == "--autostash" {
+			autostash = true
+		} else if strings.HasPrefix(arg, "--remote=") {
+			remote = strings.TrimPrefix(arg, "--remote=")
+		} else if strings.HasPrefix(arg, "--branch=") {
+			branch = strings.TrimPrefix(arg, "--branch=")
+		} else if !strings.HasPrefix(arg, "-") {
+			positional = append(positional, arg)
+		}
+	}
+
+	if len(positional) > 0 {
+		remote = positional[0]
+	}
+	if len(positional) > 1 {
+		branch = positional[1]
+	}
+
+	if branch == "" {
+		cmdRev := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
+		cmdRev.Dir = rootDir
+		if out, err := cmdRev.CombinedOutput(); err == nil {
+			branch = strings.TrimSpace(string(out))
+		} else {
+			branch = "main"
+		}
+	}
+
+	// 1. Fetch remote ref
+	fetchArgs := []string{"fetch", remote, branch}
+	cmdFetch := exec.Command("git", fetchArgs...)
+	cmdFetch.Dir = rootDir
+	if out, err := cmdFetch.CombinedOutput(); err != nil {
+		fmt.Printf(`{"status": "sync_failed", "step": "fetch", "error": %q, "output": %q}`+"\n", err.Error(), strings.TrimSpace(string(out)))
+		os.Exit(1)
+	}
+
+	// 2. Fast-forward or Rebase
+	var mergeArgs []string
+	strategy := "fast-forward"
+	if rebase {
+		strategy = "rebase"
+		mergeArgs = []string{"rebase"}
+		if autostash {
+			mergeArgs = append(mergeArgs, "--autostash")
+		}
+		mergeArgs = append(mergeArgs, "FETCH_HEAD")
+	} else {
+		mergeArgs = []string{"merge", "--ff-only", "FETCH_HEAD"}
+	}
+
+	cmdMerge := exec.Command("git", mergeArgs...)
+	cmdMerge.Dir = rootDir
+	if out, err := cmdMerge.CombinedOutput(); err != nil {
+		fmt.Printf(`{"status": "sync_failed", "step": %q, "error": %q, "output": %q, "hint": "If branches have diverged, consider using --rebase or resolving local changes."}`+"\n", strategy, err.Error(), strings.TrimSpace(string(out)))
+		os.Exit(1)
+	}
+
+	// 3. Get new HEAD SHA
+	headSHA := ""
+	cmdSHA := exec.Command("git", "rev-parse", "HEAD")
+	cmdSHA.Dir = rootDir
+	if out, err := cmdSHA.CombinedOutput(); err == nil {
+		headSHA = strings.TrimSpace(string(out))
+	}
+
+	// 4. Check if sparse subsetting is active
+	isSparse := false
+	if _, err := os.Stat(filepath.Join(rootDir, ".agents", "subset.json")); err == nil {
+		isSparse = true
+	}
+
+	durMs := float64(time.Since(start).Microseconds()) / 1000.0
+	res := map[string]any{
+		"status":        "synced",
+		"remote":        remote,
+		"branch":        branch,
+		"head_sha":      headSHA,
+		"strategy":      strategy,
+		"duration_ms":   durMs,
+		"sparse_active": isSparse,
+		"message":       "Workspace successfully synchronized with remote without raw git commands.",
+	}
+
+	data, _ := json.MarshalIndent(res, "", "  ")
+	fmt.Println(string(data))
+}
+
+func handleBranch(rootDir string) {
+	if len(os.Args) < 3 {
+		// List branches
+		cmdList := exec.Command("git", "branch", "--no-color")
+		cmdList.Dir = rootDir
+		out, err := cmdList.CombinedOutput()
+		if err != nil {
+			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
+			os.Exit(1)
+		}
+		lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+		var current string
+		var branches []string
+		for _, l := range lines {
+			trimmed := strings.TrimSpace(l)
+			if strings.HasPrefix(l, "* ") {
+				current = strings.TrimPrefix(l, "* ")
+				branches = append(branches, current)
+			} else if trimmed != "" {
+				branches = append(branches, trimmed)
+			}
+		}
+		data, _ := json.MarshalIndent(map[string]any{
+			"current":  current,
+			"branches": branches,
+		}, "", "  ")
+		fmt.Println(string(data))
+		return
+	}
+
+	targetBranch := os.Args[2]
+	createFlag := false
+	for _, arg := range os.Args[2:] {
+		if arg == "-c" || arg == "-b" || arg == "--create" {
+			createFlag = true
+		} else if !strings.HasPrefix(arg, "-") {
+			targetBranch = arg
+		}
+	}
+
+	var cmdSwitch *exec.Cmd
+	if createFlag {
+		cmdSwitch = exec.Command("git", "checkout", "-b", targetBranch)
+	} else {
+		cmdSwitch = exec.Command("git", "checkout", targetBranch)
+	}
+	cmdSwitch.Dir = rootDir
+	out, err := cmdSwitch.CombinedOutput()
+	if err != nil && !createFlag {
+		cmdCreate := exec.Command("git", "checkout", "-b", targetBranch)
+		cmdCreate.Dir = rootDir
+		out, err = cmdCreate.CombinedOutput()
+	}
+
+	if err != nil {
+		fmt.Printf(`{"status": "error", "error": %q, "output": %q}`+"\n", err.Error(), strings.TrimSpace(string(out)))
+		os.Exit(1)
+	}
+
+	data, _ := json.MarshalIndent(map[string]any{
+		"status":  "switched",
+		"branch":  targetBranch,
+		"message": fmt.Sprintf("Switched to branch '%s'", targetBranch),
+	}, "", "  ")
 	fmt.Println(string(data))
 }
 
