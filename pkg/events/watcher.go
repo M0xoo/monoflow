@@ -233,6 +233,15 @@ func (cw *CIWatcher) runLocalCI(job *WatchJob, remote string) {
 	defer os.RemoveAll(tmp)
 	url, _ := exec.Command("git", "-C", cw.RootDir, "remote", "get-url", remote).Output()
 	src := strings.TrimSpace(string(url))
+	if src == "" {
+		// No remote: there is no remote CI to report on.
+		evt := &Event{Type: EventCISkipped, CommitSHA: job.CommitSHA, Branch: job.Branch,
+			Summary: fmt.Sprintf("No remote %q: nothing to run remote CI against", remote)}
+		_ = cw.events.Emit(evt)
+		job.EventEmitted, job.EventID = true, evt.ID
+		cw.finishJob(job, WatchStatusCompletedPassed, "no remote")
+		return
+	}
 	steps := [][]string{
 		{"git", "clone", "-q", "--no-checkout", src, tmp},
 		{"git", "-C", tmp, "checkout", "-q", job.CommitSHA},

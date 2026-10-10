@@ -242,7 +242,9 @@ var commandDetails = map[string]string{
 	"events": `  events unread                       Unread events (CI results, regressions, PRs)
   events list                         All events
   events ack <id|all>                 Mark events read
-  events watch <sha> [--branch=<b>] [--timeout=<d>]   Background CI watcher (do not poll)`,
+  events wait [<sha>] [--timeout=<min>]   Block until that commit's CI result arrives (run as a
+                                      background task: its exit wakes you; 0 pass/skip, 1 fail)
+  events watch <sha> [--branch=<b>] [--timeout=<d>]   Foreground CI watcher (normally started for you)`,
 	"outer": `  outer start [--commit=<sha>] [--branch=<b>] [--push] [--revert] [--async]
   outer status | outer list | outer wait [--timeout=<d>]`,
 	"version": `  version list | check                Versions and range compatibility of every internal edge
@@ -1814,7 +1816,8 @@ func handlePush(rootDir string) {
 			res["watcher_id"] = job.ID
 			res["ci_watcher_command"] = fmt.Sprintf("./bin/monoflow events watch %s --branch=%s", headSHA, branch)
 			res["agent_action_required"] = "DO_NOT_WAIT"
-			res["agent_directive"] = "STOP POLLING. DO NOT schedule timers or loop waiting for CI. Dispatch 'monoflow events watch' as a background task and immediately end your turn. You will be automatically awakened by a system notification when remote CI finishes."
+			res["ci_wait_command"] = fmt.Sprintf("./bin/monoflow events wait %s", headSHA)
+			res["agent_directive"] = ciWaitDirective(headSHA)
 		}
 	}
 
@@ -2109,6 +2112,9 @@ func handleEvents(rootDir string) {
 	case "clear":
 		_ = em.ClearAll()
 		fmt.Println(`{"status": "cleared"}`)
+
+	case "wait":
+		handleEventsWait(rootDir, em)
 
 	case "watch":
 		commitSHA := ""
@@ -3006,4 +3012,61 @@ func pinnedDependents(g *graph.DependencyGraph, pkg string) []string {
 		}
 	}
 	return out
+}
+
+// ciWaitDirective tells an agent how to get woken by its CI result without polling.
+func ciWaitDirective(sha string) string {
+	return fmt.Sprintf("Do not poll CI. Run './bin/monoflow events wait %s' as a background task (Claude Code: Bash with run_in_background) and end your turn: it exits when the CI result arrives (0 = passed/skipped, 1 = failed, with the failing logs), which wakes you. Without background tasks, end your turn and run 'monoflow events unread' when resumed.", sha)
+}
+
+// handleEventsWait blocks until the CI result for a commit is in the local inbox (written
+// by the detached watcher), so a harness background task can wake the agent. It reads
+// only local files; GitHub is queried by the watcher, not here.
+func handleEventsWait(rootDir string, em *events.EventManager) {
+	sha := ""
+	timeoutMin := 30
+	for _, a := range os.Args[3:] {
+		if strings.HasPrefix(a, "--timeout=") {
+			if t, err := strconv.Atoi(strings.TrimPrefix(a, "--timeout=")); err == nil {
+				timeoutMin = t
+			}
+		} else if !strings.HasPrefix(a, "-") {
+			sha = a
+		}
+	}
+	if sha == "" {
+		out, _ := exec.Command("git", "-C", rootDir, "rev-parse", "HEAD").Output()
+		sha = strings.TrimSpace(string(out))
+	}
+	if len(sha) < 7 {
+		fmt.Println(`{"error": "usage: monoflow events wait [<commit-sha>] [--timeout=<minutes>]"}`)
+		os.Exit(2)
+	}
+	// Make sure something is watching this commit (idempotent: reuses an active watcher).
+	// Without a remote there is no remote CI to watch; just wait on the inbox.
+	if exec.Command("git", "-C", rootDir, "remote", "get-url", "origin").Run() == nil {
+		cw := events.NewCIWatcher(rootDir)
+		_, _ = cw.StartWatch(events.WatchOptions{CommitSHA: sha, Branch: currentBranch(rootDir), Async: true})
+	}
+
+	deadline := time.Now().Add(time.Duration(timeoutMin) * time.Minute)
+	for time.Now().Before(deadline) {
+		list, _ := em.List(false)
+		for _, e := range list {
+			if !strings.HasPrefix(string(e.Type), "CI_") || e.CommitSHA == "" ||
+				!(strings.HasPrefix(e.CommitSHA, sha) || strings.HasPrefix(sha, e.CommitSHA)) {
+				continue
+			}
+			_ = em.Ack(e.ID)
+			data, _ := json.MarshalIndent(e, "", "  ")
+			fmt.Println(string(data))
+			if e.Type == events.EventCIFailed {
+				os.Exit(1)
+			}
+			os.Exit(0)
+		}
+		time.Sleep(3 * time.Second)
+	}
+	fmt.Printf(`{"status": "timeout", "commit": %q, "hint": "no CI result after %d minutes; check 'monoflow events list' and 'monoflow ci health'"}`+"\n", sha, timeoutMin)
+	os.Exit(2)
 }

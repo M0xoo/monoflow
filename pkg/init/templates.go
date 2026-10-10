@@ -20,9 +20,11 @@ remote CI stays green. Run it as ` + "`" + `.agents/bin/monoflow` + "`" + ` (als
 7. ` + "`" + `monoflow pr create --title="..." --body="..."` + "`" + ` — re-verifies (DoD gate), pushes and opens the PR.
    It is refused while verification fails; ` + "`" + `--draft` + "`" + ` is allowed. Read ` + "`" + `remote_pr` + "`" + ` in the output:
    if it says ` + "`" + `not_created` + "`" + `, follow its ` + "`" + `agent_directive` + "`" + ` (e.g. open it with your GitHub integration).
-8. Do not wait for CI and do not run ` + "`" + `push` + "`" + ` again: ` + "`" + `pr create` + "`" + ` already started the CI watcher.
-   ` + "`" + `monoflow events unread` + "`" + ` once, then end your turn; CI_PASSED / CI_FAILED / CI_SKIPPED events
-   arrive by themselves. When CI is red, start with ` + "`" + `monoflow ci health` + "`" + ` (failure history, breaking
+8. Do not poll CI and do not run ` + "`" + `push` + "`" + ` again: ` + "`" + `pr create` + "`" + ` already started the CI watcher.
+   Run ` + "`" + `monoflow events wait <sha>` + "`" + ` (printed as ` + "`" + `ci_wait_command` + "`" + `) as a **background task** and end your
+   turn (Claude Code: Bash with run_in_background). It exits when the result lands in the local inbox
+   (0 = CI_PASSED / CI_SKIPPED, 1 = CI_FAILED with logs), and that exit wakes you. Harness without
+   background tasks: end your turn and run ` + "`" + `monoflow events unread` + "`" + ` when resumed. When CI is red, start with ` + "`" + `monoflow ci health` + "`" + ` (failure history, breaking
    commit range, flakiness) instead of reading CI APIs. On CI_FAILED: reproduce with ` + "`" + `monoflow verify --affected` + "`" + `, fix, commit, ` + "`" + `monoflow push` + "`" + `.
 9. ` + "`" + `monoflow worktree list` + "`" + ` shows every agent's branch, PR and CI state. ` + "`" + `monoflow worktree finish <agent-id>` + "`" + ` when merged.
 

@@ -62,6 +62,7 @@ type PRMetadata struct {
 	ReviewDecision   string                 `json:"review_decision,omitempty"`
 	Pushed           bool                   `json:"pushed,omitempty"`
 	CIWatcher        string                 `json:"ci_watcher,omitempty"`
+	CIWaitCommand    string                 `json:"ci_wait_command,omitempty"`
 	RemotePR         *RemotePRResult        `json:"remote_pr,omitempty"`
 }
 
@@ -390,6 +391,7 @@ func (m *PRManager) Create(opts CreateOptions) (*PRMetadata, error) {
 	if pushed {
 		if job, err := events.NewCIWatcher(m.RootDir).StartWatch(events.WatchOptions{CommitSHA: headSHA, Branch: headBranch, Remote: remote, Async: true}); err == nil {
 			metadata.CIWatcher = job.ID
+			metadata.CIWaitCommand = "./bin/monoflow events wait " + headSHA + "   # run as a background task, then end your turn"
 		}
 	}
 
