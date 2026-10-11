@@ -4,8 +4,8 @@ const AgentRuleTemplate = `# MonoFlow (for coding agents)
 
 Run it as ` + "`" + `./bin/monoflow` + "`" + ` (or ` + "`" + `.agents/bin/monoflow` + "`" + `). Four calls take a change from idea to PR:
 
-1. ` + "`" + `monoflow start <task-id>` + "`" + `, then ` + "`" + `cd` + "`" + ` into the printed ` + "`" + `path` + "`" + `: your own worktree and branch
-   ` + "`" + `agent/<task-id>` + "`" + ` off the latest main (other agents may be working in the repo root).
+1. First, before reading any code: ` + "`" + `monoflow start <task-id>` + "`" + `, then ` + "`" + `cd` + "`" + ` into the printed ` + "`" + `path` + "`" + ` and work
+   only there (your worktree and branch ` + "`" + `agent/<task-id>` + "`" + ` off the latest main; same files as the root).
 2. Make the change itself (` + "`" + `monoflow graph impact <file>` + "`" + ` shows which packages, repo-wide, depend on
    the file you are about to change).
 3. Run ` + "`" + `monoflow verify` + "`" + ` right away instead of searching for what your change breaks: it builds, lints and

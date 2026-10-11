@@ -145,7 +145,7 @@ func handleWorktree(rootDir string) {
 			"deps_isolation": info.IsolationMethod,
 			"is_sparse":      info.IsSparse,
 			"duration_ms":    durMs,
-			"verdict":        "Virtual worktree provisioned (< 60ms shared, or ~400ms CoW cloned)",
+			"next":           "cd " + info.Path + " and work only there (same files as the repo root); edit, then monoflow verify",
 		}
 		if info.FocusedPackage != "" {
 			resMap["focused_package"] = info.FocusedPackage
