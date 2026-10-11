@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -216,5 +217,65 @@ func TestBackgroundVerifyFinishesThenRunsNewestState(t *testing.T) {
 	// but its packages' results are in the cache: nothing was killed half-way.
 	if _, err := os.Stat(filepath.Join(repo, ".agents", "verify", key1+".pid")); err == nil {
 		t.Fatal("the first run is still marked running")
+	}
+}
+
+// An agent that never ran start still gets its next verify precomputed: verify in a plain
+// checkout starts the watcher there, the next edit is verified in the background, and the
+// agent's verify on that state reuses the result.
+func TestVerifyOutsideWorktreeStartsWatcher(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "monoflow")
+	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
+		t.Fatalf("build: %v %s", err, out)
+	}
+	repo := t.TempDir()
+	write := func(rel, s string) {
+		_ = os.MkdirAll(filepath.Dir(filepath.Join(repo, rel)), 0755)
+		if err := os.WriteFile(filepath.Join(repo, rel), []byte(s), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run := func(name string, args ...string) string {
+		cmd := exec.Command(name, args...)
+		cmd.Dir = repo
+		cmd.Env = append(os.Environ(), "MONOFLOW_FORMAT=", "MONOFLOW_NO_ROOT_SPECULATE=", "MONOFLOW_NO_WARM=1")
+		out, _ := cmd.CombinedOutput()
+		return string(out)
+	}
+	write("go.mod", "module example.com/m\n\ngo 1.21\n")
+	write("a/a.go", "package a\n\nfunc One() int { return 1 }\n")
+	write("a/a_test.go", "package a\n\nimport \"testing\"\n\nfunc TestOne(t *testing.T) {\n\tif One() != 1 {\n\t\tt.Fatal(\"want 1\")\n\t}\n}\n")
+	write(".gitignore", "/.agents/verify\n/.agents/cache\n")
+	run("git", "init", "-q", "-b", "main")
+	run("git", "-c", "user.email=t@t", "-c", "user.name=t", "add", "-A")
+	run("git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init")
+	defer func() { // stop the watcher this test started
+		if data, err := os.ReadFile(filepath.Join(repo, ".agents", "verify", "watch.pid")); err == nil {
+			if pid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil {
+				if p, err := os.FindProcess(pid); err == nil {
+					_ = p.Kill()
+				}
+			}
+		}
+	}()
+
+	write("a/a.go", "package a\n\nfunc One() int { return 2 }\n")
+	if out := run(bin, "verify"); !strings.HasPrefix(out, "FAIL") {
+		t.Fatalf("first verify should fail: %s", out)
+	}
+	write("a/a.go", "package a\n\nfunc One() int { return 1 } // fixed\n")
+	key := treeStateKey(repo)
+	deadline := time.Now().Add(60 * time.Second)
+	for {
+		if _, err := os.Stat(filepath.Join(repo, ".agents", "verify", key+".out")); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the edit after verify was not verified in the background")
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if out := run(bin, "verify"); !strings.HasPrefix(out, "PASS") || !strings.Contains(out, "reused:") {
+		t.Fatalf("verify should reuse the background result: %s", out)
 	}
 }

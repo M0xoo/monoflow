@@ -104,6 +104,7 @@ func TestHelpFlagsExitZero(t *testing.T) {
 // test that checks them turns them back on.
 func TestMain(m *testing.M) {
 	_ = os.Setenv("MONOFLOW_NO_WARM", "1")
+	_ = os.Setenv("MONOFLOW_NO_ROOT_SPECULATE", "1")
 	os.Exit(m.Run())
 }
 

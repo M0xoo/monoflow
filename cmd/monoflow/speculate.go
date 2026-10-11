@@ -69,9 +69,10 @@ func maybeVerifyInBackground(root string) bool {
 	if os.Getenv("MONOFLOW_RECORD_KEY") != "" || os.Getenv("MONOFLOW_NO_SPECULATE") != "" {
 		return true
 	}
-	// Only in agent worktrees: the shared root may hold someone's half-done work, and nobody
-	// asked for its CPU.
-	if !strings.Contains(filepath.ToSlash(root), "/.agents/worktrees/") {
+	// In agent worktrees, or in a checkout whose own verify started the watcher (the agent
+	// asked to verify that tree). Never on a hook alone: a shared root may hold someone's
+	// half-done work, and nobody asked for its CPU.
+	if !speculationAllowed(root) {
 		return true
 	}
 	key := treeStateKey(root)
@@ -276,15 +277,19 @@ func startSpeculateWatcher(wt string) {
 
 // speculateWatch polls the worktree's state and starts background verifies as it changes.
 func speculateWatch(root string) {
-	if !strings.Contains(filepath.ToSlash(root), "/.agents/worktrees/") {
+	if !speculationAllowed(root) {
 		return
 	}
 	_ = os.MkdirAll(specDir(root), 0755)
 	me := strconv.Itoa(os.Getpid())
 	marker := filepath.Join(specDir(root), "watch.pid")
 	_ = os.WriteFile(marker, []byte(me), 0644)
+	idle := time.Hour
+	if !inWorktree(root) {
+		idle = 15 * time.Minute // a checkout that is not an agent's own: stop sooner
+	}
 	last, handled, lastChange := "", "", time.Now()
-	for time.Since(lastChange) < time.Hour {
+	for time.Since(lastChange) < idle {
 		time.Sleep(time.Second)
 		if data, err := os.ReadFile(marker); err != nil || string(data) != me {
 			return // worktree removed, or a newer watcher took over
@@ -336,3 +341,39 @@ func maybeWarmBaseline(cmd string) {
 }
 
 func warmBaseline(root string) { verify.WarmBaseline(root) }
+
+func inWorktree(root string) bool {
+	return strings.Contains(filepath.ToSlash(root), "/.agents/worktrees/")
+}
+
+// speculationAllowed: agent worktrees, or any checkout whose watcher verify started
+// (MONOFLOW_SPECULATE_HERE, set only for that watcher process).
+func speculationAllowed(root string) bool {
+	return inWorktree(root) || os.Getenv("MONOFLOW_SPECULATE_HERE") == "1"
+}
+
+// startRootWatcher starts the background watcher for a checkout that is not a worktree, when
+// the agent runs verify there (agents that skip start still get their next verify precomputed
+// while they edit: trpc A-14 worked in the root and its verifies ran cold, 80-125 s). Read-only
+// (no formatting, no file removal), one watcher at a time, gone after 15 idle minutes.
+func startRootWatcher(root string) {
+	if inWorktree(root) || os.Getenv("MONOFLOW_NO_SPECULATE") != "" || os.Getenv("MONOFLOW_NO_ROOT_SPECULATE") != "" {
+		return
+	}
+	if data, err := os.ReadFile(filepath.Join(specDir(root), "watch.pid")); err == nil {
+		if pid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && processAlive(pid) {
+			return
+		}
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return
+	}
+	cmd := exec.Command(exe, "speculate-watch")
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(), "MONOFLOW_SPECULATE_HERE=1")
+	cmd.SysProcAttr = detachedSysProcAttr()
+	if cmd.Start() == nil {
+		_ = cmd.Process.Release()
+	}
+}

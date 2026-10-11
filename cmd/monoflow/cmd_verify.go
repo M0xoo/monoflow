@@ -86,6 +86,9 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 	if !recording && plain && !jsonMode() {
 		storeResult = beginForeground(rootDir)
 	}
+	if !recording {
+		startRootWatcher(rootDir) // outside a worktree: precompute the next verify as the agent edits
+	}
 
 	g, err := graph.LoadOrDiscover(rootDir)
 	if err != nil {
