@@ -78,7 +78,7 @@ finds them in 14 s.
 |---|---|---|---|---|---|
 | before fixes (3 runs) | 382 | 208 | 102k | 72k | 3/3 vs 3/3 |
 | + cache keys, root projection, API-diff perf (5 runs) | **328** | 368 | 103k | 82k | 5/5 vs 5/5 |
-| + compact agent outputs, shorter AGENTS.md (3 runs, `step-5-preview-free`*) | **768** | 1120 | **65k** | 80k | 3/3 vs 3/3 |
+| + compact agent outputs, shorter AGENTS.md (6 runs, `step-5-preview-free`*) | **908** (median 811) | 1024 (median 1025) | **70k** (median 74k) | 76k (median 75k) | 6/6 vs 6/6 |
 
 \* `big-pickle` was rate-limited for the whole rerun (every agent timed out with no output), so this
 row uses another free model. Compare A to B within a row, not across rows.
@@ -94,9 +94,11 @@ The token gap came from MonoFlow's own outputs: `pr status` returned 12 KB of JS
 returned full event payloads, and AGENTS.md was 5.1 KB. Making these compact by default (`--verbose`
 restores the full output) and trimming AGENTS.md to 3.2 KB reversed the gap.
 
-Reading: on a large repo MonoFlow is now ahead on both time (-31%) and fresh tokens (-19%), with the
-same green rate, and it catches the cross-module breakage that root-only checks miss. Variance is
-high (460-1312 s per run), so treat the deltas as directional.
+Reading: the first 3 runs showed MonoFlow far ahead (768 s / 65k vs 1120 s / 80k); 3 more runs on
+the same build shrank that to about -11% time and -8% tokens on average, and near parity on median
+tokens. So on a large repo MonoFlow no longer costs extra time or context, with the same green rate,
+and it catches the cross-module breakage that root-only checks miss. Per-run variance (460-1638 s)
+is larger than the difference, so this is parity-or-better, not a proven win.
 
 ## Live: idle opencode session woken by an event
 `opencode serve` on a fixture repo after `monoflow init` (installs `.opencode/plugin/monoflow.js`). The
