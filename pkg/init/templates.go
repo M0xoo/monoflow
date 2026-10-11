@@ -2,42 +2,20 @@ package initialize
 
 const AgentRuleTemplate = `# MonoFlow (for coding agents)
 
-Run it as ` + "`" + `./bin/monoflow` + "`" + ` (or ` + "`" + `.agents/bin/monoflow` + "`" + `). Four calls take a change from idea to PR:
+Run as ` + "`" + `./bin/monoflow` + "`" + `. Four calls take a change to a PR:
 
-1. First, before reading any code: ` + "`" + `monoflow start <task-id>` + "`" + `, then ` + "`" + `cd` + "`" + ` into the printed ` + "`" + `path` + "`" + ` and work
-   only there (your worktree and branch ` + "`" + `agent/<task-id>` + "`" + ` off the latest main; same files as the root).
-2. Who uses what you change: ` + "`" + `monoflow graph query <dir>` + "`" + ` lists every package, in every module, that
-   imports it (code or tests), instead of grepping the repo. Then make the change.
-3. Run ` + "`" + `monoflow verify` + "`" + ` right away instead of searching for what your change breaks: it builds, lints and
-   tests every changed package and every package depending on them (what CI runs for this change,
-   cached) and lists each break as ` + "`" + `errors[]` + "`" + ` with ` + "`" + `file:line` + "`" + ` and the failing test, in any package.
-   Fix exactly those and run it again until it passes. Failures main already has do not block.
-   Do not also run go test / npm test / tsc / ` + "`" + `verify --all` + "`" + ` or grep for affected tests: ` + "`" + `verify` + "`" + ` covers them.
-4. ` + "`" + `monoflow ship -m "<commit message>"` + "`" + ` (optional ` + "`" + `--title=... --body=...` + "`" + `): commits and returns at once;
-   local CI runs on that exact commit and, once green, it pushes and opens the PR by itself. End
-   your turn: results are delivered to you (on SHIP_FAILED / OUTER_LOOP_REGRESSION: fix, ` + "`" + `verify` + "`" + `,
-   ` + "`" + `ship` + "`" + ` again). ` + "`" + `ship --wait` + "`" + ` blocks until pushed instead.
+1. ` + "`" + `monoflow start <task-id>` + "`" + ` first, then work in the printed ` + "`" + `path` + "`" + ` (your worktree and branch; same files).
+2. ` + "`" + `monoflow graph query <dir>` + "`" + `: every package, in every module, importing it (instead of grep). Make the change.
+3. ` + "`" + `monoflow verify` + "`" + `: builds, lints and tests every package your change can affect (what CI runs for it)
+   and lists each break as ` + "`" + `errors[]` + "`" + ` (` + "`" + `file:line` + "`" + `, failing test). Fix those, rerun until it passes.
+   Nothing else to run: not go test / npm test / tsc / ` + "`" + `verify --all` + "`" + `, no grepping for affected tests.
+4. ` + "`" + `monoflow ship -m "<msg>"` + "`" + `: commits and returns; once local CI is green it pushes and opens the PR.
+   End your turn; results are delivered to you (on SHIP_FAILED / OUTER_LOOP_REGRESSION: fix, verify, ship).
 
-Use raw git/go/npm only for what MonoFlow does not do; never push to main.
-
-## When you need more
-| situation | command |
-|---|---|
-| dependencies / dependents of a package | ` + "`" + `monoflow graph query <package|path>` + "`" + ` |
-| try something risky | ` + "`" + `monoflow checkpoint save "<idea>"` + "`" + ` / ` + "`" + `checkpoint revert` + "`" + ` |
-| one package, or everything | ` + "`" + `monoflow verify --package=<name|path>` + "`" + ` / ` + "`" + `verify --all` + "`" + ` |
-| commit without a PR yet / push / pull | ` + "`" + `monoflow commit -m` + "`" + ` / ` + "`" + `push` + "`" + ` / ` + "`" + `sync` + "`" + ` |
-| CI result without hooks | ` + "`" + `monoflow events unread` + "`" + ` (once; never poll) |
-| red/flaky CI history | ` + "`" + `monoflow ci health [--check=<name> --logs]` + "`" + ` |
-| flaky test (not yours) | ` + "`" + `monoflow quarantine add <test-id>` + "`" + ` |
-| local CI state | ` + "`" + `monoflow outer list | status | wait` + "`" + ` |
-| other agents, merged work | ` + "`" + `monoflow worktree list` + "`" + ` / ` + "`" + `worktree finish <task-id>` + "`" + ` / ` + "`" + `worktree sync --to=<you> --from=<other>` + "`" + ` |
-| fewer packages in a big repo | ` + "`" + `monoflow start <id> --packages=<p1,p2>` + "`" + ` / ` + "`" + `subset add|remove <pkg>` + "`" + ` |
-| PR status / review | ` + "`" + `monoflow pr status <id>` + "`" + ` / ` + "`" + `review risk` + "`" + ` |
-| package versions between packages | ` + "`" + `monoflow version edges | suggest <pkg> | upgrades` + "`" + ` |
-| task boundaries, secrets, weakened tests | ` + "`" + `monoflow task check` + "`" + ` / ` + "`" + `guard check` + "`" + ` |
-| anything else | ` + "`" + `monoflow help` + "`" + `, ` + "`" + `monoflow <cmd> --help` + "`" + ` (help never executes) |
-
+More (each ` + "`" + `--help` + "`" + ` explains, never executes): ` + "`" + `checkpoint save|revert` + "`" + ` · ` + "`" + `commit` + "`" + ` / ` + "`" + `push` + "`" + ` / ` + "`" + `sync` + "`" + ` ·
+` + "`" + `events unread` + "`" + ` (once, never poll) · ` + "`" + `ci health` + "`" + ` · ` + "`" + `quarantine add` + "`" + ` · ` + "`" + `outer status` + "`" + ` · ` + "`" + `worktree list|finish` + "`" + ` ·
+` + "`" + `subset add|remove` + "`" + ` · ` + "`" + `pr status` + "`" + ` · ` + "`" + `review risk` + "`" + ` · ` + "`" + `version edges|suggest|upgrades` + "`" + ` · ` + "`" + `task check` + "`" + ` ·
+` + "`" + `guard check` + "`" + ` · ` + "`" + `verify --package=<p>` + "`" + ` · ` + "`" + `help` + "`" + `. Raw git/go/npm only for what MonoFlow does not do; never push to main.
 The rest of this file, if any, is the project's own guide.
 `
 
