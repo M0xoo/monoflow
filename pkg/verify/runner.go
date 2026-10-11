@@ -415,11 +415,20 @@ func (r *Runner) VerifyAffected(g *graph.DependencyGraph, changedFiles []string,
 		rest = append(rest, n)
 	}
 	res := r.VerifyPackages(g, affected.DirectlyChanged, opt)
-	if res.Status == "failed" && len(rest) > 0 {
+	// Hold the dependents back only while the changed packages are broken (type, build or lint
+	// errors: the dependents would fail on the same thing). When all that fails is test
+	// assertions, the change itself compiles, and its dependents' tests are what the agent must
+	// update next: run them now, so one verify shows every test to fix (trpc: staging cost an
+	// extra 45-90 s verify round per task).
+	if res.Status == "failed" && len(rest) > 0 && !onlyTestFailures(res) {
 		res.Pending = rest
 	} else if len(rest) > 0 {
+		failedFirst := res.Status == "failed"
 		dep := r.VerifyPackages(g, rest, opt)
 		res.Status = dep.Status
+		if failedFirst {
+			res.Status = "failed"
+		}
 		res.TotalTargets += dep.TotalTargets
 		res.PassedTargets += dep.PassedTargets
 		res.FailedTargets += dep.FailedTargets
@@ -430,6 +439,26 @@ func (r *Runner) VerifyAffected(g *graph.DependencyGraph, changedFiles []string,
 	res.Excluded = excluded
 	res.DurationMs = float64(time.Since(start).Microseconds()) / 1000.0
 	return res
+}
+
+// onlyTestFailures reports whether every failed package failed on test assertions only.
+func onlyTestFailures(res SuiteResult) bool {
+	any := false
+	for _, t := range res.Results {
+		if t.Status != "failed" {
+			continue
+		}
+		if len(t.Errors) == 0 {
+			return false
+		}
+		for _, e := range t.Errors {
+			if e.Code != "test-failure" {
+				return false
+			}
+		}
+		any = true
+	}
+	return any
 }
 
 // VerifyPackages verifies the named packages in parallel and, unless Strict, classifies

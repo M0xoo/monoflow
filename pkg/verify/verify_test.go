@@ -177,15 +177,15 @@ func TestPrepareCommandsMergeUpstreams(t *testing.T) {
 	}
 }
 
-// While a changed package fails, its dependents are not run (fast fix loop); once it passes
-// they are, so a pass still covers every dependent.
+// While a changed package is broken (here: a compile error), its dependents are not run (fast
+// fix loop); once it passes they are, so a pass still covers every dependent.
 func TestVerifyAffectedChecksChangedPackagesFirst(t *testing.T) {
 	root := t.TempDir()
 	_ = os.MkdirAll(filepath.Join(root, "core"), 0755)
 	_ = os.MkdirAll(filepath.Join(root, "app"), 0755)
 	_ = os.WriteFile(filepath.Join(root, "core", "ok"), []byte("no\n"), 0644)
 	g := graph.New(root)
-	g.AddPackage(&graph.PackageNode{Name: "core", Path: "core", Language: graph.LangGeneric, TestCmd: `grep -qx yes ok || { echo "core_test.go:1: not ok"; exit 1; }`})
+	g.AddPackage(&graph.PackageNode{Name: "core", Path: "core", Language: graph.LangGeneric, TestCmd: `grep -qx yes ok || { echo "./core.go:1:2: undefined: x"; exit 1; }`})
 	g.AddPackage(&graph.PackageNode{Name: "app", Path: "app", Language: graph.LangGeneric, Dependencies: []string{"core"}, TestCmd: "touch ran"})
 	g.RebuildEdges()
 	r := NewRunner(root)
@@ -315,6 +315,22 @@ func TestSnapshotUpdatePassIsReusedByPlainVerify(t *testing.T) {
 	res := NewRunner(root).VerifyPackages(g, []string{"app"}, VerifyOptions{Strict: true})
 	if res.Status != "passed" || res.CachedTargets != 1 {
 		t.Fatalf("plain verify after -u should be a cache hit: cached=%d %+v", res.CachedTargets, res.Results)
+	}
+}
+
+// When the changed package fails only on test assertions (it compiles), its dependents run in
+// the same verify: one round shows every test the change breaks.
+func TestVerifyAffectedRunsDependentsOnTestOnlyFailures(t *testing.T) {
+	root := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(root, "core"), 0755)
+	_ = os.MkdirAll(filepath.Join(root, "app"), 0755)
+	g := graph.New(root)
+	g.AddPackage(&graph.PackageNode{Name: "core", Path: "core", Language: graph.LangGeneric, TestCmd: `echo "--- FAIL: TestCode (0.00s)"; echo "    core_test.go:9: want 422"; echo FAIL; exit 1`})
+	g.AddPackage(&graph.PackageNode{Name: "app", Path: "app", Language: graph.LangGeneric, Dependencies: []string{"core"}, TestCmd: `echo "--- FAIL: TestApp (0.00s)"; echo "    app_test.go:3: want 422"; echo FAIL; exit 1`})
+	g.RebuildEdges()
+	res := NewRunner(root).VerifyAffected(g, []string{"core/x.go"}, VerifyOptions{Strict: true})
+	if res.Status != "failed" || len(res.Pending) != 0 || res.TotalTargets != 2 || res.FailedTargets != 2 {
+		t.Fatalf("want core and app both run and reported failing, nothing pending: %+v", res)
 	}
 }
 
