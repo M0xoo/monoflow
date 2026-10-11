@@ -274,6 +274,7 @@ A/B runs in which the same agent does the same task with MonoFlow and with plain
 | :--- | :--- | :--- |
 | opentelemetry-go (29 Go modules) | a change caught only by another module's tests | MonoFlow faster (median 101 s vs 130 s) and steadier (90–112 s vs 109–338 s); tokens about equal (median 60k vs 55k) |
 | trpc (pnpm + Turborepo) | 400 → 422 for validation errors, across packages | **plain git + Turbo ahead** over 5 runs each: 295 s vs 341 s mean, 87k vs 91k tokens. MonoFlow makes 24% fewer tool calls (25 vs 33), and every push was CI-checked on the exact commit. It started at 377–586 s. |
+| TanStack Query (pnpm + Nx) | default networkMode online → always, across framework packages | 3 runs each: MonoFlow **10% fewer tokens** (112k vs 124k) and **23% fewer tool calls** (43 vs 56); **plain git + Nx 15% faster** (451 s vs 517 s mean). |
 
 Every MonoFlow push in these runs was gated on local CI; plain pushes were not. Speculative verify and the Nx (TanStack Query) comparison have not been measured yet.
 

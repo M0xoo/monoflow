@@ -250,3 +250,29 @@ Bugs found by these runs (fixed):
   marker now holds the installer's pid and is never committed.
 
 Not yet measured: the TanStack Query (Nx) comparison.
+
+## TanStack Query (pnpm + Nx, ~100 projects), Claude Haiku (`tasks/tanstack-networkmode.txt`)
+Change query-core's default `networkMode` from 'online' to 'always' and update everything that
+depends on it (tests in query-core, react, preact, solid and angular packages, docs). Same setup
+as trpc: one run at a time, fresh copy each, leftover processes of earlier runs stopped first.
+Ground truth: `nx run-many -t test:lib,test:types` over the repo's projects (examples and
+integrations excluded, as the repo's own scripts do), failures re-run alone before they count.
+
+| | build | time (s) | tool calls | tokens | ground truth |
+|---|---|---|---|---|---|
+| plain git + Nx B-1..B-3 | | 556 / 371 / 426 (mean 451) | 49 / 73 / 45 (mean 56) | 119k / 134k / 118k (mean 124k) | pass (3/3) |
+| MonoFlow A-1 | v32 | 684 | 52 | 122k | pass (verify ran 37 packages, integration apps included) |
+| MonoFlow A-2..A-4 | v33-v34 | 559* / 540 / 451 (mean 517) | 48 / 35 / 46 (mean 43) | 113k / 107k / 115k (mean 112k) | pass (3/3) |
+
+\* A-2 ran partly alongside A-1's leftover remote-CI stand-in (verify --all over 101 projects).
+
+Reading: on Nx, MonoFlow uses 10% fewer tokens and 23% fewer tool calls, and is 15% slower (10%
+over the clean runs A-3, A-4). Same shape as trpc: verify covers what CI covers, which the plain
+agent does not do in its loop.
+
+Fixed from these runs:
+- A-1: verify checked 37 projects, the integration apps' slow builds and old failures included,
+  where the repo's scripts exclude `examples/**` and `integrations/**` -> init derives
+  verify_exclude from the repo's own `--exclude=<dir>/**`.
+- A-2: a previous run's watchers and remote-CI stand-in were still running -> one conflict
+  watcher per repository instead of one per branch; the bench stops leftovers between runs.
