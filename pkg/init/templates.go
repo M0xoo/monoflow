@@ -17,8 +17,8 @@ remote CI stays green. Run it as ` + "`" + `.agents/bin/monoflow` + "`" + ` (als
    Fix the reported ` + "`" + `file:line message` + "`" + ` until it passes. (` + "`" + `--test` + "`" + `/` + "`" + `--lint` + "`" + `/` + "`" + `--typecheck` + "`" + ` narrow it.)
 5. ` + "`" + `monoflow commit -m "<msg>"` + "`" + ` — blocked if tests were weakened or secrets added.
 6. ` + "`" + `monoflow sync` + "`" + ` — rebase your branch onto the latest main (reports conflicts, never leaves a half rebase).
-7. ` + "`" + `monoflow pr create --title="..." --body="..."` + "`" + ` — re-verifies (DoD gate), pushes and opens the PR.
-   It is refused while verification fails; ` + "`" + `--draft` + "`" + ` is allowed. Read ` + "`" + `remote_pr` + "`" + ` in the output:
+7. ` + "`" + `monoflow pr create --title="..." --body="..."` + "`" + ` — right after commit: it waits for the outer loop,
+   pushes and opens the PR (no separate ` + "`" + `push` + "`" + ` / ` + "`" + `outer wait` + "`" + ` needed). It is refused while verification fails; ` + "`" + `--draft` + "`" + ` is allowed. Read ` + "`" + `remote_pr` + "`" + ` in the output:
    if it says ` + "`" + `not_created` + "`" + `, follow its ` + "`" + `agent_directive` + "`" + ` (e.g. open it with your GitHub integration).
 8. Do not poll CI. ` + "`" + `monoflow commit` + "`" + ` starts the **outer loop** (local CI on that exact commit); ` + "`" + `push` + "`" + ` and
    ` + "`" + `pr create` + "`" + ` only push once it is green. Events (outer loop, remote CI, releases) are **delivered to

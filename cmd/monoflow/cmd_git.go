@@ -44,7 +44,7 @@ func handleCommit(rootDir string) {
 		om := verify.NewOuterLoopManager(rootDir)
 		if job, err := om.StartJob(verify.OuterLoopOptions{CommitSHA: res.CommitSHA, Async: true, IncludeE2E: true}); err == nil {
 			out["outer_loop"] = map[string]any{"job": job.ID, "status": "running",
-				"note": "local CI on this exact commit; 'monoflow push' pushes only when it is green"}
+				"note": "local CI on this exact commit. Next: 'monoflow pr create' (waits for it, pushes, opens the PR), or more edits + commit"}
 		}
 	}
 	data, _ := json.MarshalIndent(out, "", "  ")
