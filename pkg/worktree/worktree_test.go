@@ -413,3 +413,35 @@ func TestWorktreeCreateProvisionsBinShieldAndSharedCache(t *testing.T) {
 		t.Fatalf("expected SharedCacheDir in a worktree to resolve to the root cache, got %s want %s", gotDir, wantDir)
 	}
 }
+
+// A worktree keeps the config its branch commits; the root checkout's copy (another branch, or
+// local edits) is used only when the branch has none.
+func TestWorktreeKeepsBranchConfig(t *testing.T) {
+	repoDir := setupTestRepo(t)
+	defer os.RemoveAll(repoDir)
+	run := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repoDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	cfg := filepath.Join(repoDir, ".agents", "monoflow.config.json")
+	_ = os.MkdirAll(filepath.Dir(cfg), 0755)
+	_ = os.WriteFile(cfg, []byte(`{"committed": true}`), 0644)
+	run("add", ".agents/monoflow.config.json")
+	run("commit", "-m", "config")
+	_ = os.WriteFile(cfg, []byte(`{"root_local": true}`), 0644)
+	_ = os.WriteFile(filepath.Join(repoDir, ".agents", "task.json"), []byte(`{"task_id": "root"}`), 0644)
+
+	info, err := NewManager(repoDir).Create("agent-cfg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(info.Path, ".agents", "monoflow.config.json")); string(got) != `{"committed": true}` {
+		t.Fatalf("worktree must keep its branch's config, got %s", got)
+	}
+	if got, _ := os.ReadFile(filepath.Join(info.Path, ".agents", "task.json")); string(got) != `{"task_id": "root"}` {
+		t.Fatalf("a file the branch does not have is still provided from the root, got %s", got)
+	}
+}

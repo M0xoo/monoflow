@@ -188,8 +188,14 @@ func (m *Manager) CreateWithOpts(agentID string, opts CreateOptions) (*WorktreeI
 	agentsDest := filepath.Join(wtPath, ".agents")
 	_ = os.MkdirAll(agentsDest, 0755)
 
-	_ = copyFile(filepath.Join(agentsSrc, "monoflow.config.json"), filepath.Join(agentsDest, "monoflow.config.json"))
-	_ = copyFile(filepath.Join(agentsSrc, "task.json"), filepath.Join(agentsDest, "task.json"))
+	// Only when the branch has none: a worktree starts from the latest main, and its committed
+	// config is the right one. Copying the root checkout's (possibly older branch's) over it
+	// changed which checks verify ran, and the change was committed with the agent's work.
+	for _, f := range []string{"monoflow.config.json", "task.json"} {
+		if dst := filepath.Join(agentsDest, f); !fileExists(dst) {
+			_ = copyFile(filepath.Join(agentsSrc, f), dst)
+		}
+	}
 
 	// Propagate local uncommitted environment & config files (.env, .env.local, .env.test)
 	// to prevent agents from hallucinating missing environment variables
