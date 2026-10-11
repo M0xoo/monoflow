@@ -114,42 +114,62 @@ func ProveTask(rootDir string, taskID string, g *graph.DependencyGraph, modified
 		})
 	}
 
-	// 3. Affected Inner Loop Verification
+	// 3. Affected Inner Loop Verification. With nothing uncommitted, the outer loop (local CI
+	// on this exact commit, started by commit/ship) already verifies the same content: reuse
+	// or wait for it. Re-running verify here doubled the load while the outer loop ran, and
+	// load-sensitive tests timed out (trpc: openapi CLI tests), blocking a correct change.
 	vStart := time.Now()
-	runner := verify.NewRunner(rootDir)
-	suiteRes := runner.VerifyAffected(g, modifiedFiles, verify.VerifyOptions{})
-	vDur := float64(time.Since(vStart).Microseconds()) / 1000.0
-
-	// Evidence names the exact commands that ran so the receipt cannot overstate coverage.
-	var ran, failures []string
-	for _, r := range suiteRes.Results {
-		if r.CommandRun != "" {
-			ran = append(ran, fmt.Sprintf("%s: %s", r.Target, r.CommandRun))
+	var affectedPkgs []string
+	if job := outerResultForHead(rootDir); job != nil {
+		vDur := float64(time.Since(vStart).Microseconds()) / 1000.0
+		affectedPkgs = g.ComputeAffected(modifiedFiles).AllAffected
+		item := DoDItem{ID: "DoD-InnerLoop", Description: "Affected Targets Typecheck, Lint & Unit Tests", DurationMs: vDur}
+		if job.Status == verify.JobPassed || job.Status == verify.JobPromoted {
+			item.Status = "PASSED"
+			item.Evidence = fmt.Sprintf("outer loop %s (local CI on this exact commit) green: %d/%d packages", job.ID, job.PassedPackages, job.TotalPackagesTested)
+		} else {
+			item.Status = "FAILED"
+			item.Evidence = fmt.Sprintf("outer loop %s red: %s", job.ID, job.ErrorSummary)
 		}
-		if r.Status == "failed" {
-			msg := r.Target
-			if len(r.Errors) > 0 {
-				msg = fmt.Sprintf("%s: %s:%d %s", r.Target, r.Errors[0].File, r.Errors[0].Line, r.Errors[0].Message)
-			}
-			failures = append(failures, msg)
-		}
-	}
-	if suiteRes.Status == "passed" {
-		dodItems = append(dodItems, DoDItem{
-			ID:          "DoD-InnerLoop",
-			Description: "Affected Targets Typecheck, Lint & Unit Tests",
-			Status:      "PASSED",
-			DurationMs:  vDur,
-			Evidence:    fmt.Sprintf("All %d affected packages passed in %0.1fms [%s]", suiteRes.TotalTargets, vDur, strings.Join(ran, "; ")),
-		})
+		dodItems = append(dodItems, item)
 	} else {
-		dodItems = append(dodItems, DoDItem{
-			ID:          "DoD-InnerLoop",
-			Description: "Affected Targets Typecheck, Lint & Unit Tests",
-			Status:      "FAILED",
-			DurationMs:  vDur,
-			Evidence:    fmt.Sprintf("%d out of %d targets failed: %s", suiteRes.FailedTargets, suiteRes.TotalTargets, strings.Join(failures, "; ")),
-		})
+		runner := verify.NewRunner(rootDir)
+		suiteRes := runner.VerifyAffected(g, modifiedFiles, verify.VerifyOptions{})
+		vDur := float64(time.Since(vStart).Microseconds()) / 1000.0
+
+		// Evidence names the exact commands that ran so the receipt cannot overstate coverage.
+		var ran, failures []string
+		for _, r := range suiteRes.Results {
+			if r.CommandRun != "" {
+				ran = append(ran, fmt.Sprintf("%s: %s", r.Target, r.CommandRun))
+			}
+			if r.Status == "failed" {
+				msg := r.Target
+				if len(r.Errors) > 0 {
+					msg = fmt.Sprintf("%s: %s:%d %s", r.Target, r.Errors[0].File, r.Errors[0].Line, r.Errors[0].Message)
+				}
+				failures = append(failures, msg)
+			}
+		}
+		if suiteRes.Status == "passed" {
+			dodItems = append(dodItems, DoDItem{
+				ID:          "DoD-InnerLoop",
+				Description: "Affected Targets Typecheck, Lint & Unit Tests",
+				Status:      "PASSED",
+				DurationMs:  vDur,
+				Evidence:    fmt.Sprintf("All %d affected packages passed in %0.1fms [%s]", suiteRes.TotalTargets, vDur, strings.Join(ran, "; ")),
+			})
+		} else {
+			dodItems = append(dodItems, DoDItem{
+				ID:          "DoD-InnerLoop",
+				Description: "Affected Targets Typecheck, Lint & Unit Tests",
+				Status:      "FAILED",
+				DurationMs:  vDur,
+				Evidence:    fmt.Sprintf("%d out of %d targets failed: %s", suiteRes.FailedTargets, suiteRes.TotalTargets, strings.Join(failures, "; ")),
+			})
+		}
+
+		affectedPkgs = suiteRes.AffectedPackages
 	}
 
 	// 3b. Versioning: edges must resolve, and a declared changeset may not understate the
@@ -158,7 +178,7 @@ func ProveTask(rootDir string, taskID string, g *graph.DependencyGraph, modified
 
 	// 3. Build Deliverable for Affected Packages
 	var lastDeliverableSHA string
-	for _, pkgName := range suiteRes.AffectedPackages {
+	for _, pkgName := range affectedPkgs {
 		if pkg, ok := g.GetPackage(pkgName); ok {
 			dStart := time.Now()
 			manifest, err := deliver.BuildDeliverable(rootDir, pkg)
@@ -199,7 +219,7 @@ func ProveTask(rootDir string, taskID string, g *graph.DependencyGraph, modified
 		OneSecondReviewCmd: fmt.Sprintf("monoflow verify --proof=%s", taskID),
 		GitTreeSHA:         treeSHA,
 		DoDChecks:          dodItems,
-		AffectedPackages:   suiteRes.AffectedPackages,
+		AffectedPackages:   affectedPkgs,
 		DeliverableSHA:     lastDeliverableSHA,
 	}
 
@@ -331,4 +351,27 @@ func bumpRank(b string) int {
 		return 1
 	}
 	return 0
+}
+
+// outerResultForHead returns the finished outer-loop job for HEAD (waiting for a queued or
+// running one), or nil when the working tree has uncommitted changes or no job exists.
+func outerResultForHead(rootDir string) *verify.OuterJob {
+	if out, _ := exec.Command("git", "-C", rootDir, "status", "--porcelain", "--untracked-files=no").Output(); len(strings.TrimSpace(string(out))) > 0 {
+		return nil
+	}
+	sha, err := exec.Command("git", "-C", rootDir, "rev-parse", "HEAD").Output()
+	if err != nil {
+		return nil
+	}
+	om := verify.NewOuterLoopManager(rootDir)
+	job := om.LatestForCommit(strings.TrimSpace(string(sha)))
+	if job == nil {
+		return nil
+	}
+	if job.Status == verify.JobQueued || job.Status == verify.JobRunning {
+		if job, err = om.WaitJob(job.ID, 30*time.Minute); err != nil {
+			return nil
+		}
+	}
+	return job
 }

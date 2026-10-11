@@ -12,6 +12,7 @@ import (
 
 func main() {
 	_ = os.Setenv("MONOFLOW_INTERNAL", "1")
+	takeJSONFlag()
 
 	if len(os.Args) < 2 {
 		printUsage()
@@ -20,10 +21,13 @@ func main() {
 
 	cmd := os.Args[1]
 	if isHelpArg(cmd) {
-		if len(os.Args) > 2 {
-			printCommandUsage(os.Args[2])
-		} else {
+		switch {
+		case len(os.Args) > 2 && os.Args[2] == "--all":
 			printUsage()
+		case len(os.Args) > 2:
+			printCommandUsage(os.Args[2])
+		default:
+			printShortUsage()
 		}
 		os.Exit(0)
 	}
@@ -84,6 +88,9 @@ func main() {
 	case "ci":
 		handleCI(rootDir)
 
+	case "speculate-watch": // internal: started by start, see speculate.go
+		speculateWatch(rootDir)
+
 	case "start":
 		handleStart(rootDir)
 	case "ship":
@@ -135,6 +142,19 @@ func printUsage() {
 	usageText(os.Stdout)
 }
 
+// printShortUsage is what `monoflow help` prints: the agent path and command names. The full
+// list (3 KB) is behind `help --all`; agents read help early and carry it in context all run.
+func printShortUsage() {
+	fmt.Println(`MonoFlow. Agent path (4 calls):
+  monoflow start <task-id>      worktree + branch; cd into the printed path
+  monoflow verify               build+lint+test changed packages and every dependent (= CI for this change)
+  monoflow ship -m "<msg>"      commit, local CI on that commit, push, open the PR
+
+More: graph (query|impact) · checkpoint · commit · push · sync · events · ci · outer · worktree ·
+pr · review · queue · quarantine · version · task · guard · subset · cache · deliver · init · hook
+  monoflow help <command>       flags of one command      monoflow help --all   everything`)
+}
+
 func usageText(w io.Writer) {
 	fmt.Fprintln(w, `MonoFlow — The Agent-Native Monorepo & Ultra-Fast CI Engine
 
@@ -150,7 +170,7 @@ Usage:
   monoflow graph [query|impact]       Query upstream/downstream dependencies & impact
   monoflow checkpoint [save|revert]   Snapshot / restore the working tree (~50-100ms, outside git history)
   monoflow worktree [create|sync|gc]  Per-agent worktrees on agent/<id> branches, sparse package projection
-  monoflow verify [--affected|--proof] Typecheck+lint+test changed packages and dependents (cached, compact JSON)
+  monoflow verify [--affected|--proof] Typecheck+lint+test changed packages and dependents (cached; text, --json for scripts)
   monoflow outer [start|status|wait]  Async outer loop: transitive matrix & remote promotion barrier
   monoflow push [remote] [branch]     Fire-and-forget push with background autonomous CI watcher
   monoflow sync [remote] [branch]     Fast remote sync (ff-only or rebase) keeping sparse subset
@@ -169,7 +189,7 @@ Usage:
   monoflow pr [create|list|view|status|review|test|local|merge] Full agent-native PR suite with affected packages
   monoflow quarantine [list|add]      Manage flaky test quarantine
   monoflow version [list|bump|apply|check] SemVer package versioning, changesets & cascade
-  monoflow hook [pretooluse|check]    Agent harness hook: redirect raw build/test/git commands to MonoFlow
+  monoflow hook [pretooluse|check|deliver|stop] Agent harness hooks: redirect raw commands, deliver events, background verify
   monoflow help [command]             Show this help (also --help, -h)`)
 }
 
@@ -207,9 +227,12 @@ One call replaces commit + pr create. Afterwards end your turn: CI results are d
   verify --package=<p> | --all        Verify one package / every package
   verify --test | --lint | --typecheck | --all-checks   Restrict or widen the check kinds
   verify --no-cache | --force         Ignore cached results
+  verify --update-snapshots | -u      Rewrite mismatched vitest/jest snapshots (when the new values are intended)
   verify --base=<ref>                 Changes since the merge-base with <ref> (CI: the PR base)
   verify --strict                     Also block on failures that pre-exist on the base branch
-  verify --proof=<task-id>            Verify a Proof-of-Work receipt`,
+  verify --proof=<task-id>            Verify a Proof-of-Work receipt
+In a worktree from 'start', verify already runs in the background once your edits settle;
+'monoflow verify' then prints that result (or waits for it) when the files are unchanged.`,
 	"worktree": `  worktree create <agent-id> --packages=<p1,p2> [--deps=<strategy>] [--isolated-deps]
                                       Isolated worktree on branch agent/<agent-id>
   worktree list                       List registered worktrees

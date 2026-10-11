@@ -2,6 +2,7 @@ package verify
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -173,5 +174,101 @@ func TestPrepareCommandsMergeUpstreams(t *testing.T) {
 	want := turbo + " --filter=@t/core --filter=@t/server"
 	if len(got) != 1 || got[0] != want {
 		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+// While a changed package fails, its dependents are not run (fast fix loop); once it passes
+// they are, so a pass still covers every dependent.
+func TestVerifyAffectedChecksChangedPackagesFirst(t *testing.T) {
+	root := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(root, "core"), 0755)
+	_ = os.MkdirAll(filepath.Join(root, "app"), 0755)
+	_ = os.WriteFile(filepath.Join(root, "core", "ok"), []byte("no\n"), 0644)
+	g := graph.New(root)
+	g.AddPackage(&graph.PackageNode{Name: "core", Path: "core", Language: graph.LangGeneric, TestCmd: `grep -qx yes ok || { echo "core_test.go:1: not ok"; exit 1; }`})
+	g.AddPackage(&graph.PackageNode{Name: "app", Path: "app", Language: graph.LangGeneric, Dependencies: []string{"core"}, TestCmd: "touch ran"})
+	g.RebuildEdges()
+	r := NewRunner(root)
+	res := r.VerifyAffected(g, []string{"core/ok"}, VerifyOptions{Strict: true})
+	if res.Status != "failed" || len(res.Pending) != 1 || res.Pending[0] != "app" {
+		t.Fatalf("want core failed, app pending: %+v", res)
+	}
+	if _, err := os.Stat(filepath.Join(root, "app", "ran")); err == nil {
+		t.Fatalf("dependent ran while the changed package failed")
+	}
+	_ = os.WriteFile(filepath.Join(root, "core", "ok"), []byte("yes\n"), 0644)
+	res = r.VerifyAffected(g, []string{"core/ok"}, VerifyOptions{Strict: true})
+	if res.Status != "passed" || res.TotalTargets != 2 || len(res.Pending) != 0 {
+		t.Fatalf("want both checked and passed: %+v", res)
+	}
+}
+
+// A target that fails once and passes alone (a timeout under load) is reported as flaky, not
+// failed; a real failure stays failed.
+func TestFailedTargetRetriedOnceAndMarkedFlaky(t *testing.T) {
+	root := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(root, "flaky"), 0755)
+	_ = os.MkdirAll(filepath.Join(root, "broken"), 0755)
+	g := graph.New(root)
+	g.AddPackage(&graph.PackageNode{Name: "flaky", Path: "flaky", Language: graph.LangGeneric,
+		TestCmd: `if [ -f seen ]; then exit 0; fi; touch seen; echo "x_test.go:1: Test timed out in 5000ms"; exit 1`})
+	g.AddPackage(&graph.PackageNode{Name: "broken", Path: "broken", Language: graph.LangGeneric,
+		TestCmd: `echo "y_test.go:2: want 1"; exit 1`})
+	res := NewRunner(root).VerifyPackages(g, []string{"flaky", "broken"}, VerifyOptions{Strict: true})
+	got := map[string]TargetResult{}
+	for _, r := range res.Results {
+		got[r.Target] = r
+	}
+	if r := got["flaky"]; r.Status != "passed" || !r.Flaky {
+		t.Fatalf("flaky target: %+v", r)
+	}
+	if r := got["broken"]; r.Status != "failed" || r.Flaky {
+		t.Fatalf("broken target: %+v", r)
+	}
+}
+
+// Files a check leaves in the repo (Playwright test-results/, coverage) are removed, so they
+// cannot end up in the agent's commit; files that existed before are kept.
+func TestVerifyRemovesFilesChecksCreate(t *testing.T) {
+	root := t.TempDir()
+	_ = exec.Command("git", "-C", root, "init", "-q").Run()
+	_ = os.MkdirAll(filepath.Join(root, "app"), 0755)
+	_ = os.WriteFile(filepath.Join(root, "app", "mine.txt"), []byte("agent's new file\n"), 0644)
+	g := graph.New(root)
+	g.AddPackage(&graph.PackageNode{Name: "app", Path: "app", Language: graph.LangGeneric,
+		TestCmd: "mkdir -p test-results && echo '{}' > test-results/.last-run.json"})
+	res := NewRunner(root).VerifyPackages(g, []string{"app"}, VerifyOptions{Strict: true})
+	if res.Status != "passed" {
+		t.Fatalf("unexpected: %+v", res)
+	}
+	if _, err := os.Stat(filepath.Join(root, "app", "test-results")); err == nil {
+		t.Fatalf("check output must be removed")
+	}
+	if _, err := os.Stat(filepath.Join(root, "app", "mine.txt")); err != nil {
+		t.Fatalf("pre-existing untracked file must be kept")
+	}
+}
+
+// Example apps that merely depend on a change are skipped (verify_exclude, default examples/);
+// an example changed directly is still verified.
+func TestVerifyExcludeSkipsExampleDependents(t *testing.T) {
+	root := t.TempDir()
+	for _, d := range []string{"core", "app", "examples/demo"} {
+		_ = os.MkdirAll(filepath.Join(root, d), 0755)
+	}
+	g := graph.New(root)
+	g.AddPackage(&graph.PackageNode{Name: "core", Path: "core", Language: graph.LangGeneric, TestCmd: "true"})
+	g.AddPackage(&graph.PackageNode{Name: "app", Path: "app", Language: graph.LangGeneric, Dependencies: []string{"core"}, TestCmd: "true"})
+	g.AddPackage(&graph.PackageNode{Name: "demo", Path: "examples/demo", Language: graph.LangGeneric, Dependencies: []string{"core"}, TestCmd: "true"})
+	g.RebuildEdges()
+	g.VerifyExclude = []string{"examples/"}
+	r := NewRunner(root)
+	res := r.VerifyAffected(g, []string{"core/x"}, VerifyOptions{Strict: true})
+	if res.TotalTargets != 2 || res.Excluded != 1 {
+		t.Fatalf("want core+app verified, demo excluded: %+v", res)
+	}
+	res = r.VerifyAffected(g, []string{"examples/demo/x"}, VerifyOptions{Strict: true})
+	if res.TotalTargets != 1 || res.Excluded != 0 {
+		t.Fatalf("a directly changed example must be verified: %+v", res)
 	}
 }

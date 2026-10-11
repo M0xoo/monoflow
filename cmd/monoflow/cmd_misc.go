@@ -43,7 +43,7 @@ func handleInit(rootDir string) {
 		}
 	}
 
-	data, _ := json.MarshalIndent(map[string]any{
+	printOut(map[string]any{
 		"status":              "initialized",
 		"repo_root":           res.RepoRoot,
 		"package_count":       res.PackageCount,
@@ -52,14 +52,12 @@ func handleInit(rootDir string) {
 		"rule_file":           filepath.Join(res.RepoRoot, ".agents", "rules", "agentic-monorepo.md"),
 		"skill_file":          filepath.Join(res.RepoRoot, ".agents", "skills", "monoflow", "SKILL.md"),
 		"workflow_file":       workflowPath,
-	}, "", "  ")
-
-	fmt.Println(string(data))
+	})
 }
 
 func handleTask(rootDir string) {
 	if len(os.Args) < 3 {
-		fmt.Println(`{"error": "missing task subcommand: check | prove | slice | changeset"}`)
+		printRaw(`{"error": "missing task subcommand: check | prove | slice | changeset"}`)
 		os.Exit(1)
 	}
 
@@ -74,16 +72,14 @@ func handleTask(rootDir string) {
 			_ = json.Unmarshal(data, &bundle)
 		}
 		res := task.CheckBoundaries(&bundle, changedFiles)
-		data, _ := json.MarshalIndent(res, "", "  ")
-		fmt.Println(string(data))
+		printOut(res)
 		if !res.Valid {
 			os.Exit(1)
 		}
 
 	case "slice":
 		slice := task.SliceStackedDiff(changedFiles)
-		data, _ := json.MarshalIndent(slice, "", "  ")
-		fmt.Println(string(data))
+		printOut(slice)
 
 	case "prove":
 		taskID := "task-001"
@@ -93,19 +89,18 @@ func handleTask(rootDir string) {
 		g, _ := graph.LoadOrDiscover(rootDir)
 		receipt, dossier, err := proof.ProveTask(rootDir, taskID, g, changedFiles)
 		if err != nil {
-			fmt.Printf(`{"status": "failed", "error": "%s"}`+"\n", err)
+			printRaw(fmt.Sprintf(`{"status": "failed", "error": %q}`, err))
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(map[string]any{
+		printOut(map[string]any{
 			"status":              receipt.Status,
 			"receipt":             receipt,
 			"pr_markdown_dossier": dossier,
-		}, "", "  ")
-		fmt.Println(string(data))
+		})
 
 	case "changeset":
 		if len(os.Args) < 5 {
-			fmt.Println(`{"error": "usage: monoflow task changeset <pkg> <patch|minor|major> <summary>"}`)
+			printRaw(`{"error": "usage: monoflow task changeset <pkg> <patch|minor|major> <summary>"}`)
 			os.Exit(1)
 		}
 		cs := task.Changeset{
@@ -116,7 +111,7 @@ func handleTask(rootDir string) {
 			CreatedAt: time.Now().UTC(),
 		}
 		_ = task.SaveChangeset(rootDir, cs)
-		fmt.Println(`{"status": "changeset_created"}`)
+		printRaw(`{"status": "changeset_created"}`)
 	}
 }
 
@@ -140,8 +135,7 @@ func handleDeliver(rootDir string) {
 		if target == "" || p.Name == target {
 			manifest, err := deliver.BuildDeliverableWithOptions(rootDir, p, opts)
 			if err == nil {
-				data, _ := json.MarshalIndent(manifest, "", "  ")
-				fmt.Println(string(data))
+				printOut(manifest)
 			}
 		}
 	}
@@ -155,20 +149,19 @@ func handleApp(rootDir string) {
 
 	overlayPath, err := deliver.AssembleFullAppOverlay(rootDir, g, affected.AllAffected)
 	if err != nil {
-		fmt.Printf(`{"error": "%s"}`+"\n", err)
+		printRaw(fmt.Sprintf(`{"error": %q}`, err))
 		os.Exit(1)
 	}
 
 	durMs := float64(time.Since(start).Microseconds()) / 1000.0
-	data, _ := json.MarshalIndent(map[string]any{
+	printOut(map[string]any{
 		"status":            "ready",
 		"overlay_path":      overlayPath,
 		"graft_duration_ms": durMs,
 		"cached_packages":   len(g.GetAllPackages()) - len(affected.AllAffected),
 		"delta_packages":    affected.AllAffected,
 		"verdict":           "Full App assembled in < 5 seconds without recompiling unchanged packages",
-	}, "", "  ")
-	fmt.Println(string(data))
+	})
 }
 
 func handleCache(rootDir string) {
@@ -186,15 +179,14 @@ func handleCache(rootDir string) {
 	switch sub {
 	case "status":
 		stats := mgr.GetStats()
-		data, _ := json.MarshalIndent(stats, "", "  ")
-		fmt.Println(string(data))
+		printOut(stats)
 
 	case "clean", "purge":
 		if err := mgr.Clean(); err != nil {
-			fmt.Printf(`{"status": "error", "error": "%s"}`+"\n", err)
+			printRaw(fmt.Sprintf(`{"status": "error", "error": %q}`, err))
 			os.Exit(1)
 		}
-		fmt.Println(`{"status": "cleaned", "message": "Local verification and artifact cache purged"}`)
+		printRaw(`{"status": "cleaned", "message": "Local verification and artifact cache purged"}`)
 
 	case "serve":
 		port := 8080
@@ -212,14 +204,14 @@ func handleCache(rootDir string) {
 			}
 		}
 		addr := fmt.Sprintf(":%d", port)
-		fmt.Printf(`{"status": "running", "addr": "%s", "storage_dir": %q, "token_protected": %t}`+"\n", addr, storageDir, token != "")
+		printRaw(fmt.Sprintf(`{"status": "running", "addr": %q, "storage_dir": %q, "token_protected": %t}`, addr, storageDir, token != ""))
 		if err := cache.StartServer(addr, storageDir, token); err != nil {
-			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
+			printRaw(fmt.Sprintf(`{"status": "error", "error": %q}`, err.Error()))
 			os.Exit(1)
 		}
 
 	default:
-		fmt.Printf(`{"error": "unknown cache subcommand: %s (use status | clean | serve)"}`+"\n", sub)
+		printRaw(fmt.Sprintf(`{"error": "unknown cache subcommand: %s (use status | clean | serve)"}`, sub))
 		os.Exit(1)
 	}
 }
@@ -243,7 +235,7 @@ func handleScenario(rootDir string) {
 	report, err := scenario.RunScenario(targetDir)
 	if err != nil {
 		if asJSON {
-			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
+			printRaw(fmt.Sprintf(`{"status": "error", "error": %q}`, err.Error()))
 		} else {
 			fmt.Printf("❌ Scenario Execution Failed: %v\n", err)
 		}
@@ -251,8 +243,7 @@ func handleScenario(rootDir string) {
 	}
 
 	if asJSON {
-		data, _ := json.MarshalIndent(report, "", "  ")
-		fmt.Println(string(data))
+		printOut(report)
 		return
 	}
 

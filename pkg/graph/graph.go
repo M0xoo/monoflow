@@ -50,12 +50,17 @@ type Config struct {
 	Version      string        `json:"version"`
 	MonorepoType string        `json:"monorepo_type,omitempty"` // turbo, nx, pnpm, cargo, go, custom
 	Packages     []PackageNode `json:"packages"`
+	// VerifyExclude: path prefixes whose packages verify skips when they are only dependents of
+	// a change (a package changed directly is always verified). Missing: ["examples/"] if the
+	// repo has example packages; [] verifies everything.
+	VerifyExclude []string `json:"verify_exclude"`
 }
 
 // DependencyGraph manages package relations and computes affected targets.
 type DependencyGraph struct {
 	mu            sync.RWMutex
 	RootDir       string
+	VerifyExclude []string // see Config.VerifyExclude
 	packages      map[string]*PackageNode
 	upstreamMap   map[string]map[string]bool // pkg -> set of dependencies
 	downstreamMap map[string]map[string]bool // pkg -> set of dependents
@@ -100,6 +105,10 @@ func LoadOrDiscover(rootDir string) (*DependencyGraph, error) {
 					}
 					resolveGoDependencies(rootDir, goPkgs, unresolvedGo...)
 				}
+				g.VerifyExclude = cfg.VerifyExclude
+				if g.VerifyExclude == nil {
+					g.VerifyExclude = DefaultVerifyExclude(cfg.Packages)
+				}
 				g.rebuildEdges()
 				// Manifests are the source of truth for how each edge is consumed.
 				g.ApplyEdgeModes()
@@ -130,8 +139,12 @@ func (g *DependencyGraph) SaveConfig(configPath string) error {
 	}
 
 	cfg := Config{
-		Version:  "1.0",
-		Packages: pkgs,
+		Version:       "1.0",
+		Packages:      pkgs,
+		VerifyExclude: g.VerifyExclude,
+	}
+	if cfg.VerifyExclude == nil {
+		cfg.VerifyExclude = DefaultVerifyExclude(pkgs)
 	}
 
 	data, err := json.MarshalIndent(cfg, "", "  ")
@@ -453,4 +466,27 @@ var nonCodePattern = regexp.MustCompile(`(?i)(\.(md|mdx|rst)$|^LICENSE|(^|/)docs
 // config). Kept in sync with the paths-ignore of the generated CI workflow.
 func IsNonCodeFile(path string) bool {
 	return nonCodePattern.MatchString(strings.TrimPrefix(filepath.ToSlash(path), "./"))
+}
+
+// DefaultVerifyExclude: example apps are demos, not product; CI checks of monorepos with an
+// examples/ directory usually leave them out (TanStack Query: --exclude=examples/**), and
+// typechecking 40 of them made each verify on trpc take minutes.
+func DefaultVerifyExclude(pkgs []PackageNode) []string {
+	for _, p := range pkgs {
+		if strings.HasPrefix(filepath.ToSlash(p.Path), "examples/") {
+			return []string{"examples/"}
+		}
+	}
+	return []string{}
+}
+
+// ExcludedFromVerify reports whether pkg is skipped by verify when it is only a dependent.
+func (g *DependencyGraph) ExcludedFromVerify(pkg *PackageNode) bool {
+	path := filepath.ToSlash(pkg.Path) + "/"
+	for _, prefix := range g.VerifyExclude {
+		if prefix != "" && strings.HasPrefix(path, strings.TrimSuffix(prefix, "/")+"/") {
+			return true
+		}
+	}
+	return false
 }

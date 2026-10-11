@@ -1,10 +1,13 @@
 package verify
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -27,6 +30,19 @@ type VerifyOptions struct {
 	// merge-base (pre-existing in the repo, not caused by this change) does not block.
 	Strict  bool
 	BaseRef string // base for the baseline (default: origin/main, main, origin/master, master)
+	// ChangedFiles (set by VerifyAffected) lets Go modules run only the packages that import
+	// the change (see goScopedCommands).
+	ChangedFiles []string
+	// AllPackages (verify --all / --package): run every package's tests, but judge formatting
+	// on the changed files only, like verify does: an agent saw verify report no preexisting
+	// failure and --all report old gofmt debt, and spent five runs reconciling them.
+	AllPackages bool
+	// UpdateSnapshots runs JS/TS test commands with -u (vitest/jest rewrite mismatched
+	// snapshots): agents otherwise rewrote inline snapshots by hand, many calls each (trpc).
+	UpdateSnapshots bool
+	// KeepUntracked: do not remove files the checks created (background runs: the agent may be
+	// creating files at the same time).
+	KeepUntracked bool
 }
 
 // TargetResult holds the result of verifying a single package.
@@ -47,6 +63,8 @@ type TargetResult struct {
 	CommandRun string `json:"command_run,omitempty"`
 	// ErrorCount replaces Errors when DedupeErrors moved them to SuiteResult.Errors.
 	ErrorCount int `json:"error_count,omitempty"`
+	// Flaky: failed while many checks ran at once, passed when re-run alone.
+	Flaky bool `json:"flaky,omitempty"`
 
 	// remaining are the checks skipped after the failing one, and dir where they run: if
 	// that failure turns out to be preexisting they still have to run (see classifyPreexisting).
@@ -69,6 +87,11 @@ type SuiteResult struct {
 	Errors        []SharedError `json:"errors,omitempty"`
 	ErrorsOmitted int           `json:"errors_omitted,omitempty"`
 	Hint          string        `json:"hint,omitempty"`
+	// Pending lists dependents not checked yet because a changed package failed: they run
+	// once the changed packages pass.
+	Pending []string `json:"pending,omitempty"`
+	// Excluded counts dependents skipped by verify_exclude (default: examples/).
+	Excluded int `json:"excluded,omitempty"`
 }
 
 // Runner executes verification tasks with maximum parallelism, caching, and minimal latency.
@@ -139,8 +162,13 @@ func (r *Runner) VerifyTarget(pkg *graph.PackageNode, opt VerifyOptions) TargetR
 		Errors:   make([]DiagnosticError, 0),
 	}
 
-	// 1. Determine the checks to run (see checkCommands).
-	cmds := checkCommands(pkg, opt)
+	// 1. Determine the checks to run (see commandsFor).
+	cmds, unaffected := r.commandsFor(pkg, opt)
+	if unaffected {
+		res.CommandRun = "(none: no package of this module imports the changed packages)"
+		res.DurationMs = float64(time.Since(start).Microseconds()) / 1000.0
+		return res
+	}
 	if len(cmds) == 0 {
 		res.DurationMs = float64(time.Since(start).Microseconds()) / 1000.0
 		return res
@@ -170,7 +198,21 @@ func (r *Runner) VerifyTarget(pkg *graph.PackageNode, opt VerifyOptions) TargetR
 		cacheKey, _ = r.cacheMgr.ComputePackageKey(pkg, r.upstreamKeys(pkg), cmdStr, modeTag)
 		if !opt.NoCache && cacheKey != "" {
 			res.CacheKey = cacheKey
-			if rec, hit := r.cacheMgr.GetVerification(cacheKey); hit && rec.Status == "passed" {
+			rec, hit := r.cacheMgr.GetVerification(cacheKey)
+			if hit && rec.Status == "preexisting" && !opt.Strict {
+				// Only failures main already has, judged against the same baseline commit: they
+				// stay what they were (re-running them every verify cost minutes on trpc).
+				var stored struct {
+					Base   string            `json:"base"`
+					Errors []DiagnosticError `json:"errors"`
+				}
+				if json.Unmarshal([]byte(rec.Output), &stored) == nil && stored.Base != "" && stored.Base == r.baselineSHA(opt.BaseRef) {
+					res.Status, res.Cached, res.Preexisting = "passed", true, stored.Errors
+					res.DurationMs = float64(time.Since(start).Microseconds()) / 1000.0
+					return res
+				}
+			}
+			if hit && rec.Status == "passed" {
 				res.Status = "passed"
 				res.Cached = true
 				if strings.HasPrefix(rec.Output, "monoflow-proof:") {
@@ -253,6 +295,29 @@ func (r *Runner) VerifyTarget(pkg *graph.PackageNode, opt VerifyOptions) TargetR
 	return res
 }
 
+// commandsFor is checkCommands narrowed to what the change can affect (Go: only packages
+// importing the changed packages); unaffected=true when nothing in the package can be.
+func (r *Runner) commandsFor(pkg *graph.PackageNode, opt VerifyOptions) (cmds []string, unaffected bool) {
+	if len(opt.ChangedFiles) > 0 && (opt.Mode == "" || opt.Mode == "all") {
+		if opt.AllPackages {
+			if c, ok := goFormatScopedCommands(r.RootDir, pkg, opt.ChangedFiles); ok {
+				return c, false
+			}
+		} else if c, skip, ok := goScopedCommands(r.RootDir, pkg, opt.ChangedFiles); ok {
+			return c, skip
+		}
+	}
+	cmds = checkCommands(pkg, opt)
+	if opt.UpdateSnapshots && (pkg.Language == graph.LangJavaScript || pkg.Language == graph.LangTypeScript) {
+		for i, c := range cmds {
+			if c == pkg.TestCmd {
+				cmds[i] = c + " -u"
+			}
+		}
+	}
+	return cmds, false
+}
+
 // checkCommands returns the commands for the requested checks, in run order.
 // The default (and "all") runs typecheck, lint and tests so the inner loop catches
 // everything remote CI would; --typecheck/--lint/--test narrow it to a single check.
@@ -306,7 +371,40 @@ func (r *Runner) VerifyAffected(g *graph.DependencyGraph, changedFiles []string,
 	}
 	_ = release.EnsurePinned(r.RootDir, g)
 	affected := g.ComputeAffected(changedFiles)
-	res := r.VerifyPackages(g, affected.AllAffected, opt)
+	opt.ChangedFiles = changedFiles
+	// Changed packages first: while they fail, checking their dependents only slows the fix loop
+	// (each edit re-runs them all: 1-2 min on trpc, where an agent iterating on one package wants
+	// seconds). Once they pass, the dependents run, so a pass still covers what CI runs.
+	direct := map[string]bool{}
+	for _, n := range affected.DirectlyChanged {
+		direct[n] = true
+	}
+	var rest []string
+	excluded := 0
+	for _, n := range affected.AllAffected {
+		if direct[n] {
+			continue
+		}
+		if p, ok := g.GetPackage(n); ok && g.ExcludedFromVerify(p) {
+			excluded++ // verify_exclude (default: examples/), as the repo's CI does
+			continue
+		}
+		rest = append(rest, n)
+	}
+	res := r.VerifyPackages(g, affected.DirectlyChanged, opt)
+	if res.Status == "failed" && len(rest) > 0 {
+		res.Pending = rest
+	} else if len(rest) > 0 {
+		dep := r.VerifyPackages(g, rest, opt)
+		res.Status = dep.Status
+		res.TotalTargets += dep.TotalTargets
+		res.PassedTargets += dep.PassedTargets
+		res.FailedTargets += dep.FailedTargets
+		res.CachedTargets += dep.CachedTargets
+		res.AffectedPackages = append(res.AffectedPackages, dep.AffectedPackages...)
+		res.Results = append(res.Results, dep.Results...)
+	}
+	res.Excluded = excluded
 	res.DurationMs = float64(time.Since(start).Microseconds()) / 1000.0
 	return res
 }
@@ -317,6 +415,10 @@ func (r *Runner) VerifyAffected(g *graph.DependencyGraph, changedFiles []string,
 // --affected green and --all red stopped trusting both.
 func (r *Runner) VerifyPackages(g *graph.DependencyGraph, names []string, opt VerifyOptions) SuiteResult {
 	start := time.Now()
+	if r.cacheMgr != nil {
+		r.cacheMgr.BeginRun()
+		defer r.cacheMgr.EndRun()
+	}
 	if r.graph == nil {
 		r.graph = g
 	}
@@ -331,6 +433,18 @@ func (r *Runner) VerifyPackages(g *graph.DependencyGraph, names []string, opt Ve
 			AffectedPackages: []string{},
 			Results:          []TargetResult{},
 		}
+	}
+
+	// A worktree's dependencies may still be installing in the background (pnpm, see
+	// graph.PrepareNodeModules): checks need them.
+	graph.WaitForDeps(r.RootDir, 10*time.Minute)
+
+	// Checks must not change the tree the agent commits: files they create (Playwright's
+	// test-results/, coverage) are removed afterwards. trpc: ship committed two of them.
+	// A background (speculative) run leaves them: the agent may be creating files meanwhile.
+	if !opt.UpdateSnapshots && !opt.KeepUntracked { // new snapshot files are the point of -u
+		before := untrackedFiles(r.RootDir)
+		defer removeNewUntracked(r.RootDir, before)
 	}
 
 	// Build what the checks need from upstream packages once, through the repo's task runner,
@@ -351,10 +465,19 @@ func (r *Runner) VerifyPackages(g *graph.DependencyGraph, names []string, opt Ve
 	results := make([]TargetResult, len(names))
 	var wg sync.WaitGroup
 
+	// Bounded: every target at once (48 on trpc, each starting vitest/tsc with its own workers)
+	// oversubscribed the machine and made timing-sensitive tests fail (websocket reconnects).
+	limit := opt.Concurrency
+	if limit <= 0 {
+		limit = min(max(runtime.NumCPU()/2, 2), 8)
+	}
+	sem := make(chan struct{}, limit)
 	for i, pkgName := range names {
 		wg.Add(1)
 		go func(idx int, name string) {
 			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
 			pkg, exists := g.GetPackage(name)
 			if !exists {
 				results[idx] = TargetResult{
@@ -370,8 +493,30 @@ func (r *Runner) VerifyPackages(g *graph.DependencyGraph, names []string, opt Ve
 	wg.Wait()
 	results = append(results, prepFailures...)
 
+	// A failure under the load of many checks at once (test timeouts, spawned processes) is not
+	// a failure of the change: re-run a few failed targets once, alone, before reporting. A
+	// pass then is reported as flaky, not hidden. (trpc: openapi CLI tests timed out at 5 s
+	// while 48 packages ran, blocking a correct change.)
+	var failedIdx []int
+	for i, res := range results {
+		if res.Status == "failed" && len(res.Errors) > 0 && res.Errors[0].Code != "package_not_projected" && res.Target != PrepareTarget && timingFailure(res.Errors) {
+			failedIdx = append(failedIdx, i)
+		}
+	}
+	if len(failedIdx) > 0 && len(failedIdx) <= 5 {
+		for _, i := range failedIdx {
+			if pkg, ok := g.GetPackage(results[i].Target); ok {
+				if again := r.VerifyTarget(pkg, opt); again.Status == "passed" {
+					again.Flaky = true
+					results[i] = again
+				}
+			}
+		}
+	}
+
 	if !opt.Strict {
 		r.classifyPreexisting(g, results, opt)
+		r.cachePreexisting(results, opt)
 	}
 
 	totalDur := float64(time.Since(start).Microseconds()) / 1000.0
@@ -448,13 +593,13 @@ func (r *Runner) cachedPass(pkg *graph.PackageNode, opt VerifyOptions) bool {
 	if r.cacheMgr == nil || opt.NoCache {
 		return false
 	}
-	cmds := checkCommands(pkg, opt)
-	if len(cmds) == 0 {
+	cmds, unaffected := r.commandsFor(pkg, opt)
+	if unaffected || len(cmds) == 0 {
 		return true
 	}
 	key, _ := r.cacheMgr.ComputePackageKey(pkg, r.upstreamKeys(pkg), strings.Join(cmds, " && "), opt.Stage+":"+opt.Mode)
 	rec, hit := r.cacheMgr.PeekVerification(key)
-	return key != "" && hit && rec.Status == "passed"
+	return key != "" && hit && (rec.Status == "passed" || (rec.Status == "preexisting" && !opt.Strict))
 }
 
 // failedResult turns a failed command's output into a result with diagnostics.
@@ -476,4 +621,76 @@ func PassedKeys(results []TargetResult) []string {
 		}
 	}
 	return keys
+}
+
+// cachePreexisting stores results whose only failures main already has, with the baseline
+// commit they were judged against, so the next verify does not re-run them.
+func (r *Runner) cachePreexisting(results []TargetResult, opt VerifyOptions) {
+	if r.cacheMgr == nil || opt.NoCache {
+		return
+	}
+	base := ""
+	for _, res := range results {
+		if res.Status != "passed" || res.Cached || res.CacheKey == "" || len(res.Preexisting) == 0 || len(res.Errors) > 0 {
+			continue
+		}
+		if base == "" {
+			if base = r.baselineSHA(opt.BaseRef); base == "" {
+				return
+			}
+		}
+		data, _ := json.Marshal(map[string]any{"base": base, "errors": res.Preexisting})
+		_ = r.cacheMgr.PutVerification(&cache.VerificationRecord{
+			Key: res.CacheKey, Target: res.Target, Language: res.Language, Status: "preexisting",
+			CommandRun: res.CommandRun, Timestamp: time.Now().UTC(), Output: string(data),
+		})
+	}
+}
+
+// untrackedFiles lists files git would add (untracked, not ignored), or nil outside git.
+func untrackedFiles(dir string) map[string]bool {
+	out, err := exec.Command("git", "-C", dir, "ls-files", "--others", "--exclude-standard", "-z").Output()
+	if err != nil {
+		return nil
+	}
+	set := map[string]bool{}
+	for _, f := range strings.Split(strings.TrimRight(string(out), "\x00"), "\x00") {
+		if f != "" {
+			set[f] = true
+		}
+	}
+	return set
+}
+
+// removeNewUntracked deletes untracked files that appeared since before (and the directories
+// they leave empty).
+func removeNewUntracked(dir string, before map[string]bool) {
+	if before == nil {
+		return
+	}
+	for f := range untrackedFiles(dir) {
+		if before[f] || strings.HasPrefix(f, ".agents/") {
+			continue
+		}
+		p := filepath.Join(dir, f)
+		_ = os.Remove(p)
+		for d := filepath.Dir(p); d != dir && strings.HasPrefix(d, dir); d = filepath.Dir(d) {
+			if os.Remove(d) != nil { // stops at the first non-empty directory
+				break
+			}
+		}
+	}
+}
+
+// timingFlake matches failures that load can cause (a deterministic assertion or snapshot
+// mismatch is never retried: re-running trpc's failing packages cost ~60 s per verify).
+var timingFlake = regexp.MustCompile(`(?i)timed? ?out|timeout|ETIMEDOUT|ECONNRESET|ECONNREFUSED|EADDRINUSE|socket hang up|deadline exceeded|reconnect`)
+
+func timingFailure(errs []DiagnosticError) bool {
+	for _, e := range errs {
+		if timingFlake.MatchString(e.Message) {
+			return true
+		}
+	}
+	return false
 }

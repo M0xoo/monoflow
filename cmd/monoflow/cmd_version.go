@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -24,16 +23,15 @@ func handleVersion(rootDir string) {
 	case "list", "all":
 		rep, err := version.ListPackageVersions(rootDir)
 		if err != nil {
-			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
+			printRaw(fmt.Sprintf(`{"status": "error", "error": %q}`, err.Error()))
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(rep, "", "  ")
-		fmt.Println(string(data))
+		printOut(rep)
 
 	case "bump":
 		refuseSharedRoot(rootDir, "version bump")
 		if len(os.Args) < 5 {
-			fmt.Println(`{"error": "usage: monoflow version bump <pkg> <patch|minor|major> [--cascade]"}`)
+			printRaw(`{"error": "usage: monoflow version bump <pkg> <patch|minor|major> [--cascade]"}`)
 			os.Exit(1)
 		}
 		pkgName := os.Args[3]
@@ -46,11 +44,10 @@ func handleVersion(rootDir string) {
 		}
 		res, err := version.BumpPackageVersion(rootDir, pkgName, bumpType, cascade)
 		if err != nil {
-			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
+			printRaw(fmt.Sprintf(`{"status": "error", "error": %q}`, err.Error()))
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(res, "", "  ")
-		fmt.Println(string(data))
+		printOut(res)
 
 	case "edges", "releases", "release", "pin", "unpin", "upgrades", "upgrade", "suggest":
 		handleReleases(rootDir, sub)
@@ -58,20 +55,18 @@ func handleVersion(rootDir string) {
 	case "apply":
 		res, err := version.ApplyChangesets(rootDir)
 		if err != nil {
-			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
+			printRaw(fmt.Sprintf(`{"status": "error", "error": %q}`, err.Error()))
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(res, "", "  ")
-		fmt.Println(string(data))
+		printOut(res)
 
 	case "check", "verify":
 		rep, err := version.CheckVersionConsistency(rootDir)
 		if err != nil {
-			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
+			printRaw(fmt.Sprintf(`{"status": "error", "error": %q}`, err.Error()))
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(rep, "", "  ")
-		fmt.Println(string(data))
+		printOut(rep)
 		if rep.Status == "error" {
 			os.Exit(1)
 		}
@@ -79,11 +74,10 @@ func handleVersion(rootDir string) {
 	default:
 		rep, err := version.ListPackageVersions(rootDir)
 		if err != nil {
-			fmt.Printf(`{"version": %q, "error": %q}`+"\n", version.EngineVersion, err.Error())
+			printRaw(fmt.Sprintf(`{"version": %q, "error": %q}`, version.EngineVersion, err.Error()))
 			return
 		}
-		data, _ := json.MarshalIndent(rep, "", "  ")
-		fmt.Println(string(data))
+		printOut(rep)
 	}
 }
 
@@ -91,7 +85,7 @@ func handleVersion(rootDir string) {
 func handleReleases(rootDir, sub string) {
 	g, err := graph.LoadOrDiscover(rootDir)
 	if err != nil {
-		fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
+		printRaw(fmt.Sprintf(`{"status": "error", "error": %q}`, err.Error()))
 		os.Exit(1)
 	}
 	args := os.Args[3:]
@@ -110,16 +104,15 @@ func handleReleases(rootDir, sub string) {
 		}
 	}
 	out := func(v any) {
-		data, _ := json.MarshalIndent(v, "", "  ")
-		fmt.Println(string(data))
+		printOut(v)
 	}
 	fail := func(err error) {
-		fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
+		printRaw(fmt.Sprintf(`{"status": "error", "error": %q}`, err.Error()))
 		os.Exit(1)
 	}
 	need := func(n int, usage string) {
 		if len(pos) < n {
-			fmt.Printf(`{"error": "usage: monoflow version %s"}`+"\n", usage)
+			printRaw(fmt.Sprintf(`{"error": "usage: monoflow version %s"}`, usage))
 			os.Exit(1)
 		}
 	}

@@ -3,6 +3,7 @@
 # Usage: e2e/plugin/check.sh <workdir> <monoflow-binary> [name=url@probe-file ...]
 # probe-file: a file whose one-line edit should affect its package and its dependents.
 set -uo pipefail
+export MONOFLOW_FORMAT=json # parsed with jq below
 WORK=${1:?workdir}; BIN=${2:?monoflow binary}; shift 2
 REPOS=("$@")
 [ ${#REPOS[@]} -eq 0 ] && REPOS=(
@@ -28,14 +29,14 @@ for spec in "${REPOS[@]}"; do
     echo "dirty_after_init: $(git status --short | wc -l | tr -d ' ') files ($(git status --short | awk '{print $2}' | head -6 | tr '\n' ' '))"
     echo "probe=$probe"
     t0=$(ms); "$BIN" graph impact "$probe" > "$WORK/$name.impact.json" 2>&1; t1=$(ms)
-    jq -c '{owning_package, direct: (.direct_dependents|length), transitive: (.transitive_dependents|length)}' "$WORK/$name.impact.json" 2>/dev/null || head -c 300 "$WORK/$name.impact.json"
+    jq -c '{package, direct, dependents}' "$WORK/$name.impact.json" 2>/dev/null || head -c 300 "$WORK/$name.impact.json"
     echo "impact_ms=$((t1-t0))"
     echo "// monoflow plugin probe" >> "$probe"
     t0=$(ms); "$BIN" graph affected > "$WORK/$name.affected.json" 2>&1; t1=$(ms)
     jq -c '{directly_changed, all: (.all_affected|length)}' "$WORK/$name.affected.json" 2>/dev/null || head -c 300 "$WORK/$name.affected.json"
     echo "affected_ms=$((t1-t0))"
     git checkout -q -- "$probe"
-    owner=$(jq -r '.owning_package // empty' "$WORK/$name.impact.json" 2>/dev/null)
+    owner=$(jq -r '.package // empty' "$WORK/$name.impact.json" 2>/dev/null)
     if [ -n "$owner" ]; then
       t0=$(ms); "$BIN" worktree create plugin-probe --packages="$owner" > "$WORK/$name.wt.json" 2>&1; t1=$(ms)
       wt="$dir/.agents/worktrees/plugin-probe"

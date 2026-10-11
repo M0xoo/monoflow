@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -44,7 +43,7 @@ func handlePR(rootDir string) {
 			} else if strings.HasPrefix(arg, "--body-file=") {
 				b, err := os.ReadFile(strings.TrimPrefix(arg, "--body-file="))
 				if err != nil {
-					fmt.Printf("{\"error\": %q}\n", "cannot read --body-file: "+err.Error())
+					printOut(map[string]any{"error": "cannot read --body-file: " + err.Error()})
 					os.Exit(2)
 				}
 				opts.Body = string(b)
@@ -64,7 +63,7 @@ func handlePR(rootDir string) {
 				verbose = true
 			} else if strings.HasPrefix(arg, "-") {
 				// A silently ignored flag (e.g. --body-file before it existed) loses the agent's input.
-				fmt.Printf("{\"error\": %q}\n", "unknown flag for pr create: "+arg+" (see 'monoflow pr create --help')")
+				printOut(map[string]any{"error": "unknown flag for pr create: " + arg + " (see 'monoflow pr create --help')"})
 				os.Exit(2)
 			}
 		}
@@ -73,25 +72,23 @@ func handlePR(rootDir string) {
 		if err != nil {
 			var gateErr *pr.GateError
 			if errors.As(err, &gateErr) {
-				data, _ := json.MarshalIndent(map[string]any{
+				printOut(map[string]any{
 					"status":        "blocked",
 					"error":         err.Error(),
 					"proof_status":  gateErr.ProofStatus,
 					"failed_checks": gateErr.FailedChecks,
 					"audit":         gateErr.Audit,
-				}, "", "  ")
-				fmt.Println(string(data))
+				})
 				os.Exit(1)
 			}
-			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
+			printRaw(fmt.Sprintf(`{"status": "error", "error": %q}`, err.Error()))
 			os.Exit(1)
 		}
 		var out any = res
 		if !verbose {
 			out = compactPR(res)
 		}
-		data, _ := json.MarshalIndent(out, "", "  ")
-		fmt.Println(string(data))
+		printOut(out)
 
 	case "list":
 		opts := pr.ListOptions{
@@ -109,25 +106,23 @@ func handlePR(rootDir string) {
 
 		list, err := mgr.List(opts)
 		if err != nil {
-			fmt.Printf(`{"status": "error", "error": "%s"}`+"\n", err)
+			printRaw(fmt.Sprintf(`{"status": "error", "error": %q}`, err))
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(list, "", "  ")
-		fmt.Println(string(data))
+		printOut(list)
 
 	case "view":
 		if len(os.Args) < 4 {
-			fmt.Println(`{"error": "missing pr-id for monoflow pr view"}`)
+			printRaw(`{"error": "missing pr-id for monoflow pr view"}`)
 			os.Exit(1)
 		}
 		prID := os.Args[3]
 		meta, err := mgr.View(prID)
 		if err != nil {
-			fmt.Printf(`{"status": "error", "error": "%s"}`+"\n", err)
+			printRaw(fmt.Sprintf(`{"status": "error", "error": %q}`, err))
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(meta, "", "  ")
-		fmt.Println(string(data))
+		printOut(meta)
 
 	case "status":
 		prID := ""
@@ -143,7 +138,7 @@ func handlePR(rootDir string) {
 		res, err := mgr.Status(prID)
 		if err != nil {
 			if asJSON {
-				fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
+				printRaw(fmt.Sprintf(`{"status": "error", "error": %q}`, err.Error()))
 			} else {
 				fmt.Printf("❌ Failed to get PR status: %v\n", err)
 			}
@@ -152,20 +147,18 @@ func handlePR(rootDir string) {
 
 		switch {
 		case asJSON:
-			data, _ := json.MarshalIndent(res, "", "  ")
-			fmt.Println(string(data))
+			printOut(res)
 		case hasFlag("--verbose") || stdoutIsTerminal():
 			fmt.Println(res.FormatView())
 		default:
 			// Agents read this through a pipe: the 12 KB dossier view cost them context for a
 			// handful of facts. --verbose (or a terminal) shows the full view.
-			data, _ := json.MarshalIndent(compactPRStatus(res), "", "  ")
-			fmt.Println(string(data))
+			printOut(compactPRStatus(res))
 		}
 
 	case "review":
 		if len(os.Args) < 4 {
-			fmt.Println(`{"error": "missing pr-id for monoflow pr review"}`)
+			printRaw(`{"error": "missing pr-id for monoflow pr review"}`)
 			os.Exit(1)
 		}
 		prID := os.Args[3]
@@ -182,15 +175,14 @@ func handlePR(rootDir string) {
 
 		res, err := mgr.Review(prID, opts)
 		if err != nil {
-			fmt.Printf(`{"status": "error", "error": "%s"}`+"\n", err)
+			printRaw(fmt.Sprintf(`{"status": "error", "error": %q}`, err))
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(res, "", "  ")
-		fmt.Println(string(data))
+		printOut(res)
 
 	case "test":
 		if len(os.Args) < 4 {
-			fmt.Println(`{"error": "missing pr-id for monoflow pr test"}`)
+			printRaw(`{"error": "missing pr-id for monoflow pr test"}`)
 			os.Exit(1)
 		}
 		prID := os.Args[3]
@@ -207,15 +199,14 @@ func handlePR(rootDir string) {
 
 		res, err := mgr.Test(prID, opts)
 		if err != nil {
-			fmt.Printf(`{"status": "error", "error": "%s"}`+"\n", err)
+			printRaw(fmt.Sprintf(`{"status": "error", "error": %q}`, err))
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(res, "", "  ")
-		fmt.Println(string(data))
+		printOut(res)
 
 	case "local":
 		if len(os.Args) < 4 {
-			fmt.Println(`{"error": "usage: monoflow pr local <pr-id> [--worktree=<id>] [--deps=contracts|source|none]"}`)
+			printRaw(`{"error": "usage: monoflow pr local <pr-id> [--worktree=<id>] [--deps=contracts|source|none]"}`)
 			os.Exit(1)
 		}
 		prID := os.Args[3]
@@ -236,15 +227,14 @@ func handlePR(rootDir string) {
 
 		res, err := mgr.Local(prID, opts)
 		if err != nil {
-			fmt.Printf(`{"status": "error", "error": "%s"}`+"\n", err)
+			printRaw(fmt.Sprintf(`{"status": "error", "error": %q}`, err))
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(res, "", "  ")
-		fmt.Println(string(data))
+		printOut(res)
 
 	case "merge":
 		if len(os.Args) < 4 {
-			fmt.Println(`{"error": "missing pr-id for monoflow pr merge"}`)
+			printRaw(`{"error": "missing pr-id for monoflow pr merge"}`)
 			os.Exit(1)
 		}
 		prID := os.Args[3]
@@ -263,22 +253,20 @@ func handlePR(rootDir string) {
 
 		res, err := mgr.Merge(prID, opts)
 		if err != nil {
-			fmt.Printf(`{"status": "error", "error": "%s"}`+"\n", err)
+			printRaw(fmt.Sprintf(`{"status": "error", "error": %q}`, err))
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(res, "", "  ")
-		fmt.Println(string(data))
+		printOut(res)
 
 	default:
 		// Fallback for previous monoflow pr test <id> syntax where id was directly second arg
 		opts := pr.TestOptions{BaseBranch: "main"}
 		res, err := mgr.Test(sub, opts)
 		if err != nil {
-			fmt.Printf(`{"error": "unknown pr subcommand '%s'; usage: monoflow pr [create|list|view|status|review|test|local|merge]"}`+"\n", sub)
+			printRaw(fmt.Sprintf(`{"error": "unknown pr subcommand '%s'; usage: monoflow pr [create|list|view|status|review|test|local|merge]"}`, sub))
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(res, "", "  ")
-		fmt.Println(string(data))
+		printOut(res)
 	}
 }
 

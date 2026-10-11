@@ -48,6 +48,11 @@ func TestPreexistingFailuresDoNotBlockButNewOnesDo(t *testing.T) {
 	if res.Status != "passed" || len(res.Results[0].Preexisting) == 0 {
 		t.Fatalf("pre-existing failure should be reported, not block: %+v", res.Results[0])
 	}
+	// Unchanged content, same baseline: not re-run (re-running them cost minutes per verify on trpc).
+	res = r.VerifyAffected(g, []string{"pkg/feature.txt"}, VerifyOptions{BaseRef: "main"})
+	if res.Status != "passed" || !res.Results[0].Cached || len(res.Results[0].Preexisting) == 0 {
+		t.Fatalf("preexisting-only result should come from the cache: %+v", res.Results[0])
+	}
 
 	write("pkg/feature.txt", "BAD new\n")
 	res = r.VerifyAffected(g, []string{"pkg/feature.txt"}, VerifyOptions{BaseRef: "main", NoCache: true})

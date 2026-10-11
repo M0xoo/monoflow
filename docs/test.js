@@ -33,7 +33,7 @@ for (const id of ['provides', 'loop', 'install', 'commands']) {
   if (!html.includes(`id="${id}"`)) fail(`index.html missing #${id} section`);
 }
 
-const features = (html.match(/class="feature"/g) || []).length;
+const features = (html.match(/class="feature[ "]/g) || []).length;
 if (features !== 6) fail(`expected 6 capability cards, found ${features}`);
 
 // Every command family the CLI exposes should appear in the reference table.

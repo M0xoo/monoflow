@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -32,23 +31,31 @@ func handleCommit(rootDir string) {
 
 	res, err := guard.FastAgentCommit(rootDir, msg)
 	if err != nil {
-		data, _ := json.MarshalIndent(res, "", "  ")
-		fmt.Println(string(data))
+		printOut(res)
 		os.Exit(1)
 	}
 
 	out := map[string]any{"commit": res}
 	// The outer loop (local CI on the exact commit) starts now, so it is usually green by
 	// the time the agent pushes; push only happens once it is.
+	outerJob := ""
 	if !noOuter && res.CommitSHA != "" {
 		om := verify.NewOuterLoopManager(rootDir)
 		if job, err := om.StartJob(verify.OuterLoopOptions{CommitSHA: res.CommitSHA, Async: true, IncludeE2E: true}); err == nil {
+			outerJob = job.ID
 			out["outer_loop"] = map[string]any{"job": job.ID, "status": "running",
 				"note": "local CI on this exact commit. Next: 'monoflow ship' (waits for it, pushes, opens the PR), or more edits + commit"}
 		}
 	}
-	data, _ := json.MarshalIndent(out, "", "  ")
-	fmt.Println(string(data))
+	if !jsonMode() { // the agent wrote the message: do not echo it back
+		fmt.Printf("committed %s\n", res.CommitSHA[:min(10, len(res.CommitSHA))])
+		if outerJob != "" {
+			fmt.Println("local CI: running on this commit")
+		}
+		fmt.Println("next: monoflow ship (pushes and opens the PR once local CI is green), or more edits + commit")
+		return
+	}
+	printOut(out)
 }
 
 func handlePush(rootDir string) {
@@ -57,12 +64,11 @@ func handlePush(rootDir string) {
 	secretViolations, _ := guard.ScanSecrets(rootDir)
 	allViolations := append(testViolations, secretViolations...)
 	if len(allViolations) > 0 {
-		data, _ := json.MarshalIndent(map[string]any{
+		printOut(map[string]any{
 			"status":     "blocked",
 			"violations": allViolations,
 			"verdict":    "Pre-push integrity check failed. Cannot push weakened tests or credentials to remote.",
-		}, "", "  ")
-		fmt.Println(string(data))
+		})
 		os.Exit(1)
 	}
 
@@ -108,11 +114,10 @@ func handlePush(rootDir string) {
 
 	// 1c. Protected Branch Shield: Block unverified direct pushes to main/master
 	if (branch == "main" || branch == "master") && !forceDirect {
-		data, _ := json.MarshalIndent(map[string]any{
+		printOut(map[string]any{
 			"status":  "blocked",
 			"verdict": fmt.Sprintf("Direct push to protected branch '%s' blocked. MonoFlow requires proposing changes via Pull Request to guarantee zero remote CI breakage. Use 'monoflow pr create' instead (or pass --force to bypass).", branch),
-		}, "", "  ")
-		fmt.Println(string(data))
+		})
 		os.Exit(1)
 	}
 
@@ -127,9 +132,8 @@ func handlePush(rootDir string) {
 	// dependents + the repo's ci_cmd, in a clean checkout) before it is pushed.
 	if !skipVerify {
 		if dirty := uncommittedFiles(rootDir); len(dirty) > 0 && !onlyNonCode(dirty) {
-			data, _ := json.MarshalIndent(map[string]any{"status": "blocked",
-				"verdict": "Uncommitted changes: commit them with 'monoflow commit' (which starts the outer loop) before pushing."}, "", "  ")
-			fmt.Println(string(data))
+			printOut(map[string]any{"status": "blocked",
+				"verdict": "Uncommitted changes: commit them with 'monoflow commit' (which starts the outer loop) before pushing."})
 			os.Exit(1)
 		}
 		om := verify.NewOuterLoopManager(rootDir)
@@ -144,12 +148,11 @@ func handlePush(rootDir string) {
 			printQueued(job, headSHA, branch)
 			return
 		case job.Status == verify.JobRegressed || job.Status == verify.JobRolledBack:
-			data, _ := json.MarshalIndent(map[string]any{
+			printOut(map[string]any{
 				"status":     "blocked",
 				"verdict":    "Outer loop is red for this commit: remote CI would fail. Fix, 'monoflow commit', then push again.",
 				"outer_loop": map[string]any{"job": job.ID, "failures": compactSummary(job.ErrorSummary)},
-			}, "", "  ")
-			fmt.Println(string(data))
+			})
 			os.Exit(1)
 		}
 		// passed / promoted: push below
@@ -177,7 +180,7 @@ func handlePush(rootDir string) {
 	durMs := float64(time.Since(start).Microseconds()) / 1000.0
 
 	if err != nil {
-		fmt.Printf(`{"status": "push_failed", "error": "%s", "output": "%s"}`+"\n", err, strings.TrimSpace(string(out)))
+		printRaw(fmt.Sprintf(`{"status": "push_failed", "error": %q, "output": %q}`, err, strings.TrimSpace(string(out))))
 		os.Exit(1)
 	}
 
@@ -211,8 +214,7 @@ func handlePush(rootDir string) {
 		}
 	}
 
-	data, _ := json.MarshalIndent(res, "", "  ")
-	fmt.Println(string(data))
+	printOut(res)
 }
 
 func handleSync(rootDir string) {
@@ -278,7 +280,7 @@ func handleSync(rootDir string) {
 	cmdFetch := exec.Command("git", fetchArgs...)
 	cmdFetch.Dir = rootDir
 	if out, err := cmdFetch.CombinedOutput(); err != nil {
-		fmt.Printf(`{"status": "sync_failed", "step": "fetch", "error": %q, "output": %q}`+"\n", err.Error(), strings.TrimSpace(string(out)))
+		printRaw(fmt.Sprintf(`{"status": "sync_failed", "step": "fetch", "error": %q, "output": %q}`, err.Error(), strings.TrimSpace(string(out))))
 		os.Exit(1)
 	}
 
@@ -313,8 +315,7 @@ func handleSync(rootDir string) {
 			// Conflicts are resolved once, in place: the markers stay for the agent.
 			res["status"] = "conflicts"
 			res["hint"] = "Resolve the <<<<<<< markers in conflicting_files (keep both sides' intent), run 'monoflow verify --affected', then 'monoflow commit -m \"merge " + branch + "\"' to finish the merge."
-			data, _ := json.MarshalIndent(res, "", "  ")
-			fmt.Println(string(data))
+			printOut(res)
 			os.Exit(1)
 		}
 		if rebase {
@@ -324,8 +325,7 @@ func handleSync(rootDir string) {
 		} else {
 			res["hint"] = "Branches have diverged; run 'monoflow sync' from your agent branch (rebases onto the base) or pass --rebase."
 		}
-		data, _ := json.MarshalIndent(res, "", "  ")
-		fmt.Println(string(data))
+		printOut(res)
 		os.Exit(1)
 	}
 
@@ -356,8 +356,7 @@ func handleSync(rootDir string) {
 		"message":       "Workspace successfully synchronized with remote without raw git commands.",
 	}
 
-	data, _ := json.MarshalIndent(res, "", "  ")
-	fmt.Println(string(data))
+	printOut(res)
 }
 
 func currentBranch(rootDir string) string {
@@ -392,12 +391,11 @@ func refuseSharedRoot(rootDir, action string) {
 	if len(ids) == 0 {
 		return
 	}
-	data, _ := json.MarshalIndent(map[string]any{
+	printOut(map[string]any{
 		"status": "refused",
 		"error":  fmt.Sprintf("'%s' edits files, and this is the shared repository root used by agent worktrees (%s)", action, strings.Join(ids, ", ")),
 		"hint":   "run it inside your worktree (.agents/worktrees/<agent-id>), or pass --allow-root if you really mean the root",
-	}, "", "  ")
-	fmt.Println(string(data))
+	})
 	os.Exit(1)
 }
 
@@ -406,7 +404,7 @@ func printQueued(job *verify.OuterJob, sha, branch string) {
 	if job != nil {
 		id = job.ID
 	}
-	data, _ := json.MarshalIndent(map[string]any{
+	res := map[string]any{
 		"status":          "queued_until_outer_green",
 		"branch":          branch,
 		"head_sha":        sha,
@@ -414,8 +412,12 @@ func printQueued(job *verify.OuterJob, sha, branch string) {
 		"verdict":         "The outer loop (local CI on this commit) is still running; it pushes automatically when green and then watches remote CI. Nothing is pushed if it fails.",
 		"ci_wait_command": "./bin/monoflow events wait " + sha,
 		"agent_directive": ciWaitDirective(sha),
-	}, "", "  ")
-	fmt.Println(string(data))
+	}
+	if !jsonMode() {
+		fmt.Printf("queued: pushes %s once local CI on %s is green (nothing is pushed if it fails)\nnext: end your turn; the result is delivered to you\n", branch, sha[:min(10, len(sha))])
+		return
+	}
+	printOut(res)
 }
 
 func onlyNonCode(files []string) bool {

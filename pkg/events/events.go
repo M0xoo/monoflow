@@ -31,6 +31,9 @@ const (
 	EventCISkipped          EventType = "CI_SKIPPED"
 	EventOuterPassed        EventType = "OUTER_LOOP_PASSED"
 	EventDependencyReleased EventType = "DEPENDENCY_RELEASED"
+	// EventShipFailed: a background `monoflow ship` could not push / open the PR (red outer
+	// loop, blocked PR gate, push error).
+	EventShipFailed EventType = "SHIP_FAILED"
 )
 
 // Event represents a machine-readable asynchronous event dispatched to agents.

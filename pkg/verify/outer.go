@@ -774,7 +774,7 @@ func (om *OuterLoopManager) checkoutCommit(job *OuterJob) (string, func(), error
 	// JS workspaces need every package's node_modules, with workspace packages resolving to
 	// this checkout (not the root's code): linking only the root node_modules left pnpm
 	// packages unable to resolve their dependencies.
-	graph.OverlayNodeModules(om.RootDir, dir)
+	graph.PrepareNodeModules(om.RootDir, dir)
 	return dir, cleanup, nil
 }
 

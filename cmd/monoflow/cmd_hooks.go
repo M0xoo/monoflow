@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/antigravity/monoflow/pkg/agenthooks"
@@ -39,7 +40,7 @@ func handleHook() {
 			os.Exit(2)
 		}
 	default:
-		fmt.Println(`{"error": "usage: monoflow hook pretooluse | check"}`)
+		printRaw(`{"error": "usage: monoflow hook pretooluse | check | deliver | stop"}`)
 		os.Exit(1)
 	}
 }
@@ -74,6 +75,7 @@ func hookFlag(name string) string {
 // other harnesses: --format=text prints plain text (nothing when there is nothing new).
 func hookDeliver(root string) {
 	_ = readHookStdin() // hook payload is not needed
+	maybeVerifyInBackground(root)
 	branch := currentBranch(root)
 	em := events.NewEventManager(root)
 	pending := em.Pending(branch, branch, projectedPackages(root))
@@ -141,8 +143,20 @@ func hookStop(root string) {
 	fmt.Println(string(out))
 }
 
-// inFlight reports outer-loop jobs or CI watches still running for branch.
+// inFlight reports outer-loop jobs, background ships or CI watches still running for branch.
 func inFlight(root, branch string) bool {
+	// A background `monoflow ship` (push + PR once the outer loop is green) can still fail
+	// after the outer loop finished: wait for it too, so its SHIP_FAILED event is delivered.
+	if markers, _ := filepath.Glob(filepath.Join(root, ".agents", "ship", "*.inflight")); len(markers) > 0 {
+		for _, m := range markers {
+			fi, err := os.Stat(m)
+			if err != nil || time.Since(fi.ModTime()) > 30*time.Minute || !shipProcessAlive(m) {
+				_ = os.Remove(m) // stale: its process is gone (killed with its agent session)
+				continue
+			}
+			return true
+		}
+	}
 	if jobs, err := verify.NewOuterLoopManager(root).ListJobs(); err == nil {
 		for _, j := range jobs {
 			if j.Branch == branch && (j.Status == verify.JobQueued || j.Status == verify.JobRunning) {
@@ -193,4 +207,19 @@ func readHookStdin() []byte {
 	case <-time.After(300 * time.Millisecond):
 		return nil
 	}
+}
+
+// shipProcessAlive reports whether the ship process named by a "<pid>.inflight" marker runs.
+func shipProcessAlive(marker string) bool {
+	pid, err := strconv.Atoi(strings.TrimSuffix(filepath.Base(marker), ".inflight"))
+	if err != nil {
+		return false
+	}
+	return processAlive(pid)
+}
+
+// processAlive reports whether pid is a running process.
+func processAlive(pid int) bool {
+	p, err := os.FindProcess(pid)
+	return err == nil && p.Signal(syscall.Signal(0)) == nil
 }

@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/antigravity/monoflow/pkg/graph"
@@ -78,6 +79,20 @@ type Manager struct {
 	artifactDir string
 	httpClient  *http.Client
 	stats       Stats
+	// sourceKeys memoises upstream source keys during one verify run (BeginRun..EndRun): every
+	// dependent of a package re-hashed it (opentelemetry-go: the root module, thousands of
+	// files, once per each of 27 dependents, ~2 s per cached target).
+	sourceKeys sync.Map
+	memoOn     atomic.Bool
+}
+
+// BeginRun enables upstream-key memoisation until EndRun (sources do not change mid-run).
+func (m *Manager) BeginRun() { m.memoOn.Store(true) }
+
+// EndRun disables memoisation and forgets the memoised keys.
+func (m *Manager) EndRun() {
+	m.memoOn.Store(false)
+	m.sourceKeys.Range(func(k, _ any) bool { m.sourceKeys.Delete(k); return true })
 }
 
 // DefaultConfig loads cache settings from environment and config.
@@ -216,7 +231,14 @@ func (m *Manager) UpstreamKeys(g *graph.DependencyGraph, pkg *graph.PackageNode)
 		}
 		visited[name] = true
 		if dep, ok := g.GetPackage(name); ok {
-			keys[name], _ = m.ComputePackageKey(dep, nil, "", "source")
+			if k, ok := m.sourceKeys.Load(name); ok && m.memoOn.Load() {
+				keys[name] = k.(string)
+			} else {
+				keys[name], _ = m.ComputePackageKey(dep, nil, "", "source")
+				if m.memoOn.Load() {
+					m.sourceKeys.Store(name, keys[name])
+				}
+			}
 		}
 		queue = append(queue, g.GetUpstream(name)...)
 	}

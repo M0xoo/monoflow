@@ -25,7 +25,7 @@ func handleEvents(rootDir string) {
 	case "unread":
 		list, err := em.List(true)
 		if err != nil {
-			fmt.Printf(`{"error": "%s"}`+"\n", err)
+			printRaw(fmt.Sprintf(`{"error": %q}`, err))
 			os.Exit(1)
 		}
 		showAll := false
@@ -67,41 +67,39 @@ func handleEvents(rootDir string) {
 		if !hasFlag("--verbose") {
 			shown = compactEvents(list)
 		}
-		data, _ := json.MarshalIndent(map[string]any{
+		printOut(map[string]any{
 			"scope":                scope,
 			"unread_count":         len(list),
 			"other_branches_count": others,
 			"events":               shown,
-		}, "", "  ")
-		fmt.Println(string(data))
+		})
 
 	case "list", "all":
 		list, err := em.List(false)
 		if err != nil {
-			fmt.Printf(`{"error": "%s"}`+"\n", err)
+			printRaw(fmt.Sprintf(`{"error": %q}`, err))
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(map[string]any{
+		printOut(map[string]any{
 			"total_count": len(list),
 			"events":      list,
-		}, "", "  ")
-		fmt.Println(string(data))
+		})
 
 	case "ack":
 		if len(os.Args) < 4 {
-			fmt.Println(`{"error": "missing event-id for ack"}`)
+			printRaw(`{"error": "missing event-id for ack"}`)
 			os.Exit(1)
 		}
 		evtID := os.Args[3]
 		if err := em.Ack(evtID); err != nil {
-			fmt.Printf(`{"error": "%s"}`+"\n", err)
+			printRaw(fmt.Sprintf(`{"error": %q}`, err))
 			os.Exit(1)
 		}
-		fmt.Printf(`{"status": "acknowledged", "event_id": "%s"}`+"\n", evtID)
+		printRaw(fmt.Sprintf(`{"status": "acknowledged", "event_id": %q}`, evtID))
 
 	case "clear":
 		_ = em.ClearAll()
-		fmt.Println(`{"status": "cleared"}`)
+		printRaw(`{"status": "cleared"}`)
 
 	case "wait":
 		handleEventsWait(rootDir, em)
@@ -145,17 +143,16 @@ func handleEvents(rootDir string) {
 			})
 		}
 		if err != nil {
-			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
+			printRaw(fmt.Sprintf(`{"status": "error", "error": %q}`, err.Error()))
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(job, "", "  ")
-		fmt.Println(string(data))
+		printOut(job)
 		if job.Status == events.WatchStatusCompletedFailed || job.Status == events.WatchStatusTimedOut {
 			os.Exit(1)
 		}
 
 	default:
-		fmt.Printf(`{"error": "unknown events subcommand: %s (use unread | list | watch <sha> | ack <id> | clear)"}`+"\n", sub)
+		printRaw(fmt.Sprintf(`{"error": "unknown events subcommand: %s (use unread | list | watch <sha> | ack <id> | clear)"}`, sub))
 		os.Exit(1)
 	}
 }
@@ -204,7 +201,7 @@ func handleEventsWait(rootDir string, em *events.EventManager) {
 		sha = strings.TrimSpace(string(out))
 	}
 	if len(sha) < 7 {
-		fmt.Println(`{"error": "usage: monoflow events wait [<commit-sha>] [--timeout=<minutes>]"}`)
+		printRaw(`{"error": "usage: monoflow events wait [<commit-sha>] [--timeout=<minutes>]"}`)
 		os.Exit(2)
 	}
 	// Make sure something is watching this commit (idempotent: reuses an active watcher).
@@ -223,8 +220,7 @@ func handleEventsWait(rootDir string, em *events.EventManager) {
 				continue
 			}
 			_ = em.Ack(e.ID)
-			data, _ := json.MarshalIndent(e, "", "  ")
-			fmt.Println(string(data))
+			printOut(e)
 			if e.Type == events.EventCIFailed || e.Type == events.EventOuterRegression {
 				os.Exit(1)
 			}
@@ -232,7 +228,7 @@ func handleEventsWait(rootDir string, em *events.EventManager) {
 		}
 		time.Sleep(3 * time.Second)
 	}
-	fmt.Printf(`{"status": "timeout", "commit": %q, "hint": "no CI result after %d minutes; check 'monoflow events list' and 'monoflow ci health'"}`+"\n", sha, timeoutMin)
+	printRaw(fmt.Sprintf(`{"status": "timeout", "commit": %q, "hint": "no CI result after %d minutes; check 'monoflow events list' and 'monoflow ci health'"}`, sha, timeoutMin))
 	os.Exit(2)
 }
 

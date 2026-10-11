@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -38,6 +37,8 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 			verifyAll = true
 		} else if arg == "--no-cache" || arg == "--force" {
 			opts.NoCache = true
+		} else if arg == "--update-snapshots" || arg == "-u" {
+			opts.UpdateSnapshots = true
 		} else if arg == "--test" {
 			opts.Mode = "test"
 		} else if arg == "--typecheck" {
@@ -56,9 +57,25 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 		}
 	}
 
+	recording := os.Getenv("MONOFLOW_RECORD_KEY") != ""
+	opts.KeepUntracked = recording
+	// Plain verify: the background run started at the agent's last edit may already have the
+	// answer for exactly this state of the tree (see speculate.go).
+	plain := len(os.Args) == 2 || (len(os.Args) == 3 && os.Args[2] == "--affected")
+	if !recording && plain && !jsonMode() {
+		if out, ok := speculatedResult(rootDir, 15*time.Minute); ok {
+			fmt.Print(out)
+			if !strings.HasPrefix(out, "PASS") {
+				os.Exit(1)
+			}
+			return
+		}
+		stopOtherSpecRuns(rootDir, "") // obsolete; they would compete for the CPU
+	}
+
 	g, err := graph.LoadOrDiscover(rootDir)
 	if err != nil {
-		fmt.Printf(`{"status": "failed", "error": "%s"}`+"\n", err)
+		printRaw(fmt.Sprintf(`{"status": "failed", "error": %q}`, err))
 		os.Exit(1)
 	}
 
@@ -71,15 +88,17 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 	if targetPkg != "" {
 		pkg, exists := resolvePackageArg(g, rootDir, targetPkg)
 		if !exists {
-			fmt.Printf(`{"status": "failed", "error": "package '%s' not found (use a name from 'monoflow graph list' or a path inside one)"}`+"\n", targetPkg)
+			printRaw(fmt.Sprintf(`{"status": "failed", "error": "package '%s' not found (use a name from 'monoflow graph list' or a path inside one)"}`, targetPkg))
 			os.Exit(1)
 		}
+		opts.ChangedFiles, opts.AllPackages = getGitChangedFiles(rootDir), true
 		res = runner.VerifyPackages(g, []string{pkg.Name}, opts)
 	} else if verifyAll {
 		var names []string
 		for _, p := range g.GetAllPackages() {
 			names = append(names, p.Name)
 		}
+		opts.ChangedFiles, opts.AllPackages = getGitChangedFiles(rootDir), true
 		res = runner.VerifyPackages(g, names, opts)
 	} else {
 		changedFiles := getGitChangedFiles(rootDir)
@@ -110,18 +129,55 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 		c := compactSuite(res, rootDir, g)
 		// Say what was covered and what to do next: agents that were not told re-ran
 		// verify --all and raw go test / npm test "to be sure" (benchmark: +6 calls a run).
-		if targetPkg == "" && !verifyAll && res.TotalTargets > 0 {
-			c["scope"] = fmt.Sprintf("%d packages: every changed package and every package depending on them, repo-wide (what CI runs for this change)", res.TotalTargets)
-			if res.Status == "passed" {
-				c["next"] = `nothing else to run: monoflow ship -m "<commit message>"`
+		if verifyAll && len(opts.ChangedFiles) > 0 {
+			c["note"] = "plain 'monoflow verify' already checks every package your change can affect; --all re-tests the rest too (not needed to ship)"
+		}
+		if targetPkg == "" && !verifyAll && len(res.Pending) > 0 {
+			c["scope"] = fmt.Sprintf("%d changed packages checked first; %d dependents run once they pass", res.TotalTargets, len(res.Pending))
+			c["next"] = "fix the errors listed (file:line), then monoflow verify"
+		} else if targetPkg == "" && !verifyAll && res.TotalTargets > 0 {
+			// Name the packages left out and why: an agent told "every module must pass" saw
+			// "27 packages" in a 29-module repo and re-tested all 29 itself.
+			total := len(g.GetAllPackages())
+			if res.Excluded > 0 {
+				c["excluded"] = fmt.Sprintf("%d dependent packages under %s skipped (verify_exclude in .agents/monoflow.config.json)", res.Excluded, strings.Join(g.VerifyExclude, ", "))
+			}
+			if others := total - res.TotalTargets - res.Excluded; others > 0 {
+				c["scope"] = fmt.Sprintf("%d of %d packages: the changed ones and all their dependents (what CI runs for this change); the other %d cannot be affected", res.TotalTargets, total, others)
+				if others <= 5 { // name them, so nobody goes looking (or re-tests them "to be sure")
+					in := map[string]bool{}
+					for _, n := range res.AffectedPackages {
+						in[n] = true
+					}
+					var out []string
+					for _, p := range g.GetAllPackages() {
+						if !in[p.Name] {
+							out = append(out, p.Path)
+						}
+					}
+					c["not_affected"] = out
+				}
 			} else {
-				c["next"] = "fix errors[] (file:line), then monoflow verify again"
+				c["scope"] = fmt.Sprintf("all %d packages (every package depends on your change)", total)
+			}
+			if res.Status == "passed" {
+				c["next"] = `nothing else to run: monoflow ship -m "<msg>"`
+			} else {
+				c["next"] = "fix the errors listed (file:line), then monoflow verify"
 			}
 		}
 		out = c
 	}
-	data, _ := json.MarshalIndent(out, "", "  ")
-	fmt.Println(string(data))
+	if !verboseOut && !jsonMode() {
+		rootDirForText = rootDir
+		fmt.Print(verifyText(res, out.(map[string]any)))
+	} else {
+		printOut(out)
+	}
+	if recording {
+		finishRecord(rootDir)
+		return
+	}
 
 	cb := guard.NewCircuitBreaker(rootDir, 5)
 	targetKey := strings.Join(res.AffectedPackages, ",")
@@ -129,14 +185,13 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 	if res.Status == "failed" {
 		st, tripped, _ := cb.RecordFailure(rootDir, "active_task", targetKey)
 		if tripped {
-			circuitMsg, _ := json.MarshalIndent(map[string]any{
+			printOut(map[string]any{
 				"circuit_breaker": "TRIPPED",
 				"attempts":        st.Attempts,
 				"snapshot":        st.SnapshotID,
 				"advice":          "Same targets failed repeatedly. Step back: re-read the first error, check 'monoflow graph impact <file>', or 'monoflow checkpoint list' / 'checkpoint revert <id>' to restart from a known state. Your current work is saved as the snapshot above and was NOT reverted.",
 				"reason":          fmt.Sprintf("Target '%s' failed %d consecutive times without passing", targetKey, st.Attempts),
-			}, "", "  ")
-			fmt.Println(string(circuitMsg))
+			})
 		}
 		os.Exit(1)
 	} else {
@@ -148,7 +203,7 @@ func handleProofVerification(rootDir, taskID string) {
 	start := time.Now()
 	receipt, err := proof.LoadReceipt(rootDir, taskID)
 	if err != nil {
-		fmt.Printf(`{"status": "failed", "error": "%s"}`+"\n", err)
+		printRaw(fmt.Sprintf(`{"status": "failed", "error": %q}`, err))
 		os.Exit(1)
 	}
 
@@ -163,8 +218,7 @@ func handleProofVerification(rootDir, taskID string) {
 		"deliverable_sha":    receipt.DeliverableSHA,
 		"confidence_verdict": "APPROVED (1-Second Instant Verification Passed)",
 	}
-	data, _ := json.MarshalIndent(out, "", "  ")
-	fmt.Println(string(data))
+	printOut(out)
 }
 
 func getGitChangedFiles(rootDir string) []string {
@@ -303,12 +357,18 @@ func changedFilesSince(rootDir, base string) []string {
 // with the targets it breaks), and which targets failed. Cache keys, command lines and passed
 // targets are --verbose only. On an opentelemetry-go rename that broke 22 modules this is
 // ~4 KB instead of 25 KB of the same compiler error repeated per module.
-func compactSuite(res verify.SuiteResult, rootDir string, g *graph.DependencyGraph) map[string]any {
+// dedupedSuite returns res with errors merged across targets (repo-relative, capped at 30).
+func dedupedSuite(res verify.SuiteResult, rootDir string, g *graph.DependencyGraph) verify.SuiteResult {
 	pathOf := map[string]string{}
 	for _, p := range g.GetAllPackages() {
 		pathOf[p.Name] = p.Path
 	}
 	verify.DedupeErrors(&res, rootDir, pathOf, 30)
+	return res
+}
+
+func compactSuite(res verify.SuiteResult, rootDir string, g *graph.DependencyGraph) map[string]any {
+	res = dedupedSuite(res, rootDir, g)
 	out := map[string]any{
 		"status":         res.Status,
 		"duration_ms":    res.DurationMs,
@@ -338,17 +398,25 @@ func compactSuite(res verify.SuiteResult, rootDir string, g *graph.DependencyGra
 	if len(failed) > 0 {
 		out["failed"] = failed // target -> error count
 	}
-	if len(preexisting) > 0 && len(preexisting) <= 10 {
-		out["preexisting"] = preexisting // target -> failures main also has (not blocking)
-	} else if len(preexisting) > 10 {
+	if len(preexisting) > 0 {
 		total := 0
 		for _, n := range preexisting {
 			total += n
 		}
-		out["preexisting"] = map[string]int{"targets": len(preexisting), "failures": total} // not blocking; --verbose lists them
+		// Spelled out: a bare {"pkg": 1} read as an unexplained failure and sent agents re-testing.
+		out["preexisting"] = fmt.Sprintf("%d failure(s) in %d package(s) that main already has: not caused by your change, not blocking (--verbose lists them)", total, len(preexisting))
 	}
 	if len(quarantined) > 0 {
 		out["quarantined"] = quarantined
+	}
+	var flaky []string
+	for _, r := range res.Results {
+		if r.Flaky {
+			flaky = append(flaky, r.Target)
+		}
+	}
+	if len(flaky) > 0 {
+		out["flaky"] = flaky // failed under load, passed re-run alone (not blocking)
 	}
 	if len(res.Errors) > 0 {
 		out["errors"] = res.Errors

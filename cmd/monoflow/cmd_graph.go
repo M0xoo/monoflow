@@ -1,17 +1,19 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/antigravity/monoflow/pkg/graph"
+	"github.com/antigravity/monoflow/pkg/verify"
 )
 
 func handleGraph(rootDir string) {
 	g, err := graph.LoadOrDiscover(rootDir)
 	if err != nil {
-		fmt.Printf(`{"error": "%s"}`+"\n", err)
+		printRaw(fmt.Sprintf(`{"error": %q}`, err))
 		os.Exit(1)
 	}
 
@@ -41,11 +43,10 @@ func handleGraph(rootDir string) {
 				TypecheckCmd: p.TypecheckCmd,
 			}
 		}
-		data, _ := json.MarshalIndent(map[string]any{
+		printOut(map[string]any{
 			"package_count": len(nodes),
 			"packages":      nodes,
-		}, "", "  ")
-		fmt.Println(string(data))
+		})
 		return
 	}
 
@@ -53,53 +54,82 @@ func handleGraph(rootDir string) {
 	switch sub {
 	case "query":
 		if len(os.Args) < 4 {
-			fmt.Println(`{"error": "missing package name for query"}`)
+			printRaw(`{"error": "missing package name for query"}`)
 			os.Exit(1)
 		}
 		pkgName := os.Args[3]
 		pkg, exists := resolvePackageArg(g, rootDir, pkgName)
 		if !exists {
-			fmt.Printf(`{"error": "package '%s' not found (use a name from 'monoflow graph' or a path inside a package)"}`+"\n", pkgName)
+			printRaw(fmt.Sprintf(`{"error": "package '%s' not found (use a name from 'monoflow graph' or a path inside a package)"}`, pkgName))
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(map[string]any{
-			"package":               pkg.Name,
-			"path":                  pkg.Path,
-			"language":              pkg.Language,
-			"upstream_dependencies": g.GetUpstream(pkg.Name),
-			"pinned_dependencies":   pkg.PinnedDependencies,
-			"downstream_dependents": g.GetDownstream(pkg.Name),
-			"transitive_dependents": g.GetTransitiveDownstream(pkg.Name),
-			"pinned_dependents":     pinnedDependents(g, pkg.Name),
-		}, "", "  ")
-		fmt.Println(string(data))
+		out := map[string]any{
+			"package":           pkg.Name,
+			"path":              pkg.Path,
+			"depends_on":        g.GetUpstream(pkg.Name),
+			"dependents":        len(g.GetTransitiveDownstream(pkg.Name)),
+			"direct_dependents": g.GetDownstream(pkg.Name),
+		}
+		if len(pkg.PinnedDependencies) > 0 {
+			out["pinned_dependencies"] = pkg.PinnedDependencies
+		}
+		if pinned := pinnedDependents(g, pkg.Name); len(pinned) > 0 {
+			out["pinned_dependents"] = pinned
+		}
+		// For a Go package directory: who imports it, package by package, across all modules
+		// (what agents otherwise grep the whole repo for).
+		if pkg.Language == graph.LangGo {
+			dir := strings.TrimPrefix(filepath.ToSlash(filepath.Clean(pkgName)), "./")
+			if fi, err := os.Stat(filepath.Join(rootDir, dir)); err != nil || !fi.IsDir() {
+				dir = pkg.Path
+			}
+			if imp, byModule, ok := verify.GoImporters(rootDir, g, dir); ok {
+				n := 0
+				for _, v := range byModule {
+					n += len(v)
+				}
+				out["go_package"] = imp
+				out["imported_by"] = byModule // module dir -> packages importing it (code or tests)
+				out["imported_by_count"] = n
+				delete(out, "direct_dependents")
+			}
+		}
+		printOut(out)
 
 	case "impact":
 		if len(os.Args) < 4 {
-			fmt.Println(`{"error": "missing file path for impact analysis"}`)
+			printRaw(`{"error": "missing file path for impact analysis"}`)
 			os.Exit(1)
 		}
 		filePath := os.Args[3]
 		pkg := g.MapFileToPackage(filePath)
 		if pkg == nil {
-			fmt.Printf(`{"file": "%s", "impact": "none (untracked/root file)"}`+"\n", filePath)
+			printRaw(fmt.Sprintf(`{"file": %q, "impact": "none (untracked/root file)"}`, filePath))
 			return
 		}
-		data, _ := json.MarshalIndent(map[string]any{
-			"modified_file":         filePath,
-			"owning_package":        pkg.Name,
-			"direct_dependents":     g.GetDownstream(pkg.Name),
-			"transitive_dependents": g.GetTransitiveDownstream(pkg.Name),
-			"pinned_dependents":     pinnedDependents(g, pkg.Name),
-			"note":                  "pinned dependents build against a release of this package: unaffected now, notified on its next release",
-		}, "", "  ")
-		fmt.Println(string(data))
+		// Compact for agents: one dependents list (direct ones are a subset of it).
+		deps := g.GetTransitiveDownstream(pkg.Name)
+		out := map[string]any{
+			"package":       pkg.Name,
+			"dependents":    len(deps),
+			"direct":        len(g.GetDownstream(pkg.Name)),
+			"verify_covers": "monoflow verify tests this package and all of these",
+		}
+		if len(deps) > 30 {
+			out["dependents_first_30"] = deps[:30]
+		} else if len(deps) > 0 {
+			out["dependent_packages"] = deps
+		}
+		if pinned := pinnedDependents(g, pkg.Name); len(pinned) > 0 {
+			out["pinned_dependents"] = pinned
+			out["pinned_note"] = "they build against a release of this package: unaffected now, notified on its next release"
+		}
+		printOut(out)
 
 	case "affected":
 		changedFiles := getGitChangedFiles(rootDir)
 		affected := g.ComputeAffected(changedFiles)
-		data, _ := json.MarshalIndent(affected, "", "  ")
-		fmt.Println(string(data))
+		printOut(affected)
 	}
 }
 

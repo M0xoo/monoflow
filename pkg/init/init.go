@@ -70,8 +70,9 @@ func InitRepo(targetDir string, binarySrcPath string) (*InitResult, error) {
 
 	// 4. Write .agents/monoflow.config.json
 	cfg := graph.Config{
-		Version:  "1.0",
-		Packages: pkgNodes,
+		Version:       "1.0",
+		Packages:      pkgNodes,
+		VerifyExclude: graph.DefaultVerifyExclude(pkgNodes),
 	}
 	cfgData, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
@@ -134,6 +135,10 @@ func InitRepo(targetDir string, binarySrcPath string) (*InitResult, error) {
 	} else {
 		_ = os.WriteFile(gitignorePath, []byte(ignoreBlock), 0644)
 	}
+
+	// 9a. ./bin/monoflow is the path the agent guide, the git shim and every hint use; the binary
+	// itself lives in .agents/bin. Without the link those all failed in a real install.
+	linkRootBinary(absTarget)
 
 	// 9b. Agent harness hooks: redirect raw build/test/git commands to MonoFlow.
 	_ = InstallAgentHooks(absTarget)
@@ -324,12 +329,51 @@ func mergeSection(path, content string, create bool) error {
 			if end < len(s) && s[end] == '\n' {
 				end++
 			}
-			return os.WriteFile(path, []byte(s[:i]+block+s[end:]), 0644)
+			s = strings.TrimLeft(s[:i]+s[end:], "\n")
 		}
-	}
-	// Legacy installs wrote the bare template as the whole file: replace it.
-	if strings.HasPrefix(strings.TrimSpace(s), "# MonoFlow") {
+	} else if strings.HasPrefix(strings.TrimSpace(s), "# MonoFlow") {
+		// Legacy installs wrote the bare template as the whole file: replace it.
 		return os.WriteFile(path, []byte(block), 0644)
 	}
-	return os.WriteFile(path, []byte(strings.TrimRight(s, "\n")+"\n\n"+block), 0644)
+	if strings.TrimSpace(s) == "" {
+		return os.WriteFile(path, []byte(block), 0644)
+	}
+	// The MonoFlow section goes first: appended after a long project guide (opentelemetry-go:
+	// 7 KB), agents read the whole file to reach it, and carried it in context all run.
+	return os.WriteFile(path, []byte(block+"\n"+s), 0644)
+}
+
+// linkRootBinary makes bin/monoflow a link to .agents/bin/monoflow (unless the repo has its
+// own bin/monoflow) and keeps it out of git status via info/exclude.
+func linkRootBinary(root string) {
+	if _, err := os.Stat(filepath.Join(root, ".agents", "bin", "monoflow")); err != nil {
+		return
+	}
+	dest := filepath.Join(root, "bin", "monoflow")
+	if _, err := os.Lstat(dest); err == nil {
+		return
+	}
+	if os.MkdirAll(filepath.Dir(dest), 0755) != nil || os.Symlink(filepath.Join("..", ".agents", "bin", "monoflow"), dest) != nil {
+		return
+	}
+	check := exec.Command("git", "check-ignore", "-q", "bin/monoflow")
+	check.Dir = root
+	if check.Run() == nil {
+		return
+	}
+	pathCmd := exec.Command("git", "rev-parse", "--git-path", "info/exclude")
+	pathCmd.Dir = root
+	out, err := pathCmd.Output()
+	if err != nil {
+		return
+	}
+	excludePath := strings.TrimSpace(string(out))
+	if !filepath.IsAbs(excludePath) {
+		excludePath = filepath.Join(root, excludePath)
+	}
+	_ = os.MkdirAll(filepath.Dir(excludePath), 0755)
+	if f, err := os.OpenFile(excludePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
+		_, _ = f.WriteString("\n# MonoFlow binary link\n/bin/monoflow\n")
+		_ = f.Close()
+	}
 }

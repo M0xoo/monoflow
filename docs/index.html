@@ -3,307 +3,294 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>MonoFlow: make your monorepo usable by coding agents</title>
-  <meta name="description" content="MonoFlow is a single Go binary that gives coding agents a dependency map, a JSON feedback loop, instant undo, isolated worktrees, guardrails and a shipping path that doesn't involve polling CI.">
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22><rect width=%2232%22 height=%2232%22 rx=%227%22 fill=%22%23e8590c%22/><path d=%22M8 22V10l8 8 8-8v12%22 stroke=%22white%22 stroke-width=%223%22 fill=%22none%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22/></svg>">
+  <title>MonoFlow: every change has a blast radius</title>
+  <meta name="description" content="The toolchain for monorepos where agents write the code. MonoFlow finds every package a change can break, tests exactly those, and ships only green.">
+  <meta property="og:title" content="MonoFlow: every change has a blast radius">
+  <meta property="og:description" content="Your agent sees the file it edited. MonoFlow sees every package that change reaches, tests them, and pushes only green.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://m0xoo.github.io/monoflow/">
+  <meta name="theme-color" content="#0d0d0c">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22><rect width=%2232%22 height=%2232%22 fill=%22%23111%22/><rect x=%2220%22 y=%2220%22 width=%228%22 height=%228%22 fill=%22%23ff3b30%22/></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..900&family=JetBrains+Mono:wght@400;500;700&display=swap">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <header class="topbar">
-    <div class="wrap topbar-inner">
-      <a class="brand" href="#top" aria-label="MonoFlow home">
-        <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="currentColor"/><path d="M8 22V10l8 8 8-8v12" stroke="#fff" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>MonoFlow
-      </a>
-      <nav class="topnav" aria-label="Sections">
-        <a href="#provides">What you get</a>
-        <a href="#loop">Agent loop</a>
-        <a href="#install">Install</a>
-        <a href="#commands">Commands</a>
-        <a href="https://github.com/M0xoo/monoflow" class="gh">GitHub</a>
-      </nav>
-      <button class="theme-btn" id="theme-toggle" type="button" aria-label="Toggle color theme">◐</button>
-    </div>
+  <a class="skip" href="#top">Skip to content</a>
+  <div class="grain" aria-hidden="true"></div>
+
+  <header class="bar">
+    <a class="mark" href="#top" aria-label="MonoFlow home"><span class="sq" aria-hidden="true"></span>MonoFlow</a>
+    <nav class="nav" aria-label="Sections">
+      <a href="#loop">Agent loop</a>
+      <a href="#provides">What you get</a>
+      <a href="#measured">Benchmarks</a>
+      <a href="#install">Install</a>
+      <a href="#commands">Commands</a>
+      <a href="https://github.com/M0xoo/monoflow" class="gh">GitHub ↗</a>
+    </nav>
+    <button class="theme" id="theme-toggle" type="button" aria-label="Toggle color theme">◐</button>
   </header>
 
   <main id="top">
-    <!-- Hero -->
-    <section class="hero wrap">
-      <p class="eyebrow">One Go binary · Go, TypeScript, Rust, Python, Protobuf</p>
-      <h1>Make your monorepo usable by coding agents.</h1>
-      <p class="lede">
-        MonoFlow gives agents like Claude Code, Cursor and Antigravity what they otherwise have to work out from raw files and noisy terminals:
-        a <strong>map</strong> of the repo, a <strong>fast loop</strong>, an <strong>undo</strong> button,
-        an <strong>isolated place</strong> to work, and a <strong>safe path</strong> to ship. Every answer comes back as compact JSON.
-      </p>
-      <div class="hero-actions">
-        <a class="btn btn-primary" href="#install">Install</a>
-        <a class="btn" href="https://github.com/M0xoo/monoflow">View source</a>
-      </div>
+    <!-- Hero: the blast radius of one edit -->
+    <section class="hero">
+      <h1 class="mega"><span>Every change has a</span> <em>blast radius.</em></h1>
 
-      <div class="term" role="group" aria-label="Example: verifying an agent's change">
-        <div class="term-bar"><span></span><span></span><span></span><em>agent session</em></div>
-<pre class="term-body"><span class="p">$</span> monoflow checkpoint save "try new tax rounding"
-<span class="c">{ "id": "chk_001", "status": "saved" }</span>
-
-<span class="p">$</span> monoflow verify --affected
-<span class="c">{
-  "status": <b class="bad">"failed"</b>,
-  "affected_packages": ["packages/core"],
-  "errors": [{ "file": "./core.go", "line": 3, "col": 25,
-    "message": "cannot use \"x\" as int value in return statement" }]
-}</span>
-
-<span class="p">$</span> monoflow checkpoint revert
-<span class="c">{ "status": <b class="ok">"reverted"</b> }</span></pre>
-      </div>
-    </section>
-
-    <!-- Problem -->
-    <section class="wrap band">
-      <div class="contrast">
-        <div>
-          <h3>Without MonoFlow, an agent…</h3>
-          <ul class="x">
-            <li>greps the whole tree to guess what depends on what</li>
-            <li>runs the full test suite and reads pages of colored logs</li>
-            <li>commits every failed attempt, or loses work it can't undo</li>
-            <li>edits the same checkout as you and every other agent</li>
-            <li>"fixes" red tests by deleting assertions</li>
-            <li>polls CI in a loop, spending tokens while it waits</li>
-          </ul>
+      <div class="hero-grid">
+        <div class="hero-copy">
+          <p class="lede">Your agent sees the file it edited. MonoFlow sees every package that change reaches, tests them, and pushes only green.</p>
+          <div class="ctas">
+            <a class="btn btn-red" href="#install">Install</a>
+            <a class="btn" href="https://github.com/M0xoo/monoflow">View source ↗</a>
+          </div>
         </div>
-        <div>
-          <h3>With MonoFlow, it…</h3>
-          <ul class="check">
-            <li>asks the dependency graph directly</li>
-            <li>checks only the affected packages and gets errors back as JSON</li>
-            <li>saves and reverts checkpoints without touching history</li>
-            <li>works in its own sparse worktree</li>
-            <li>gets stopped by the test integrity guard</li>
-            <li>pushes, moves on, and is notified when CI finishes</li>
-          </ul>
-        </div>
+
+        <figure class="radius" aria-labelledby="radius-title">
+          <figcaption id="radius-title" class="radius-head">
+            <span>Blast radius of one edit</span>
+            <code>core/core.go</code>
+          </figcaption>
+          <table class="radius-table">
+            <thead><tr><th>Package</th><th>Why it is in</th><th>Result</th></tr></thead>
+            <tbody>
+              <tr class="r-edit"><td>core</td><td>edited</td><td><b class="pass">pass</b></td></tr>
+              <tr class="r-fail"><td>api</td><td>imports core</td><td><b class="fail">fail</b> <code>api_test.go:7</code></td></tr>
+              <tr><td>worker</td><td>imports core</td><td><b class="pass">pass</b></td></tr>
+              <tr><td>web</td><td>imports api</td><td><b class="pass">pass</b></td></tr>
+              <tr class="r-off"><td>docs</td><td>unrelated</td><td>skipped</td></tr>
+              <tr class="r-off"><td>cli</td><td>unrelated</td><td>skipped</td></tr>
+            </tbody>
+          </table>
+          <p class="radius-foot"><span>4 of 6 packages tested, 2 skipped</span><span class="caught">api caught before push</span></p>
+        </figure>
       </div>
     </section>
 
-    <!-- What it provides -->
-    <section id="provides" class="wrap">
-      <h2>What MonoFlow provides</h2>
-      <p class="sub">Six capabilities, all in one CLI. Each one replaces something agents are currently bad at.</p>
-
-      <div class="features">
-        <article class="feature">
-          <span class="num">01</span>
-          <h3>A map of the repo</h3>
-          <p><code>init</code> finds your packages and their dependency graph. Agents can then ask what a package depends on, or what a change to a file affects, without crawling the tree. Large repos can check out just the packages a task needs.</p>
-          <pre><code>monoflow graph query packages/core
-monoflow graph impact packages/core/x.go
-monoflow subset set --packages=billing</code></pre>
-        </article>
-
-        <article class="feature">
-          <span class="num">02</span>
-          <h3>Feedback in seconds, as JSON</h3>
-          <p><code>verify --affected</code> checks only what the change touches, runs packages in parallel, and uses cached results when inputs haven't changed. Errors are normalized to <code>file · line · col · code · message</code>, with no ANSI codes or spinners.</p>
-          <pre><code>monoflow verify --affected
-monoflow cache status</code></pre>
-        </article>
-
-        <article class="feature">
-          <span class="num">03</span>
-          <h3>Undo without touching history</h3>
-          <p>Checkpoints snapshot the working tree with Git plumbing. Agents can try an idea, fail, and roll back in milliseconds, without commits in the log or stashes to clean up.</p>
-          <pre><code>monoflow checkpoint save "hypothesis"
-monoflow checkpoint revert</code></pre>
-        </article>
-
-        <article class="feature">
-          <span class="num">04</span>
-          <h3>An isolated worktree per agent</h3>
-          <p>Each agent gets a sparse worktree that contains only its packages, so parallel agents and humans don't collide. When two agents add code to the same file, MonoFlow merges at the symbol level instead of leaving conflict markers.</p>
-          <pre><code>monoflow worktree create agent-42 --packages=billing
-monoflow worktree sync --to=agent-42 --from=agent-7
-monoflow worktree finish agent-42</code></pre>
-        </article>
-
-        <article class="feature">
-          <span class="num">05</span>
-          <h3>Guardrails you can trust</h3>
-          <p>Task boundaries say which paths an agent may change. The guard rejects diffs that weaken tests and scans for leaked secrets. Proof-of-work receipts and risk scores tell a reviewer how much attention a change needs.</p>
-          <pre><code>monoflow task check
-monoflow guard check
-monoflow task prove task-42
-monoflow review risk</code></pre>
-        </article>
-
-        <article class="feature">
-          <span class="num">06</span>
-          <h3>A shipping path built for agents</h3>
-          <p>Commit, sync and push without raw Git, and with <code>main</code> protected. PRs come with a risk tier and the list of affected packages. Pushing returns right away: CI results arrive later in an event inbox, so the agent never has to poll. When CI is red, <code>ci health</code> shows what broke, when, and which commit did it.</p>
-          <pre><code>monoflow commit -m "fix: rounding"
-monoflow pr create --title="fix: rounding"
-monoflow events unread
-monoflow ci health</code></pre>
-        </article>
+    <section class="why">
+      <h2 class="big">Agents rarely fail at the code. They fail at the repo around it.</h2>
+      <div class="ledger" role="table" aria-label="A plain monorepo compared with MonoFlow">
+        <div class="lg-head" role="row"><span role="columnheader">In a plain monorepo, an agent</span><span role="columnheader">With MonoFlow, it</span></div>
+        <div class="lg-row" role="row"><span class="was" role="cell">greps the tree to guess who imports a package</span><span class="now" role="cell">asks <code>graph query</code>: every importer, in every module</span></div>
+        <div class="lg-row" role="row"><span class="was" role="cell">tests one package and misses the dependent it broke</span><span class="now" role="cell">runs <code>verify</code>: exactly what CI would run for this change</span></div>
+        <div class="lg-row" role="row"><span class="was" role="cell">reads pages of colored logs to find one failing line</span><span class="now" role="cell">gets each break as <code>file:line</code>, with the line shown</span></div>
+        <div class="lg-row" role="row"><span class="was" role="cell">pushes, then learns CI is red</span><span class="now" role="cell">ships a commit that passed CI locally, on that exact commit</span></div>
+        <div class="lg-row" role="row"><span class="was" role="cell">polls <code>gh run watch</code>, paying tokens to wait</span><span class="now" role="cell">ends its turn; the result is delivered to it</span></div>
       </div>
     </section>
 
-    <!-- Loop -->
-    <section id="loop" class="wrap">
-      <h2>The agent loop</h2>
-      <p class="sub"><code>monoflow init</code> writes <code>AGENTS.md</code> and a skill file, so your agent follows this loop without extra prompting.</p>
-
-      <ol class="loop">
-        <li><b>Provision</b><code>worktree create</code></li>
-        <li><b>Look</b><code>graph query · impact</code></li>
-        <li><b>Snapshot</b><code>checkpoint save</code></li>
-        <li class="hot"><b>Edit &amp; verify</b><code>verify --affected</code><small>on failure: <code>checkpoint revert</code></small></li>
-        <li><b>Check</b><code>task check · guard check</code></li>
-        <li><b>Ship</b><code>commit · pr create</code></li>
-        <li><b>Wait for free</b><code>events unread</code></li>
+    <section id="loop" class="loop">
+      <div class="head-row">
+        <h2 class="big">Three commands. Edit to PR.</h2>
+      </div>
+      <ol class="verbs">
+        <li>
+          <span class="verb">Start</span>
+          <code>monoflow start fix-rounding</code>
+          <p>Its own worktree and branch, off the latest main. No two agents share a checkout.</p>
+        </li>
+        <li>
+          <span class="verb">Verify</span>
+          <code>monoflow verify</code>
+          <p>Build, lint and test the changed packages and every dependent. Already running in the background once edits settle.</p>
+        </li>
+        <li>
+          <span class="verb">Ship</span>
+          <code>monoflow ship -m "fix: rounding"</code>
+          <p>Returns at once. CI runs locally on the commit; only green is pushed and opened as a PR.</p>
+        </li>
       </ol>
 
       <div class="tabs" data-tabs>
         <div class="tab-list" role="tablist" aria-label="Real command output">
-          <button role="tab" aria-selected="true" data-tab="impact">graph impact</button>
-          <button role="tab" aria-selected="false" data-tab="verify">verify --affected</button>
-          <button role="tab" aria-selected="false" data-tab="guard">guard check</button>
-          <button role="tab" aria-selected="false" data-tab="task">task.json</button>
+          <button role="tab" aria-selected="true" data-tab="start">start</button>
+          <button role="tab" aria-selected="false" data-tab="query">graph query</button>
+          <button role="tab" aria-selected="false" data-tab="verify">verify</button>
+          <button role="tab" aria-selected="false" data-tab="ship">ship</button>
+          <span class="tab-note">real output, demo repo</span>
         </div>
-<pre class="tab-panel" data-panel="impact"><span class="p">$</span> monoflow graph impact packages/core/core.go
-{
-  "modified_file": "packages/core/core.go",
-  "owning_package": "packages/core",
-  "direct_dependents": ["packages/api"],
-  "transitive_dependents": ["packages/api"]
-}</pre>
-<pre class="tab-panel" data-panel="verify" hidden><span class="p">$</span> monoflow verify --affected
-{
-  "status": "failed",
-  "duration_ms": 52.5,
-  "affected_packages": ["packages/core"],
-  "results": [{
-    "target": "packages/core",
-    "language": "go",
-    "status": "failed",
-    "errors": [{
-      "file": "./core.go", "line": 3, "col": 25, "code": "go-error",
-      "message": "cannot use \"x\" (untyped string constant) as int value in return statement"
-    }],
-    "command_run": "go build ./..."
-  }]
-}</pre>
-<pre class="tab-panel" data-panel="guard" hidden><span class="p">$</span> monoflow guard check
-{
-  "status": "passed",
-  "secret_scanning": "clean (0 credentials or keys detected)",
-  "test_integrity": "verified (0 assertions deleted or commented out)",
-  "verdict": "All guard checks passed"
-}</pre>
-<pre class="tab-panel" data-panel="task" hidden><span class="p">$</span> cat .agents/task.json
-{
-  "task_id": "task-001",
-  "title": "Example Feature",
-  "acceptance_criteria": ["Affected unit tests pass"],
-  "allowed_paths":   ["services/**", "packages/**"],
-  "read_only_paths": ["contracts/**"]
-}</pre>
+<pre class="tab-panel" data-panel="start"><span class="p">$</span> monoflow start fix-rounding
+status: created
+path: /repo/.agents/worktrees/fix-rounding
+branch: agent/fix-rounding
+next: cd /repo/.agents/worktrees/fix-rounding and work only there; edit, then monoflow verify</pre>
+<pre class="tab-panel" data-panel="query" hidden><span class="p">$</span> monoflow graph query core
+path: core
+package: core
+dependents: 1
+go_package: example.com/core
+imported_by:
+  api: api
+imported_by_count: 1</pre>
+<pre class="tab-panel" data-panel="verify" hidden><span class="p">$</span> monoflow verify
+<span class="r">FAIL</span> 1/2 packages passed in 1.6s
+scope: all 2 packages (every package depends on your change)
+failed: api
+api/api_test.go:7 [TestTotal] Total(5) = 0, want 10
+       6| 	if Total(5) != 10 {
+  &gt;    7| 		t.Fatalf("Total(5) = %d, want 10", Total(5))
+       8| 	}
+next: fix the errors listed (file:line), then monoflow verify</pre>
+<pre class="tab-panel" data-panel="ship" hidden><span class="p">$</span> monoflow ship -m "fix(core): round prices down to tens"
+status: shipping
+commit: 89419e714106951d81b51d816485d2666f311f3f
+next: Done: end your turn. Local CI is running on this commit; it pushes and opens
+the PR when green. A failure is delivered to you (SHIP_FAILED / OUTER_LOOP_REGRESSION).</pre>
+      </div>
+      <p class="note">Output is short plain text, because an agent reads it rather than parsing it. Add <code>--json</code> to any command for scripts.</p>
+    </section>
+
+    <section id="provides" class="provides">
+      <h2 class="big">What your agents get</h2>
+      <div class="grid">
+        <article class="feature f-verify">
+          <h3>CI for this change, in one command</h3>
+          <p>The changed packages run first, and their dependents once those pass. Results are cached by content. Failures main already has are reported but don't block. For Go, only packages that import the change run.</p>
+<pre><code>scope: 27 of 29 packages: the changed ones and all their
+dependents (what CI runs for this change); the other 2
+cannot be affected
+not affected: internal/tools, schema</code></pre>
+          <p class="cap">From an agent's run on opentelemetry-go</p>
+        </article>
+        <article class="feature f-ship">
+          <h3>Nothing red reaches the remote</h3>
+          <p><code>ship</code> runs CI on the exact commit, in a clean checkout, and pushes only on green. Pushes to <code>main</code> are refused.</p>
+        </article>
+        <article class="feature f-map">
+          <h3>A map, not a grep</h3>
+          <p><code>graph query &lt;dir&gt;</code> lists every package importing it, across all modules, in about a second.</p>
+        </article>
+        <article class="feature f-events">
+          <h3>No polling</h3>
+          <p>Hooks for Claude Code and opencode put CI results in the agent's context, and wake it when pending work finishes.</p>
+        </article>
+        <article class="feature f-isolate">
+          <h3>One worktree per agent</h3>
+          <p>Sparse worktrees with their own dependencies, checkpoints outside Git history, and AST-level merges between agents.</p>
+        </article>
+        <article class="feature f-guard">
+          <h3>Guardrails</h3>
+          <p>Commits are refused when assertions disappear or secrets leak. Risk scores and proof receipts tell reviewers where to look.</p>
+        </article>
       </div>
     </section>
 
-    <!-- Install -->
-    <section id="install" class="wrap">
-      <h2>Install</h2>
-      <p class="sub">Requires Go 1.22+ to build. The result is a single static binary with no runtime dependencies.</p>
+    <section id="measured" class="measured">
+      <div class="head-row">
+        <h2 class="big">Measured. Losses included.</h2>
+        <p>The same agent (Claude Haiku) does the same task with MonoFlow and with plain git, from a fresh copy, one run at a time. Every number is in <a href="https://github.com/M0xoo/monoflow/blob/main/e2e/bench/RESULTS.md">e2e/bench</a>.</p>
+      </div>
+      <div class="stats">
+        <article class="stat">
+          <header><b>opentelemetry-go</b><span>29 Go modules; a break only another module's tests catch</span></header>
+          <dl>
+            <div><dt>Plain git</dt><dd>130<small>s</small></dd></div>
+            <div class="win"><dt>MonoFlow</dt><dd>101<small>s</small></dd></div>
+          </dl>
+          <p>Median time. MonoFlow runs stayed between 90 and 112 s; plain runs spread from 109 to 338 s. Tokens about equal (60k against 55k).</p>
+        </article>
+        <article class="stat">
+          <header><b>trpc</b><span>pnpm and Turborepo; 400 to 422 across packages</span></header>
+          <dl>
+            <div class="win"><dt>Plain git + Turbo</dt><dd>237<small>s</small></dd></div>
+            <div><dt>MonoFlow</dt><dd>377<small>s</small></dd></div>
+          </dl>
+          <p>Best run of each. Plain git with Turbo is ahead here, on time and on tokens. We are working on it.</p>
+        </article>
+      </div>
+      <p class="note">Every MonoFlow push was gated on local CI; plain pushes were not.</p>
+    </section>
 
-      <div class="steps">
-        <div class="step">
-          <span class="step-n">1</span>
-          <div>
+    <section id="install" class="install">
+      <h2 class="big">Install</h2>
+      <div class="install-grid">
+        <ol class="steps">
+          <li class="step">
             <h3>Build</h3>
+            <p>Needs Go 1.22 or later. The result is one static binary.</p>
             <div class="code"><pre><code id="cmd-build">git clone https://github.com/M0xoo/monoflow.git
 cd monoflow &amp;&amp; make build</code></pre><button class="copy" data-copy="cmd-build" type="button">Copy</button></div>
-          </div>
-        </div>
-        <div class="step">
-          <span class="step-n">2</span>
-          <div>
+          </li>
+          <li class="step">
             <h3>Install into your repo</h3>
+            <p>Puts the binary at <code>.agents/bin/monoflow</code>, links it as <code>./bin/monoflow</code>, and runs <code>monoflow init</code>.</p>
             <div class="code"><pre><code id="cmd-install">cd /path/to/your-repo
 /path/to/monoflow/install.sh</code></pre><button class="copy" data-copy="cmd-install" type="button">Copy</button></div>
-            <p class="note">This copies the binary to <code>.agents/bin/monoflow</code> and runs <code>monoflow init</code>.</p>
-          </div>
-        </div>
-        <div class="step">
-          <span class="step-n">3</span>
-          <div>
-            <h3>Optional: CI integration</h3>
-            <div class="code"><pre><code id="cmd-gh">.agents/bin/monoflow init --setup-gh-actions</code></pre><button class="copy" data-copy="cmd-gh" type="button">Copy</button></div>
-            <p class="note">Adds GitHub Actions workflows for package caching and two-tier CI.</p>
-          </div>
-        </div>
-      </div>
+          </li>
+          <li class="step">
+            <h3>Affected-only GitHub Actions</h3>
+            <p>Optional. Remote CI runs only affected packages and skips work a local proof already covers.</p>
+            <div class="code"><pre><code id="cmd-gh">./bin/monoflow init --setup-gh-actions</code></pre><button class="copy" data-copy="cmd-gh" type="button">Copy</button></div>
+          </li>
+        </ol>
 
-      <h3 class="files-h">What <code>init</code> writes</h3>
-      <div class="table-wrap">
-        <table>
-          <tbody>
-            <tr><td><code>.agents/monoflow.config.json</code></td><td>Discovered packages and dependency graph</td></tr>
-            <tr><td><code>AGENTS.md</code> · <code>.agents/rules/</code> · <code>.agents/skills/monoflow/</code></td><td>Instructions your agent loads automatically</td></tr>
-            <tr><td><code>.agents/task.json</code></td><td>Task boundaries: <code>allowed_paths</code>, <code>read_only_paths</code></td></tr>
-            <tr><td><code>.agents/quarantine.json</code></td><td>Flaky tests kept out of the feedback loop</td></tr>
-          </tbody>
-        </table>
+        <aside class="files">
+          <h3>Written by init</h3>
+          <dl>
+            <div><dt>.agents/monoflow.config.json</dt><dd>Packages, their commands and the dependency graph, from Go modules, pnpm/npm/yarn workspaces with Nx or Turborepo, Cargo and Python.</dd></div>
+            <div><dt>AGENTS.md, .agents/skills/monoflow/</dt><dd>A 1.4 KB guide placed first in <code>AGENTS.md</code>. Your own guide follows it.</dd></div>
+            <div><dt>.claude/settings.json, .opencode/plugin/</dt><dd>Hooks that deliver results to the agent and route raw <code>git push</code> through MonoFlow.</dd></div>
+            <div><dt>.agents/task.json, .agents/quarantine.json</dt><dd>Task boundaries, and flaky tests kept out of the loop.</dd></div>
+          </dl>
+        </aside>
       </div>
     </section>
 
-    <!-- Commands -->
-    <section id="commands" class="wrap">
-      <h2>Commands</h2>
-      <p class="sub">Every command prints JSON. Run <code>monoflow</code> with no arguments for full usage.</p>
-      <input class="filter" id="cmd-filter" type="search" placeholder="Filter commands…" aria-label="Filter commands">
+    <section id="commands" class="commands">
+      <div class="head-row">
+        <h2 class="big">Commands</h2>
+        <div class="filter-box">
+          <label for="cmd-filter">Filter</label>
+          <input class="filter" id="cmd-filter" type="search" placeholder="verify, graph, pr" autocomplete="off">
+        </div>
+      </div>
+      <p class="empty" id="cmd-empty" hidden>No command matches. Try a shorter word, or run <code>monoflow help --all</code>.</p>
       <div class="table-wrap">
         <table class="cmds" id="cmd-table">
           <thead><tr><th>Command</th><th>What it does</th></tr></thead>
           <tbody>
+            <tr class="grp"><td colspan="2">Agent path</td></tr>
+            <tr><td><code>start &lt;task-id&gt; [--packages=…]</code></td><td>Worktree and branch for one task, off the latest main</td></tr>
+            <tr><td><code>verify [--package=&lt;p&gt;|--all|-u|--strict]</code></td><td>Build, lint and test the changed packages and every dependent; <code>-u</code> rewrites snapshots</td></tr>
+            <tr><td><code>ship -m "…" [--title=…]</code></td><td>Commit, run local CI on that commit, push and open the PR when green</td></tr>
+
             <tr class="grp"><td colspan="2">Setup &amp; understanding</td></tr>
-            <tr><td><code>init [--setup-gh-actions]</code></td><td>Discover packages, write config and agent instructions, optionally add CI workflows</td></tr>
-            <tr><td><code>clone &lt;url&gt; [dest] --packages=…</code></td><td>Partial clone of the listed packages and their upstream dependencies</td></tr>
+            <tr><td><code>init [--setup-gh-actions]</code></td><td>Discover packages, write config, the agent guide and hooks; optionally add CI workflows</td></tr>
+            <tr><td><code>clone &lt;url&gt; [dest] --packages=…</code></td><td>Partial clone of the listed packages and their dependencies</td></tr>
             <tr><td><code>graph</code></td><td>Full dependency graph</td></tr>
-            <tr><td><code>graph query &lt;pkg&gt;</code></td><td>Upstream dependencies and downstream dependents of a package</td></tr>
+            <tr><td><code>graph query &lt;pkg|dir&gt;</code></td><td>Dependencies, dependents and (Go) every package importing it</td></tr>
             <tr><td><code>graph impact &lt;file&gt;</code></td><td>Packages affected by changing a file</td></tr>
-            <tr><td><code>subset set|add|remove|update|deps|list|check|reset</code></td><td>Narrow the working copy to the packages a task needs, and check that their dependencies are present</td></tr>
+            <tr><td><code>subset set|add|remove|update|deps|list|check|reset</code></td><td>Narrow the working copy to the packages a task needs</td></tr>
 
             <tr class="grp"><td colspan="2">Inner loop</td></tr>
-            <tr><td><code>verify --affected</code></td><td>Check affected packages in parallel and return JSON diagnostics, using the cache where possible</td></tr>
             <tr><td><code>checkpoint save "msg" | revert [id] | list</code></td><td>Snapshot and restore the working tree without commits</td></tr>
-            <tr><td><code>cache status|clean|serve</code></td><td>Content-addressed package cache, with an optional HTTP server for shared use</td></tr>
+            <tr><td><code>cache status|clean|serve</code></td><td>Content-addressed package cache, with an optional HTTP server</td></tr>
             <tr><td><code>quarantine list|add</code></td><td>Keep known-flaky tests out of agent feedback</td></tr>
 
             <tr class="grp"><td colspan="2">Isolation</td></tr>
-            <tr><td><code>worktree create &lt;id&gt; --packages=…</code></td><td>Sparse worktree for one agent</td></tr>
-            <tr><td><code>worktree focus|add|remove|update|isolate</code></td><td>Change which packages a worktree contains, or give it fully isolated copies</td></tr>
-            <tr><td><code>worktree sync --to=B --from=A</code></td><td>Symbol-level merge between agents' worktrees</td></tr>
+            <tr><td><code>worktree create|list|focus|add|remove|update|isolate</code></td><td>Per-agent sparse worktrees and the packages they contain</td></tr>
+            <tr><td><code>worktree sync --to=B --from=A</code></td><td>AST-level merge between agents' worktrees</td></tr>
             <tr><td><code>worktree finish &lt;id&gt; | gc</code></td><td>Remove a finished worktree, or clean up abandoned ones</td></tr>
 
             <tr class="grp"><td colspan="2">Guardrails</td></tr>
             <tr><td><code>task check</code></td><td>Make sure only allowed paths were changed</td></tr>
-            <tr><td><code>task prove &lt;id&gt;</code></td><td>Run definition-of-done checks, build the deliverable and write a proof receipt</td></tr>
+            <tr><td><code>task prove &lt;id&gt;</code></td><td>Run definition-of-done checks and write a proof receipt</td></tr>
             <tr><td><code>verify --proof=&lt;id&gt;</code></td><td>Verify a proof receipt</td></tr>
             <tr><td><code>task slice</code></td><td>Split a diff into stacked review tiers</td></tr>
-            <tr><td><code>guard check</code></td><td>Test integrity guard and secret scan</td></tr>
-            <tr><td><code>review risk|audit|throttle</code></td><td>Risk score (0–100), PR-description audit, and limits on PR volume when reviewers are overloaded</td></tr>
+            <tr><td><code>guard check</code></td><td>Test integrity guard and secret scan (also run on every commit)</td></tr>
+            <tr><td><code>review risk|audit|throttle</code></td><td>Risk score, PR-description audit, and limits on PR volume</td></tr>
 
             <tr class="grp"><td colspan="2">Git &amp; shipping</td></tr>
-            <tr><td><code>commit -m "…"</code></td><td>Commit after guard checks</td></tr>
-            <tr><td><code>branch [name|switch]</code> · <code>sync</code></td><td>Branch and pull while keeping the sparse checkout intact</td></tr>
-            <tr><td><code>push</code></td><td>Push (direct pushes to main are blocked) and start a background CI watcher</td></tr>
-            <tr><td><code>events unread|list|ack|clear</code></td><td>Inbox of CI results and other events, so agents never poll</td></tr>
-            <tr><td><code>pr create|list|view|test|local|review|merge</code></td><td>PRs with a risk tier, proof receipt and affected-package list</td></tr>
+            <tr><td><code>commit -m "…"</code></td><td>Guarded commit; starts local CI on it</td></tr>
+            <tr><td><code>branch [name|switch]</code>, <code>sync</code></td><td>Branch and pull while keeping the sparse checkout intact</td></tr>
+            <tr><td><code>push</code></td><td>Push once local CI is green; direct pushes to main are refused</td></tr>
+            <tr><td><code>events unread|list|wait|ack|clear</code></td><td>Inbox of CI results and other events, delivered to agents by hooks</td></tr>
+            <tr><td><code>pr create|list|view|test|local|review|merge</code></td><td>PRs with a risk tier, proof receipt and affected packages</td></tr>
             <tr><td><code>pr status [id]</code></td><td>Local proof receipt and the GitHub PR in one view</td></tr>
-            <tr><td><code>queue spec</code> · <code>ci check</code></td><td>Speculative local merge, and a signed receipt that lets CI take its fast path</td></tr>
-            <tr><td><code>ci health [--check=…] [--logs]</code></td><td>When each check started failing, breaking and fixing commits, recurrences and flaky checks</td></tr>
-            <tr><td><code>outer start|status|wait</code></td><td>Run the slower full-dependency checks asynchronously</td></tr>
+            <tr><td><code>queue spec</code>, <code>ci check</code></td><td>Speculative local merge, and a receipt that lets CI take its fast path</td></tr>
+            <tr><td><code>ci health [--check=…] [--logs]</code></td><td>When each check started failing, the breaking commits and flaky checks</td></tr>
+            <tr><td><code>outer status|wait</code></td><td>Local CI jobs on commits</td></tr>
 
             <tr class="grp"><td colspan="2">Build &amp; release</td></tr>
             <tr><td><code>deliver [--target=…]</code></td><td>Build a self-contained deliverable into <code>.agents/dist</code></td></tr>
@@ -313,12 +300,16 @@ cd monoflow &amp;&amp; make build</code></pre><button class="copy" data-copy="cm
           </tbody>
         </table>
       </div>
+      <p class="note"><code>monoflow help &lt;command&gt;</code> shows one command's flags; <code>monoflow help --all</code> lists everything.</p>
     </section>
   </main>
 
-  <footer class="wrap footer">
-    <span>MonoFlow · MIT License</span>
-    <a href="https://github.com/M0xoo/monoflow">github.com/M0xoo/monoflow</a>
+  <footer class="foot">
+    <div class="foot-row">
+      <span>MIT licensed</span>
+      <a href="https://github.com/M0xoo/monoflow">github.com/M0xoo/monoflow ↗</a>
+    </div>
+    <p class="wordmark" aria-hidden="true">MonoFlow</p>
   </footer>
 
   <script src="app.js"></script>

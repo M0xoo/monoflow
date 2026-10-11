@@ -34,7 +34,7 @@ func (g *DependencyGraph) discoverGoModules(files []string) {
 			Language:     LangGo,
 			Version:      "1.0.0",
 			TestCmd:      "go test ./...",
-			LintCmd:      goLintCmd,
+			LintCmd:      GoLintCmd,
 			TypecheckCmd: "go build ./...",
 		})
 	}
@@ -45,10 +45,10 @@ func (g *DependencyGraph) discoverGoModules(files []string) {
 	}
 }
 
-// goLintCmd fails on unformatted files (naming them) as well as vet findings, so agents
+// GoLintCmd fails on unformatted files (naming them) as well as vet findings, so agents
 // never need raw gofmt/go vet to match what CI enforces. Hidden dirs are pruned: gofmt -l .
 // would walk .agents/ (baseline checkouts, release snapshots) and report their files.
-const goLintCmd = `unformatted=$(find . -path '*/.*' -prune -o -name '*.go' -print | xargs gofmt -l); if [ -n "$unformatted" ]; then echo "gofmt needed (run gofmt -w):"; echo "$unformatted"; exit 1; fi; go vet ./...`
+const GoLintCmd = `unformatted=$(find . -path '*/.*' -prune -o -name '*.go' -print | xargs gofmt -l); if [ -n "$unformatted" ]; then echo "gofmt needed (run gofmt -w):"; echo "$unformatted"; exit 1; fi; go vet ./...`
 
 // goModInfo is the subset of a go.mod file needed to link in-repo modules.
 type goModInfo struct {
