@@ -135,17 +135,13 @@ func handleWorktree(rootDir string) {
 			os.Exit(1)
 		}
 		resMap := map[string]any{
-			"status":         "created",
-			"agent_id":       info.AgentID,
-			"path":           info.Path,
-			"head_sha":       info.HeadSHA,
-			"symlinks_count": info.SymlinksCount,
-			"isolation":      "own git worktree on branch " + info.Branch + " (packages projected via sparse checkout)",
-			"deps_isolated":  info.Isolated,
-			"deps_isolation": info.IsolationMethod,
-			"is_sparse":      info.IsSparse,
-			"duration_ms":    durMs,
-			"next":           "cd " + info.Path + " and work only there (same files as the repo root); edit, then monoflow verify",
+			"status": "created",
+			"path":   info.Path,
+			"branch": info.Branch,
+			"next":   "cd " + info.Path + " and work only there (same files as the repo root); edit, then monoflow verify",
+		}
+		if info.Isolated {
+			resMap["deps_isolation"] = info.IsolationMethod
 		}
 		if info.FocusedPackage != "" {
 			resMap["focused_package"] = info.FocusedPackage
@@ -155,6 +151,7 @@ func handleWorktree(rootDir string) {
 			resMap["omitted_packages"] = info.OmittedPackages
 			resMap["strategy"] = info.Strategy
 		}
+		_ = durMs
 		data, _ := json.MarshalIndent(resMap, "", "  ")
 		fmt.Println(string(data))
 

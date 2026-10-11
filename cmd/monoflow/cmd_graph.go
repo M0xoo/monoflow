@@ -85,14 +85,24 @@ func handleGraph(rootDir string) {
 			fmt.Printf(`{"file": "%s", "impact": "none (untracked/root file)"}`+"\n", filePath)
 			return
 		}
-		data, _ := json.MarshalIndent(map[string]any{
-			"modified_file":         filePath,
-			"owning_package":        pkg.Name,
-			"direct_dependents":     g.GetDownstream(pkg.Name),
-			"transitive_dependents": g.GetTransitiveDownstream(pkg.Name),
-			"pinned_dependents":     pinnedDependents(g, pkg.Name),
-			"note":                  "pinned dependents build against a release of this package: unaffected now, notified on its next release",
-		}, "", "  ")
+		// Compact for agents: one dependents list (direct ones are a subset of it).
+		deps := g.GetTransitiveDownstream(pkg.Name)
+		out := map[string]any{
+			"package":       pkg.Name,
+			"dependents":    len(deps),
+			"direct":        len(g.GetDownstream(pkg.Name)),
+			"verify_covers": "monoflow verify tests this package and all of these",
+		}
+		if len(deps) > 30 {
+			out["dependents_first_30"] = deps[:30]
+		} else if len(deps) > 0 {
+			out["dependent_packages"] = deps
+		}
+		if pinned := pinnedDependents(g, pkg.Name); len(pinned) > 0 {
+			out["pinned_dependents"] = pinned
+			out["pinned_note"] = "they build against a release of this package: unaffected now, notified on its next release"
+		}
+		data, _ := json.MarshalIndent(out, "", "  ")
 		fmt.Println(string(data))
 
 	case "affected":
