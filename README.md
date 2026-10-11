@@ -162,6 +162,32 @@ Worktrees for pnpm repos get a real offline `pnpm install`, so test runners like
 | **Backpressure** | `review throttle` | More PRs than reviewers can handle |
 | **Circuit breaker** | automatic in `verify` | An agent failing the same targets over and over (snapshots its work) |
 
+### 7. 📦 Package versions: live code or a pinned release
+
+Each in-repo dependency is one of two kinds of edge, and each consumer picks (`monoflow version edges` lists them all):
+
+| Edge | The consumer's manifest points at | A change to the dependency |
+| :--- | :--- | :--- |
+| **source** (default) | the package's directory (`workspace:`, Go `replace`/`go.work`, Cargo/uv path) | affects the consumer at once: `verify` re-tests it, and an API break is fixed in the same change |
+| **pinned** | a release snapshot under `.agents/releases/<pkg>@<version>/` | does not affect it; the consumer upgrades when it chooses |
+
+Releasing and consuming a package:
+
+```bash
+monoflow version suggest money                # required bump from the exported-API diff (removed/changed = major)
+monoflow version bump money minor             # writes the version; reports each consumer's impact, rewrites none
+monoflow version release money                # tags money@1.3.0 and notifies the consumers that pin it
+monoflow version pin ledger money             # ledger builds against money@1.3.0, isolated from later changes
+monoflow version upgrades ledger              # newer releases, with the API changes ledger actually uses
+monoflow version upgrade ledger money         # moves the pin and runs ledger's own checks
+```
+
+- **Releases are git tags** (`<pkg>@<version>`); releasing a version twice, or a package with uncommitted changes, is refused.
+- **Pins are committed snapshots** of the release (and the in-repo code it was built with), so any clone, IDE or CI builds them without MonoFlow. Snapshots nobody pins any more are removed, and `version check` flags one that no longer matches its tag.
+- **Consumers are told**: a release sends each pinning consumer a `DEPENDENCY_RELEASED` event saying whether it is compatible or breaking for that consumer and which of its uses change. A source consumer already builds against the live code, so the note is informational.
+- **Many agents, one release**: agents record the bump a change needs as a changeset (`task changeset`); `version apply` applies the highest bump per package.
+- Pinned edges are left out of the graph `verify` and the cache use, so editing `money` does not re-test a consumer pinned to an older release.
+
 ---
 
 ## 📊 Benchmarks
@@ -202,7 +228,7 @@ Every MonoFlow push in these runs was gated on local CI; plain pushes were not. 
 | 🚢 **Ship** | `pr create\|status\|test\|local\|review\|merge` · `outer status\|wait` · `queue spec` · `ci check` |
 | 📬 **Events & CI** | `events unread\|wait\|ack` · `ci health [--check=<name>] [--logs]` |
 | 🛡️ **Guardrails** | `guard check` · `task check\|prove\|slice` · `review risk\|audit\|throttle` |
-| 📦 **Release** | `version list\|bump\|apply\|check` · `deliver` |
+| 📦 **Versions & releases** | `version edges\|suggest\|bump\|release\|pin\|unpin\|upgrades\|upgrade\|apply\|check` · `deliver` |
 
 `monoflow help` prints the short list; `monoflow help <command>` shows one command's flags, and `monoflow help --all` shows everything.
 

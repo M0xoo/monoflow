@@ -25,6 +25,7 @@
     <nav class="nav" aria-label="Sections">
       <a href="#loop">Agent loop</a>
       <a href="#provides">What you get</a>
+      <a href="#versions">Versions</a>
       <a href="#measured">Benchmarks</a>
       <a href="#install">Install</a>
       <a href="#commands">Commands</a>
@@ -176,6 +177,33 @@ not affected: internal/tools, schema</code></pre>
       </div>
     </section>
 
+    <section id="versions" class="versions">
+      <div class="head-row">
+        <h2 class="big">Live code or a pinned release.</h2>
+        <p>Every in-repo dependency is one of two kinds of edge, and each consumer picks. <code>monoflow version edges</code> lists them all.</p>
+      </div>
+      <div class="edges-grid">
+        <article>
+          <span class="edge-kind">Source</span>
+          <p class="edge-what">The consumer points at the package's directory: <code>workspace:</code>, Go <code>replace</code> or <code>go.work</code>, a Cargo or uv path. The default.</p>
+          <p>A change to the package reaches the consumer at once. <code>verify</code> re-tests it, and an API break is fixed in the same change.</p>
+        </article>
+        <article>
+          <span class="edge-kind edge-pinned">Pinned</span>
+          <p class="edge-what">The consumer points at a release snapshot under <code>.agents/releases/&lt;pkg&gt;@&lt;version&gt;/</code>.</p>
+          <p>Later changes do not reach it, and <code>verify</code> does not re-test it for them. It upgrades when it chooses, and its own checks run on the upgrade.</p>
+        </article>
+      </div>
+      <ol class="flow">
+        <li><code>version suggest money</code><span>The bump the exported-API diff requires: removed or changed symbols mean major.</span></li>
+        <li><code>version bump money minor</code><span>Writes the version and reports each consumer's impact. It rewrites none of them.</span></li>
+        <li><code>version release money</code><span>Tags <code>money@1.3.0</code> and tells each pinning consumer whether it is compatible or breaking for it.</span></li>
+        <li><code>version pin ledger money</code><span>Commits the snapshot, so any clone, IDE or CI builds it without MonoFlow.</span></li>
+        <li><code>version upgrade ledger money</code><span>Moves the pin to the newest compatible release and runs ledger's checks.</span></li>
+      </ol>
+      <p class="note">Releasing a version twice, or a package with uncommitted changes, is refused. Snapshots nobody pins are removed, and <code>version check</code> flags one that no longer matches its tag. With many agents, each records the bump its change needs (<code>task changeset</code>) and <code>version apply</code> applies the highest per package.</p>
+    </section>
+
     <section id="measured" class="measured">
       <div class="head-row">
         <h2 class="big">Measured. Losses included.</h2>
@@ -295,7 +323,9 @@ cd monoflow &amp;&amp; make build</code></pre><button class="copy" data-copy="cm
             <tr class="grp"><td colspan="2">Build &amp; release</td></tr>
             <tr><td><code>deliver [--target=…]</code></td><td>Build a self-contained deliverable into <code>.agents/dist</code></td></tr>
             <tr><td><code>app test</code></td><td>Assemble the full app from changed packages plus cached builds</td></tr>
-            <tr><td><code>version list|bump|apply|check</code></td><td>SemVer changesets that cascade through dependents</td></tr>
+            <tr><td><code>version edges|suggest|bump|release</code></td><td>Source and pinned edges; the bump the API diff requires; tag a release and notify its consumers</td></tr>
+            <tr><td><code>version pin|unpin|upgrades|upgrade</code></td><td>Consume a release, go back to live code, see and apply newer releases</td></tr>
+            <tr><td><code>version list|apply|check</code></td><td>Versions and ranges; apply changesets; check ranges and snapshots</td></tr>
             <tr><td><code>scenario run [--json]</code></td><td>End-to-end multi-agent simulation on a temporary repo</td></tr>
           </tbody>
         </table>
