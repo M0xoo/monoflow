@@ -1146,7 +1146,6 @@ func mainRepoRoot(dir string) string {
 func startBackgroundPnpmInstall(wt string) {
 	marker := filepath.Join(wt, graph.DepsMarker)
 	_ = os.MkdirAll(filepath.Dir(marker), 0755)
-	_ = os.WriteFile(marker, nil, 0644)
 	install := graph.PnpmInstallCmd(wt)
 	script := fmt.Sprintf("%s > .agents/deps-install.log 2>&1; rm -f %q", shellJoin(install.Args), marker)
 	cmd := exec.Command("sh", "-c", script)
@@ -1154,9 +1153,11 @@ func startBackgroundPnpmInstall(wt string) {
 	cmd.Env = install.Env
 	cmd.SysProcAttr = detachedSysProcAttr()
 	if err := cmd.Start(); err != nil {
-		_ = os.Remove(marker)
 		return
 	}
+	// The marker names the installer: a stale or committed copy (ship once committed it, and
+	// every outer-loop checkout of that commit then waited 10 minutes for nothing) is ignored.
+	_ = os.WriteFile(marker, []byte(strconv.Itoa(cmd.Process.Pid)), 0644)
 	_ = cmd.Process.Release()
 }
 

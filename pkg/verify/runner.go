@@ -40,6 +40,9 @@ type VerifyOptions struct {
 	// UpdateSnapshots runs JS/TS test commands with -u (vitest/jest rewrite mismatched
 	// snapshots): agents otherwise rewrote inline snapshots by hand, many calls each (trpc).
 	UpdateSnapshots bool
+	// KeepUntracked: do not remove files the checks created (background runs: the agent may be
+	// creating files at the same time).
+	KeepUntracked bool
 }
 
 // TargetResult holds the result of verifying a single package.
@@ -438,7 +441,8 @@ func (r *Runner) VerifyPackages(g *graph.DependencyGraph, names []string, opt Ve
 
 	// Checks must not change the tree the agent commits: files they create (Playwright's
 	// test-results/, coverage) are removed afterwards. trpc: ship committed two of them.
-	if !opt.UpdateSnapshots { // new snapshot files are the point of -u
+	// A background (speculative) run leaves them: the agent may be creating files meanwhile.
+	if !opt.UpdateSnapshots && !opt.KeepUntracked { // new snapshot files are the point of -u
 		before := untrackedFiles(r.RootDir)
 		defer removeNewUntracked(r.RootDir, before)
 	}

@@ -75,6 +75,7 @@ func hookFlag(name string) string {
 // other harnesses: --format=text prints plain text (nothing when there is nothing new).
 func hookDeliver(root string) {
 	_ = readHookStdin() // hook payload is not needed
+	maybeVerifyInBackground(root)
 	branch := currentBranch(root)
 	em := events.NewEventManager(root)
 	pending := em.Pending(branch, branch, projectedPackages(root))

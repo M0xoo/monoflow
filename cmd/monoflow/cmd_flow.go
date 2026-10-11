@@ -23,8 +23,10 @@ func handleStart(rootDir string) {
 		printRaw(`{"error": "usage: monoflow start <task-id>"}`)
 		os.Exit(1)
 	}
+	id := os.Args[2]
 	os.Args = append([]string{os.Args[0], "worktree", "create"}, os.Args[2:]...)
 	handleWorktree(rootDir)
+	startSpeculateWatcher(filepath.Join(rootDir, ".agents", "worktrees", id))
 }
 
 // handleShip is `monoflow ship -m "<commit message>" [--title=<PR title>] [--body=...|--body-file=...]`:

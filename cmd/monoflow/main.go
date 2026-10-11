@@ -88,6 +88,9 @@ func main() {
 	case "ci":
 		handleCI(rootDir)
 
+	case "speculate-watch": // internal: started by start, see speculate.go
+		speculateWatch(rootDir)
+
 	case "start":
 		handleStart(rootDir)
 	case "ship":

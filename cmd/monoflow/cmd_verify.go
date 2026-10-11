@@ -57,6 +57,21 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 		}
 	}
 
+	recording := os.Getenv("MONOFLOW_RECORD_KEY") != ""
+	opts.KeepUntracked = recording
+	// Plain verify: the background run started at the agent's last edit may already have the
+	// answer for exactly this state of the tree (see speculate.go).
+	if !recording && len(os.Args) == 2 && !jsonMode() {
+		if out, ok := speculatedResult(rootDir, 15*time.Minute); ok {
+			fmt.Print(out)
+			if !strings.HasPrefix(out, "PASS") {
+				os.Exit(1)
+			}
+			return
+		}
+		stopOtherSpecRuns(rootDir, "") // obsolete; they would compete for the CPU
+	}
+
 	g, err := graph.LoadOrDiscover(rootDir)
 	if err != nil {
 		printRaw(fmt.Sprintf(`{"status": "failed", "error": %q}`, err))
@@ -157,6 +172,10 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 		fmt.Print(verifyText(res, out.(map[string]any)))
 	} else {
 		printOut(out)
+	}
+	if recording {
+		finishRecord(rootDir)
+		return
 	}
 
 	cb := guard.NewCircuitBreaker(rootDir, 5)
