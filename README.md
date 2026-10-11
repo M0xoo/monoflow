@@ -16,6 +16,7 @@ One Go binary that gives Claude Code, Cursor, opencode and other agents a **map*
 [Quickstart](#-quickstart) •
 [The agent path](#-the-agent-path) •
 [What you get](#-what-you-get) •
+[How it works](#-how-it-works) •
 [Benchmarks](#-benchmarks) •
 [Commands](#-commands)
 
@@ -148,7 +149,7 @@ monoflow checkpoint revert
 monoflow worktree finish agent-42
 ```
 
-Worktrees for pnpm repos get a real offline `pnpm install`, so test runners like Vite see real paths. When two agents add different functions to the same file, `worktree sync` merges at the AST level (Go, TS/JS, Python).
+Full (non-sparse) worktrees for pnpm repos get a real offline `pnpm install`, so test runners like Vite see real paths. When two agents add different functions to the same file, `worktree sync` merges them: at the AST level for Go, and by import lines and appended blocks for TS/JS and Python.
 
 ### 6. 🛡️ Guardrails
 
@@ -187,6 +188,81 @@ monoflow version upgrade ledger money         # moves the pin and runs ledger's 
 - **Consumers are told**: a release sends each pinning consumer a `DEPENDENCY_RELEASED` event saying whether it is compatible or breaking for that consumer and which of its uses change. A source consumer already builds against the live code, so the note is informational.
 - **Many agents, one release**: agents record the bump a change needs as a changeset (`task changeset`); `version apply` applies the highest bump per package.
 - Pinned edges are left out of the graph `verify` and the cache use, so editing `money` does not re-test a consumer pinned to an older release.
+
+---
+
+## ⚙️ How it works
+
+MonoFlow doesn't replace your compilers, test runners or CI. It's a layer between the agent and Git that decides **what** to run, **where** to run it, and **how the agent hears about the result**. Everything it knows lives in plain files under `.agents/`.
+
+```mermaid
+flowchart LR
+    S["start<br/>worktree off latest main"] --> E["edit"]
+    E -. "hook: edits settled" .-> BV["background verify<br/>.agents/verify/"]
+    E --> V["verify<br/>affected packages only"]
+    BV -. "same files: reuse result" .-> V
+    V -- "fail: file:line" --> E
+    V -- "pass" --> SH["ship<br/>commit + return"]
+    SH --> O["local CI on the commit<br/>clean checkout"]
+    O -- "green" --> P["push + PR<br/>CI watcher"]
+    O -- "red" --> EV[".agents/events/"]
+    P --> EV
+    EV -. "hooks inject into context" .-> E
+```
+
+### The graph
+`init` finds packages from what's already in the repo: `go.mod`/`go.work`, pnpm/npm/yarn workspaces (using Nx or Turborepo when present), Cargo crates, `pyproject.toml`/`setup.py`, and a `contracts/` directory. It reads each package's dependencies from its manifest and stores packages, edges and commands in `.agents/monoflow.config.json`.
+
+A changed file belongs to the package with the longest matching path prefix. The **affected set** is those packages plus everything that depends on them, transitively. Repo-wide files (lockfiles, `go.work`, root `tsconfig`, `turbo.json`/`nx.json`, CI workflows) mark every package as affected. For Go, `graph query` runs `go list` in every module in parallel to find the packages that actually import the target, so an agent doesn't have to grep for it.
+
+### The worktree
+`start <id>` fetches the base branch and runs `git worktree add -b agent/<id>` from `origin/<base>`, so local commits that origin does not have never ride along (`--from-local` starts from your local base instead). That puts every agent on its own branch, in its own directory, starting from the latest main.
+* **Shared state:** caches, proofs and events are symlinked to the root checkout, so every worktree sees the same results.
+* **Copied in:** config, `.env*` files and the binary are copied so the agent starts with a working setup.
+* **Dependencies:** pnpm repos get a background `pnpm install --offline`. Otherwise the root's `node_modules` is linked, or copy-on-write cloned with `--isolated-deps`.
+* **Sparse mode:** `--packages=` narrows the checkout to those packages and what they depend on. It uses Git's sparse cone and trims `go.work` to match.
+* **Bookkeeping:** worktrees are recorded in a locked registry. `worktree gc` removes stale ones but never a worktree with uncommitted or unpushed work.
+
+### verify
+1. **What changed:** uncommitted paths from `git status`. On a clean tree, it uses the branch's diff against `origin/main`.
+2. **Scope:** the changed packages run first, in parallel. Their dependents run only if those pass, so a broken edit fails in seconds instead of after the whole graph.
+3. **Commands:** your own scripts, typecheck → lint → test, stopping at the first failure. Go modules with default commands are scoped further: `gofmt` on the changed files, then `go vet`/`go test` only on the packages that import the change.
+4. **Cache:** the key is a SHA-256 of the package's files, its command, OS/arch, and its upstream packages' keys. A pass with the same key isn't re-run. The cache is shared across worktrees, and optionally over HTTP.
+5. **Baseline:** a failure is re-run on the merge-base with main, in a separate checkout. If main fails the same way, the failure is reported as pre-existing and doesn't block (`--strict` makes it block).
+6. **Flaky:** a timeout or connection-reset style failure is retried once and labeled `flaky` if it then passes.
+7. **Output:** ANSI is stripped, and tsc, Go, vitest and jest output is parsed. Errors are deduplicated across packages and printed as `file:line` with the surrounding source lines.
+
+**In the background:** in a `start` worktree, a hook fires after each agent tool call. Once edits have been quiet for 1.5s, MonoFlow starts `verify` in the background, keyed by a hash of HEAD plus the working-tree diff. When the agent then runs `verify` on the same files, it gets the stored result, often without waiting.
+
+### ship
+`ship` commits and returns immediately. Before committing, it runs the test-integrity check and secret scan. A detached process then:
+1. **Local CI:** checks the commit out in a clean worktree under `.agents/outer_loop/` and runs the affected packages against `origin/main`, plus your `ci_cmd` if you set one.
+2. **On red:** emits `OUTER_LOOP_REGRESSION` or `SHIP_FAILED` with the errors. Nothing is pushed.
+3. **On green:** checks that the commit merges cleanly into `origin/<base>` (on a conflict: `PR_CONFLICT` with the files, nothing pushed), builds a proof receipt for the PR body, pushes the branch, opens the PR and starts a CI watcher and a conflict watcher.
+
+Every push path (`push`, the push queued behind local CI, `ship`, `pr create`) runs the same conflict check at the moment of pushing. After the push, the conflict watcher re-checks the branch against the base every 2 minutes until it is merged, and emits `PR_CONFLICT` if the base moves into a conflict, so the agent hears about it at its next tool call.
+
+Pushes to `main`/`master` are refused. `init` installs Git hooks that reject `git commit`/`git push` unless MonoFlow runs them. The Claude Code and opencode hooks deny raw `git commit/push/checkout`, `gh pr create` and `gh run watch`, and point the agent to the MonoFlow command instead.
+
+### Events instead of polling
+Every result is a JSON file in `.agents/events/`: local CI, remote CI, PR conflicts, ship failures.
+* **Remote CI watcher:** a detached process, not the agent, polls `gh` every 8s for up to 25 min. It reports `CI_PASSED`, `CI_FAILED` (with the failing log), `CI_SKIPPED` or `PR_CONFLICT`.
+* **Claude Code delivery:** `SessionStart`, `UserPromptSubmit` and `PostToolUse` hooks add any undelivered events to the agent's context.
+* **Waking the agent:** when the agent ends its turn, the `Stop` hook waits (15 min by default) while a ship, local CI run or CI watch is still pending. If something then needs action, it blocks the stop and hands the event to the agent.
+* **Other harnesses:** opencode gets the same through its plugin. Any other harness can run `monoflow events wait <sha>`.
+
+### Proofs and remote CI
+After local CI, the passing cache records are pushed to `refs/monoflow/proofs/<sha>`. The GitHub Actions workflow from `init --setup-gh-actions` imports them on pull requests and runs `verify --affected`. Packages whose inputs match what was verified locally are cache hits, so remote CI only runs the rest. Set `ci.trust_local_proofs: false` to turn this off.
+
+### Guardrails, mechanically
+| Check | What it actually looks at |
+| :--- | :--- |
+| Test integrity | `git diff HEAD` in test/spec files: more assertions removed than added, commented-out assertions, literal tautologies like `expect(true).toBe(true)` |
+| Secret scan | Added lines and new files: AWS, Stripe, GitHub and OpenAI key formats, PEM private keys, `api_key=`-style assignments |
+| Task boundaries | Changed paths against `allowed_paths` / `read_only_paths` in `.agents/task.json` |
+| Circuit breaker | Same package set failing `verify` 5 times in a row (3 in local CI): snapshots the work as a checkpoint and tells the agent to stop and rethink |
+| Checkpoints | `git write-tree` / `git read-tree -u --reset`: a tree object outside any branch, so experiments don't add commits |
+| Same-file merges | `worktree sync`: Go files are merged per declaration with `go/ast`; other languages merge appended blocks and import lines, otherwise the local file is kept |
 
 ---
 
