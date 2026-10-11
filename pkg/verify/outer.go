@@ -536,7 +536,7 @@ func suggestRegressionTask(job *OuterJob, failedTargets []string) string {
 	if first, _, _ := strings.Cut(job.ErrorSummary, "\n"); first != "" {
 		sb.WriteString(fmt.Sprintf(" (first failure: %s)", first))
 	}
-	sb.WriteString(", then run `monoflow verify --affected` and `monoflow outer start`.")
+	sb.WriteString(", then `monoflow verify` and `monoflow ship -m \"<msg>\"` (commits and re-runs this check).")
 	return sb.String()
 }
 

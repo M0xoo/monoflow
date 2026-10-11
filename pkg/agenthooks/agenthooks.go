@@ -38,10 +38,10 @@ var Rules = []Rule{
 	{regexp.MustCompile(seg + `git\s+(?:-C\s+\S+\s+)?(?:checkout|switch)\b`), regexp.MustCompile(`git\s+(?:-C\s+\S+\s+)?checkout\s+(?:\S+\s+)?--\s`), "monoflow worktree create <agent-id> --packages=<p> (or monoflow branch <name>)", "switching branches in a shared checkout breaks other agents", false},
 	{regexp.MustCompile(seg + `gh\s+pr\s+create\b`), nil, `monoflow pr create --title="..."`, "PRs are only opened after the Definition-of-Done gate passes", false},
 	{regexp.MustCompile(seg + `gh\s+(?:run\s+watch|pr\s+checks)\b`), nil, "monoflow events unread (then end your turn)", "CI results arrive as events; polling burns context", false},
-	{regexp.MustCompile(seg + `go\s+(?:test|build|vet)\b`), regexp.MustCompile(`go\s+test\b.*\s-run[\s=]`), "monoflow verify --affected (or --package=<p> --test)", "covers dependents, caches results and returns compact JSON", true},
-	{regexp.MustCompile(seg + `(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:test|build|lint|typecheck)\b`), nil, "monoflow verify --affected", "covers dependents, caches results and returns compact JSON", true},
-	{regexp.MustCompile(seg + `(?:npx\s+)?(?:tsc|jest|vitest|eslint|pytest|mypy|ruff)\b`), regexp.MustCompile(`(?:jest|vitest|pytest)\b.*\s(?:-t|-k|--testNamePattern)[\s=]`), "monoflow verify --affected", "covers dependents, caches results and returns compact JSON", true},
-	{regexp.MustCompile(seg + `cargo\s+(?:test|build|check|clippy)\b`), nil, "monoflow verify --affected", "covers dependents, caches results and returns compact JSON", true},
+	{regexp.MustCompile(seg + `go\s+(?:test|build|vet)\b`), regexp.MustCompile(`go\s+test\b.*\s-run[\s=]`), "monoflow verify (or --package=<p> --test)", "covers dependents, caches results and returns compact JSON", true},
+	{regexp.MustCompile(seg + `(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:test|build|lint|typecheck)\b`), nil, "monoflow verify", "covers dependents, caches results and returns compact JSON", true},
+	{regexp.MustCompile(seg + `(?:npx\s+)?(?:tsc|jest|vitest|eslint|pytest|mypy|ruff)\b`), regexp.MustCompile(`(?:jest|vitest|pytest)\b.*\s(?:-t|-k|--testNamePattern)[\s=]`), "monoflow verify", "covers dependents, caches results and returns compact JSON", true},
+	{regexp.MustCompile(seg + `cargo\s+(?:test|build|check|clippy)\b`), nil, "monoflow verify", "covers dependents, caches results and returns compact JSON", true},
 }
 
 // Check returns the matching rule for a shell command, or nil when it is allowed.

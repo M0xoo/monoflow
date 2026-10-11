@@ -190,7 +190,7 @@ func handleReleases(rootDir, sub string) {
 			mode = "pinned@" + ver
 		}
 		out(map[string]any{"status": sub + "ned", "consumer": pos[0], "dependency": pos[1], "mode": mode, "file": file,
-			"next": "monoflow verify --affected, then monoflow commit"})
+			"next": "monoflow verify, then monoflow ship -m \"<msg>\""})
 
 	case "upgrades":
 		consumer := ""

@@ -118,3 +118,27 @@ because gitignored files were not in the cache key. Loose gitignored files in a 
 directories, symlinks or OS junk) are now part of the key, so a clean checkout re-runs instead of
 inheriting a result that may depend on a local-only file. Re-run with the cache on: outer loop
 regressed as it should.
+
+## opentelemetry-go: a change caught only by another module's tests (`tasks/status-codes.txt`)
+Task: upper-case `codes.Code` names (`UNSET/ERROR/OK`). Besides `codes`' own tests, the change breaks
+`exporters/stdout/stdouttrace` (a JSON expectation), which root-only checks miss. Ground truth:
+`go test ./...` in every module. 3 runs per side, `step-5-preview-free`, build before the fixes below.
+
+| | MonoFlow | plain git |
+|---|---|---|
+| green branches | 2/3 | 2/3 |
+| runs hitting the 30 min limit | 2 | 1 |
+| avg tool calls | 86 | 51 |
+| avg fresh tokens | 75k | 51k |
+
+MonoFlow lost this one. The plain agents also found the stdouttrace failure (they ran `go test` in
+every module), so the task did not separate the two as hoped, and MonoFlow's own friction cost the
+agents time. From the transcripts:
+- `verify --affected` said green while `verify --all` said red for the same preexisting gofmt debt
+  (only `--affected` classified preexisting failures): the agent stopped trusting both and wrote its
+  own test-every-module script. Fixed: every verify mode shares one classified path.
+- `graph query codes` / `verify --package=codes` returned "not found" (`codes` is a Go package inside
+  the root module). Fixed: both accept a path inside a package.
+- Before this run: a preexisting lint failure (otel's unformatted semconv files) stopped the check
+  chain, so the root module's tests never ran and were reported green. Fixed: checks after a
+  preexisting failure still run.
