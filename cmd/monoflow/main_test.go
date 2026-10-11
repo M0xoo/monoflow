@@ -106,3 +106,51 @@ func TestMain(m *testing.M) {
 	_ = os.Setenv("MONOFLOW_NO_WARM", "1")
 	os.Exit(m.Run())
 }
+
+// --help on a command with side effects prints its usage and does nothing, wherever the flag
+// sits; and pr create without --title opens nothing (an agent's "pr create --help" on an old
+// binary opened a PR under an invented title). Runs in a throwaway repo with no remote.
+func TestSideEffectCommandsHelpAndTitle(t *testing.T) {
+	if os.Getenv("MONOFLOW_HELP_CHILD") == "1" {
+		os.Args = append([]string{"monoflow"}, strings.Fields(os.Getenv("MONOFLOW_HELP_ARGS"))...)
+		main()
+		return
+	}
+	repo := t.TempDir()
+	git := func(args ...string) string {
+		cmd := exec.Command("git", append([]string{"-c", "user.email=t@t", "-c", "user.name=t"}, args...)...)
+		cmd.Dir = repo
+		out, _ := cmd.CombinedOutput()
+		return strings.TrimSpace(string(out))
+	}
+	git("init", "-q", "-b", "main")
+	_ = os.WriteFile(filepath.Join(repo, "a.txt"), []byte("a\n"), 0644)
+	git("add", "-A")
+	git("commit", "-qm", "init")
+	_ = os.WriteFile(filepath.Join(repo, "a.txt"), []byte("b\n"), 0644)
+	branches := git("branch", "--list")
+
+	child := func(args string) (string, error) {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestSideEffectCommandsHelpAndTitle$")
+		cmd.Dir = repo
+		cmd.Env = append(os.Environ(), "MONOFLOW_HELP_CHILD=1", "MONOFLOW_HELP_ARGS="+args)
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	for _, args := range []string{"pr create --help", "pr create --title=x --help", "ship -m x --help", "start t1 -h", "commit -m x --help"} {
+		out, err := child(args)
+		if err != nil || !strings.Contains(out, "Usage") {
+			t.Fatalf("monoflow %s: want usage and exit 0, got %v: %s", args, err, out)
+		}
+	}
+	out, err := child("pr create --body=x")
+	if err == nil || !strings.Contains(out, "--title") {
+		t.Fatalf("pr create without --title must fail and say why, got %v: %s", err, out)
+	}
+	if got := git("branch", "--list"); got != branches {
+		t.Fatalf("no branch may be created: before %q after %q", branches, got)
+	}
+	if got := git("status", "--porcelain"); got != "M a.txt" {
+		t.Fatalf("the working tree must be untouched, got %q", got)
+	}
+}

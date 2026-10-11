@@ -59,7 +59,9 @@ func (em *EventManager) Pending(consumer, branch string, localPackages map[strin
 	done := em.delivered(consumer)
 	var out []*Event
 	for _, e := range all {
-		if !done[e.ID] && Relevant(e, branch, localPackages) {
+		// Read: acknowledged, or superseded by a newer commit's result (an agent handed a
+		// replaced CI failure set out to fix what the newer push had already fixed).
+		if !done[e.ID] && !e.Read && Relevant(e, branch, localPackages) {
 			out = append(out, e)
 		}
 	}

@@ -1,0 +1,24 @@
+#!/bin/bash
+# fake-gh: a stand-in for the GitHub CLI, driven by files in $FAKE_GH (one scenario's state).
+#   pr-<branch>.json     what `gh pr view <branch> --json ...` prints (absent: no PR)
+#   runs-<sha>.json      what `gh run list --commit <sha>` prints (absent: [])
+#   log-<run-id>.txt     what `gh run view <id> --log-failed` prints
+# Every call is appended to $FAKE_GH/calls.log.
+echo "$*" >> "$FAKE_GH/calls.log"
+case "$1 $2" in
+  "pr view")
+    f="$FAKE_GH/pr-$(echo "$3" | tr / _).json"
+    if [ -f "$f" ]; then cat "$f"; else echo "no pull requests found for branch \"$3\"" >&2; exit 1; fi ;;
+  "pr create")
+    head=""; while [ $# -gt 0 ]; do [ "$1" = "--head" ] && head="$2"; shift; done
+    echo "{\"number\":7,\"title\":\"x\",\"mergeable\":\"MERGEABLE\",\"mergeStateStatus\":\"CLEAN\"}" > "$FAKE_GH/pr-$(echo "$head" | tr / _).json"
+    echo "https://github.com/acme/app/pull/7" ;;
+  "pr list") echo "[]" ;;
+  "run list")
+    sha=""; while [ $# -gt 0 ]; do [ "$1" = "--commit" ] && sha="$2"; shift; done
+    f="$FAKE_GH/runs-$sha.json"; if [ -f "$f" ]; then cat "$f"; else echo "[]"; fi ;;
+  "run view")
+    f="$FAKE_GH/log-$3.txt"; [ -f "$f" ] && cat "$f" ;;
+  "auth status") exit 0 ;;
+  *) echo "[]" ;;
+esac

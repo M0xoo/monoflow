@@ -103,6 +103,17 @@ func handleShip(rootDir string) {
 			out["commit"] = c["commit_sha"]
 		}
 	}
+	// Never push a branch that conflicts with the base: say so now, with the files, instead of
+	// a PR that cannot merge (and an agent that never hears about it).
+	if base, files, checked := baseConflicts(rootDir); checked && len(files) > 0 {
+		emitConflict(rootDir, base, files)
+		out["status"] = "conflict"
+		out["error"] = fmt.Sprintf("your branch conflicts with origin/%s; nothing was pushed", base)
+		out["conflicts"] = files
+		out["next"] = conflictNext(base, files)
+		printOut(out)
+		os.Exit(1)
+	}
 	if title == "" {
 		title = strings.SplitN(strings.TrimSpace(msg), "\n", 2)[0]
 	}

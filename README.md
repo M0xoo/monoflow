@@ -58,7 +58,7 @@ cd /path/to/your-repo
 | File | Purpose |
 | :--- | :--- |
 | `.agents/monoflow.config.json` | Packages, their commands and the dependency graph |
-| `AGENTS.md` · `.agents/skills/monoflow/` | A 1.4 KB guide, placed first in `AGENTS.md`; your own guide follows it |
+| `AGENTS.md` · `CLAUDE.md` · `.agents/skills/monoflow/` | A 1.4 KB guide, placed first in both `AGENTS.md` and `CLAUDE.md` (Claude Code reads the latter); your own instructions follow it |
 | `.claude/settings.json` · `.opencode/plugin/` | Hooks that deliver results to the agent and redirect raw commands |
 | `.agents/task.json` · `.agents/quarantine.json` | Task boundaries; flaky tests kept out of the loop |
 

@@ -101,10 +101,12 @@ func InitRepo(targetDir string, binarySrcPath string) (*InitResult, error) {
 		return nil, err
 	}
 
-	// Agent instructions: merge a delimited MonoFlow section into AGENTS.md (keeping any
-	// existing project instructions) and point CLAUDE.md at it when the repo has one.
+	// Agent instructions: the same delimited MonoFlow section in AGENTS.md and CLAUDE.md
+	// (created when missing; any existing project instructions are kept after it). Claude Code
+	// loads CLAUDE.md, not AGENTS.md: with only a pointer there, or no CLAUDE.md at all, Claude
+	// sessions started without the guide.
 	_ = mergeSection(filepath.Join(absTarget, "AGENTS.md"), AgentRuleTemplate, true)
-	_ = mergeSection(filepath.Join(absTarget, "CLAUDE.md"), ClaudePointer, false)
+	_ = mergeSection(filepath.Join(absTarget, "CLAUDE.md"), AgentRuleTemplate, true)
 
 	skillPath := filepath.Join(agentsDir, "skills", "monoflow", "SKILL.md")
 	if err := os.WriteFile(skillPath, []byte(AgentSkillTemplate), 0644); err != nil {
@@ -316,12 +318,6 @@ const (
 	sectionStart = "<!-- monoflow:start (managed by monoflow init) -->"
 	sectionEnd   = "<!-- monoflow:end -->"
 )
-
-// ClaudePointer is merged into an existing CLAUDE.md (Claude Code reads CLAUDE.md, not AGENTS.md).
-const ClaudePointer = `## MonoFlow
-This monorepo is governed by MonoFlow; follow the MonoFlow section of AGENTS.md.
-The path is ` + "`monoflow start <task-id>` → edit → `monoflow verify` → `monoflow ship -m \"<msg>\"`" + ` (run as ` + "`./bin/monoflow`" + `).
-`
 
 // mergeSection inserts or replaces the MonoFlow-managed section of a markdown file,
 // leaving everything else untouched. When create is false a missing file is left absent.

@@ -39,7 +39,11 @@ type WorktreeInfo struct {
 	Strategy        string    `json:"strategy,omitempty"`
 	MonoflowBin     string    `json:"monoflow_bin,omitempty"`
 	ShieldHooks     bool      `json:"shield_hooks"`
-	Branch          string    `json:"branch,omitempty"`
+	// BaseRef is what the branch was cut from ("origin/main", or "main" with FromLocal);
+	// LocalOnlyCommits counts commits on the local base that origin does not have.
+	BaseRef          string `json:"base_ref,omitempty"`
+	LocalOnlyCommits int    `json:"local_only_commits,omitempty"`
+	Branch           string `json:"branch,omitempty"`
 	// Live state (computed by List, not persisted)
 	Ahead    int    `json:"ahead,omitempty"`    // commits not yet on the base branch
 	Unpushed int    `json:"unpushed,omitempty"` // commits not yet on the remote branch
@@ -55,6 +59,9 @@ type CreateOptions struct {
 	Strategy       subset.DepStrategy
 	IncludeDeps    bool
 	BaseBranch     string // branch to cut agent/<id> from (default: origin/HEAD, main, master)
+	// FromLocal starts from the local base branch instead of origin's (the default): local
+	// commits not on origin made agents' PRs conflict with the base or carry unrelated work.
+	FromLocal bool
 }
 
 // IsolateResult details the result of isolating dependencies for an agent worktree.
@@ -118,6 +125,8 @@ func (m *Manager) CreateWithOpts(agentID string, opts CreateOptions) (*WorktreeI
 	// 1. Each agent works on its own branch (agent/<id>) cut from the base branch, never on
 	// a detached copy of whatever the shared root happens to have checked out.
 	branch := "agent/" + agentID
+	var baseRef string
+	localOnly := 0
 	if _, err := m.runGit("rev-parse", "--verify", "--quiet", "refs/heads/"+branch); err == nil {
 		if _, err := m.runGit("worktree", "add", wtPath, branch); err != nil {
 			return nil, fmt.Errorf("failed to create git worktree: %w", err)
@@ -125,8 +134,18 @@ func (m *Manager) CreateWithOpts(agentID string, opts CreateOptions) (*WorktreeI
 	} else {
 		base := opts.BaseBranch
 		if base == "" {
-			base = m.freshestBase(m.defaultBaseBranch())
+			local := m.defaultBaseBranch()
+			base = local
+			if !opts.FromLocal {
+				base = m.originBase(local)
+			}
+			if base != local {
+				if out, err := m.runGit("rev-list", "--count", base+".."+local); err == nil {
+					localOnly, _ = strconv.Atoi(strings.TrimSpace(out))
+				}
+			}
 		}
+		baseRef = base
 		if _, err := m.runGit("worktree", "add", "--no-track", "-b", branch, wtPath, base); err != nil {
 			return nil, fmt.Errorf("failed to create git worktree: %w", err)
 		}
@@ -294,22 +313,24 @@ func (m *Manager) CreateWithOpts(agentID string, opts CreateOptions) (*WorktreeI
 	headSHA, _ := m.runGit("-C", wtPath, "rev-parse", "HEAD")
 
 	info := WorktreeInfo{
-		AgentID:         agentID,
-		Path:            wtPath,
-		CreatedAt:       time.Now().UTC(),
-		LastHeartbeat:   time.Now().UTC(),
-		HeadSHA:         headSHA,
-		SymlinksCount:   symlinkCount,
-		Isolated:        opts.IsolatedDeps,
-		IsolationMethod: isolationMethod,
-		FocusedPackage:  opts.FocusedPackage,
-		Packages:        includedPkgs,
-		OmittedPackages: omittedPkgs,
-		IsSparse:        isSparse,
-		Strategy:        string(strategy),
-		MonoflowBin:     monoflowBin,
-		ShieldHooks:     shielded,
-		Branch:          branch,
+		AgentID:          agentID,
+		Path:             wtPath,
+		CreatedAt:        time.Now().UTC(),
+		LastHeartbeat:    time.Now().UTC(),
+		HeadSHA:          headSHA,
+		SymlinksCount:    symlinkCount,
+		Isolated:         opts.IsolatedDeps,
+		IsolationMethod:  isolationMethod,
+		FocusedPackage:   opts.FocusedPackage,
+		Packages:         includedPkgs,
+		OmittedPackages:  omittedPkgs,
+		IsSparse:         isSparse,
+		Strategy:         string(strategy),
+		MonoflowBin:      monoflowBin,
+		ShieldHooks:      shielded,
+		Branch:           branch,
+		BaseRef:          baseRef,
+		LocalOnlyCommits: localOnly,
 	}
 
 	defer m.lockRegistry()()
@@ -363,13 +384,19 @@ func (m *Manager) defaultBaseBranch() string {
 			return b
 		}
 	}
+	for _, b := range []string{"main", "master"} {
+		if _, err := m.runGit("rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+b); err == nil {
+			return b
+		}
+	}
 	return "HEAD"
 }
 
-// freshestBase returns origin/<base> when the local <base> is behind it (the shared root is
-// rarely pulled while agents work in worktrees), so a new task never starts from stale code.
-// The fetch is best-effort and bounded: offline, the local refs decide.
-func (m *Manager) freshestBase(base string) string {
+// originBase returns origin/<base>, freshly fetched, when origin has it: a new task starts from
+// what its PR will merge into, not from the local base, which may be stale or carry commits
+// origin does not have (an agent's PR conflicted with master that way). The fetch is
+// best-effort and bounded; without a remote branch the local base is used.
+func (m *Manager) originBase(base string) string {
 	if base == "HEAD" {
 		return base
 	}
@@ -389,10 +416,7 @@ func (m *Manager) freshestBase(base string) string {
 	if _, err := m.runGit("rev-parse", "--verify", "--quiet", "refs/remotes/"+remote); err != nil {
 		return base
 	}
-	if _, err := m.runGit("merge-base", "--is-ancestor", base, remote); err == nil {
-		return remote
-	}
-	return base
+	return remote
 }
 
 // resolveMonoflowBinary finds the monoflow binary the root repo uses.

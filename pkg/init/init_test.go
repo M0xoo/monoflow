@@ -69,10 +69,33 @@ func TestMergeSectionKeepsProjectInstructions(t *testing.T) {
 	if strings.Count(s, sectionStart) != 1 || !strings.Contains(s, "monoflow verify") {
 		t.Fatalf("expected exactly one MonoFlow section")
 	}
-	missing := filepath.Join(t.TempDir(), "CLAUDE.md")
-	_ = mergeSection(missing, ClaudePointer, false)
-	if _, err := os.Stat(missing); err == nil {
-		t.Fatalf("CLAUDE.md must not be created when absent")
+}
+
+// Claude Code loads CLAUDE.md, not AGENTS.md: init puts the full MonoFlow guide in both,
+// creating CLAUDE.md when missing and keeping an existing one's instructions.
+func TestInitWritesGuideToClaudeMD(t *testing.T) {
+	for _, existing := range []string{"", "# Our rules\n\nNo force pushes.\n"} {
+		dir := t.TempDir()
+		_ = exec.Command("git", "-C", dir, "init", "-q").Run()
+		if existing != "" {
+			_ = os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte(existing), 0644)
+		}
+		for i := 0; i < 2; i++ { // idempotent
+			if _, err := InitRepo(dir, ""); err != nil {
+				t.Fatal(err)
+			}
+		}
+		data, err := os.ReadFile(filepath.Join(dir, "CLAUDE.md"))
+		if err != nil {
+			t.Fatalf("CLAUDE.md must exist after init (existing=%q): %v", existing, err)
+		}
+		s := string(data)
+		if strings.Count(s, sectionStart) != 1 || !strings.Contains(s, "monoflow verify") || !strings.Contains(s, "monoflow ship") {
+			t.Fatalf("CLAUDE.md must carry the MonoFlow guide once, got:\n%s", s)
+		}
+		if existing != "" && !strings.HasSuffix(s, existing) {
+			t.Fatalf("CLAUDE.md must keep the project's instructions, got:\n%s", s)
+		}
 	}
 }
 

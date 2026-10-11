@@ -217,6 +217,7 @@ func hasHelpArg(args []string) bool {
 var commandDetails = map[string]string{
 	"start": `  start <task-id>                     Isolated worktree on branch agent/<task-id> off the latest main (full checkout)
   start <task-id> --packages=<p1,p2>  Same, projecting only those packages (+ their dependencies)
+  start <task-id> --from-local        Start from your local main instead of origin's (the default)
 Then cd into the printed path and work there.`,
 	"ship": `  ship -m "<commit message>"          Commit uncommitted work, run local CI on that commit, push, open the PR
   ship -m "<msg>" --title="<PR title>" --body="<text>" | --body-file=<path>
@@ -238,8 +239,9 @@ One call replaces commit + pr create. Afterwards end your turn: CI results are d
   verify --proof=<task-id>            Verify a Proof-of-Work receipt
 In a worktree from 'start', verify already runs in the background once your edits settle;
 'monoflow verify' then prints that result (or waits for it) when the files are unchanged.`,
-	"worktree": `  worktree create <agent-id> --packages=<p1,p2> [--deps=<strategy>] [--isolated-deps]
-                                      Isolated worktree on branch agent/<agent-id>
+	"worktree": `  worktree create <agent-id> --packages=<p1,p2> [--deps=<strategy>] [--isolated-deps] [--from-local]
+                                      Isolated worktree on branch agent/<agent-id>, cut from origin/main
+                                      (freshly fetched); --from-local cuts it from your local main
   worktree list                       List registered worktrees
   worktree focus|update <agent-id> --packages=<...>   Change the projected packages
   worktree sync --to=<agent> --from=<agent>   AST-merge another agent's changes into a worktree

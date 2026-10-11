@@ -23,6 +23,7 @@ func handleEvents(rootDir string) {
 
 	switch sub {
 	case "unread":
+		checkPushedBranchConflicts(rootDir) // base moved since the push? report it with the rest
 		list, err := em.List(true)
 		if err != nil {
 			printRaw(fmt.Sprintf(`{"error": %q}`, err))

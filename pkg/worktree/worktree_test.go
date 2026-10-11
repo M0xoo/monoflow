@@ -445,3 +445,45 @@ func TestWorktreeKeepsBranchConfig(t *testing.T) {
 		t.Fatalf("a file the branch does not have is still provided from the root, got %s", got)
 	}
 }
+
+// A new worktree starts from origin's base (freshly fetched), not the local one: a local commit
+// origin lacks is left out and reported; FromLocal starts from the local base instead.
+func TestWorktreeStartsFromOriginBase(t *testing.T) {
+	remote := t.TempDir()
+	repoDir := setupTestRepo(t)
+	defer os.RemoveAll(repoDir)
+	git := func(dir string, args ...string) string {
+		cmd := exec.Command("git", append([]string{"-c", "user.email=t@t", "-c", "user.name=t"}, args...)...)
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	git(remote, "init", "-q", "--bare", "-b", "main")
+	git(repoDir, "remote", "add", "origin", remote)
+	git(repoDir, "push", "-q", "origin", "main")
+	_ = os.WriteFile(filepath.Join(repoDir, "local.txt"), []byte("local only\n"), 0644)
+	git(repoDir, "add", "local.txt")
+	git(repoDir, "commit", "-qm", "local only")
+
+	mgr := NewManager(repoDir)
+	info, err := mgr.CreateWithOpts("from-origin", CreateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.BaseRef != "origin/main" || info.LocalOnlyCommits != 1 {
+		t.Fatalf("base %q, local-only %d", info.BaseRef, info.LocalOnlyCommits)
+	}
+	if _, err := os.Stat(filepath.Join(info.Path, "local.txt")); err == nil {
+		t.Fatal("the local-only commit must not be in a worktree cut from origin/main")
+	}
+	local, err := mgr.CreateWithOpts("from-local", CreateOptions{FromLocal: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(local.Path, "local.txt")); err != nil || local.BaseRef != "main" {
+		t.Fatalf("FromLocal must start from the local main (base %q)", local.BaseRef)
+	}
+}

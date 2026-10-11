@@ -1,4 +1,4 @@
-.PHONY: all build test clean
+.PHONY: all build test clean e2e e2e-events
 
 all: build test
 
@@ -10,6 +10,11 @@ test:
 
 e2e: build
 	./bin/monoflow scenario run
+
+# Events from PRs, remote CI and MonoFlow's loops, delivered through the Claude Code hooks,
+# the opencode plugin and events unread/wait (real repos, fake gh; nothing leaves the machine).
+e2e-events: build
+	./e2e/events/run.sh ./bin/monoflow
 
 clean:
 	rm -rf bin/monoflow
