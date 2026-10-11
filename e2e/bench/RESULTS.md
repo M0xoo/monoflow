@@ -181,7 +181,7 @@ otel runs (one run at a time, fresh copy each). The plain arm has the repo's own
 
 | | build | time (s) | tool calls | tokens | ground truth |
 |---|---|---|---|---|---|
-| plain git + Turbo B-1, B-2, B-3 | | 345 / 237 / 239 (mean 274) | 32 / 36 / 29 | 79k / 87k / 83k (mean 83k) | pass |
+| plain git + Turbo B-1..B-5 | | 345 / 237 / 239 / 307 / 349 (mean 295) | 32 / 36 / 29 / 36 / 32 | 79k / 87k / 83k / 91k / 93k (mean 87k) | pass (5/5) |
 | MonoFlow A-1..A-4 | early | 539 / 586 / 470 / 377 | 24 / 41 / 28 / 34 | 76k / 106k / 83k / 91k | pass |
 | MonoFlow A-5, A-6 | v20 | 610* / 398 | 23 / 27 | 87k / 77k | A-6 never pushed (bug below) |
 | MonoFlow A-7 | v22 | 839 | 35 | 82k | correct; push blocked by a flaky test (fixed) |
@@ -191,13 +191,34 @@ otel runs (one run at a time, fresh copy each). The plain arm has the repo's own
 | MonoFlow A-11 | v26 | 411 | 29 | 77k | correct; push blocked by a flaky test under my load** |
 | MonoFlow A-12 | v27 | 292 | 26 | 100k | pass |
 | MonoFlow A-13 | v29 | **277** | **22** | 87k | pass*** |
+| MonoFlow A-14 | v30 | 377 | 22 | 87k | pass (skipped start: no background verify) |
+| MonoFlow A-15 | v31 | 307 | 33 | 90k | pass*** |
+| MonoFlow A-16 | v31 | 312 | 25 | 90k | pass |
+| MonoFlow A-17 | v31 | 433 | 24 | 100k | correct, but its push was wrongly blocked (fixed in v32, below) |
 
 \* A-5's time is contaminated (heavy runs of mine on the same machine during it).
 \*\* My Go test suite ran during A-11's local CI; the failing timing test passes 3/3 alone.
 \*\*\* One openapi CLI test timed out in the ground-truth run (5 s limit; it passes alone, the
 same file's other CLI tests time out on main too, and the change does not touch the CLI).
 
-Reading: MonoFlow started far behind here (539-610 s against 237-345 s) and is now level on time
+**Five runs per side (A-13..A-17 against B-1..B-5): MonoFlow loses on trpc.** Time 341 s
+against 295 s (+16%), tokens 91k against 87k (+5%), tool calls 25 against 33 (-24%). Correctness:
+every change on both sides was right; MonoFlow wrongly refused one push (A-17). What remains is
+the length of each verify (90-145 s on trpc: everything CI runs for the change, 9-11 packages),
+where the plain agent runs a few vitest files it picks itself.
+
+Bugs found by A-14..A-17 (fixed):
+- agents that skip start got no background verify -> verify outside a worktree starts the watcher
+  there (read-only, 15 min idle limit).
+- background runs were cancelled by each new edit, so they never finished -> they run to the end,
+  then the newest state runs.
+- A-17: the test-file re-run counted a pre-existing failure (a memory test failing on main) and a
+  flaky one (a ping timing test, passes 5/5 alone) as one result, so the flaky one was judged new
+  and blocked a correct push -> each failure is judged on its own.
+- the ground-truth script counted openapi CLI test timeouts under its own full parallel run as
+  agent errors (A-13, A-15) -> failures are re-run alone before they count, for both arms.
+
+Earlier reading: MonoFlow started far behind here (539-610 s against 237-345 s) and is now level on time
 with plain git plus Turbo (277 s against a mean of 274 s, slower than its two fastest runs) with
 the fewest tool calls of any run (22 against 29-36), and tokens at the top of the plain range
 (87k against 79-87k). Every MonoFlow push was gated on local CI on the exact commit and checked
