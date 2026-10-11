@@ -110,7 +110,10 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 		c := compactSuite(res, rootDir, g)
 		// Say what was covered and what to do next: agents that were not told re-ran
 		// verify --all and raw go test / npm test "to be sure" (benchmark: +6 calls a run).
-		if targetPkg == "" && !verifyAll && res.TotalTargets > 0 {
+		if targetPkg == "" && !verifyAll && len(res.Pending) > 0 {
+			c["scope"] = fmt.Sprintf("%d changed packages checked first; %d dependents run once they pass", res.TotalTargets, len(res.Pending))
+			c["next"] = "fix errors[] (file:line), then monoflow verify again"
+		} else if targetPkg == "" && !verifyAll && res.TotalTargets > 0 {
 			c["scope"] = fmt.Sprintf("%d packages: every changed package and every package depending on them, repo-wide (what CI runs for this change)", res.TotalTargets)
 			if res.Status == "passed" {
 				c["next"] = `nothing else to run: monoflow ship -m "<commit message>"`

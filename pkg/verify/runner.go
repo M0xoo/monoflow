@@ -69,6 +69,9 @@ type SuiteResult struct {
 	Errors        []SharedError `json:"errors,omitempty"`
 	ErrorsOmitted int           `json:"errors_omitted,omitempty"`
 	Hint          string        `json:"hint,omitempty"`
+	// Pending lists dependents not checked yet because a changed package failed: they run
+	// once the changed packages pass.
+	Pending []string `json:"pending,omitempty"`
 }
 
 // Runner executes verification tasks with maximum parallelism, caching, and minimal latency.
@@ -306,7 +309,32 @@ func (r *Runner) VerifyAffected(g *graph.DependencyGraph, changedFiles []string,
 	}
 	_ = release.EnsurePinned(r.RootDir, g)
 	affected := g.ComputeAffected(changedFiles)
-	res := r.VerifyPackages(g, affected.AllAffected, opt)
+	// Changed packages first: while they fail, checking their dependents only slows the fix loop
+	// (each edit re-runs them all: 1-2 min on trpc, where an agent iterating on one package wants
+	// seconds). Once they pass, the dependents run, so a pass still covers what CI runs.
+	direct := map[string]bool{}
+	for _, n := range affected.DirectlyChanged {
+		direct[n] = true
+	}
+	var rest []string
+	for _, n := range affected.AllAffected {
+		if !direct[n] {
+			rest = append(rest, n)
+		}
+	}
+	res := r.VerifyPackages(g, affected.DirectlyChanged, opt)
+	if res.Status == "failed" && len(rest) > 0 {
+		res.Pending = rest
+	} else if len(rest) > 0 {
+		dep := r.VerifyPackages(g, rest, opt)
+		res.Status = dep.Status
+		res.TotalTargets += dep.TotalTargets
+		res.PassedTargets += dep.PassedTargets
+		res.FailedTargets += dep.FailedTargets
+		res.CachedTargets += dep.CachedTargets
+		res.AffectedPackages = append(res.AffectedPackages, dep.AffectedPackages...)
+		res.Results = append(res.Results, dep.Results...)
+	}
 	res.DurationMs = float64(time.Since(start).Microseconds()) / 1000.0
 	return res
 }

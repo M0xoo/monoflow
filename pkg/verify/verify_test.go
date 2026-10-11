@@ -175,3 +175,29 @@ func TestPrepareCommandsMergeUpstreams(t *testing.T) {
 		t.Fatalf("got %q, want %q", got, want)
 	}
 }
+
+// While a changed package fails, its dependents are not run (fast fix loop); once it passes
+// they are, so a pass still covers every dependent.
+func TestVerifyAffectedChecksChangedPackagesFirst(t *testing.T) {
+	root := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(root, "core"), 0755)
+	_ = os.MkdirAll(filepath.Join(root, "app"), 0755)
+	_ = os.WriteFile(filepath.Join(root, "core", "ok"), []byte("no\n"), 0644)
+	g := graph.New(root)
+	g.AddPackage(&graph.PackageNode{Name: "core", Path: "core", Language: graph.LangGeneric, TestCmd: `grep -qx yes ok || { echo "core_test.go:1: not ok"; exit 1; }`})
+	g.AddPackage(&graph.PackageNode{Name: "app", Path: "app", Language: graph.LangGeneric, Dependencies: []string{"core"}, TestCmd: "touch ran"})
+	g.RebuildEdges()
+	r := NewRunner(root)
+	res := r.VerifyAffected(g, []string{"core/ok"}, VerifyOptions{Strict: true})
+	if res.Status != "failed" || len(res.Pending) != 1 || res.Pending[0] != "app" {
+		t.Fatalf("want core failed, app pending: %+v", res)
+	}
+	if _, err := os.Stat(filepath.Join(root, "app", "ran")); err == nil {
+		t.Fatalf("dependent ran while the changed package failed")
+	}
+	_ = os.WriteFile(filepath.Join(root, "core", "ok"), []byte("yes\n"), 0644)
+	res = r.VerifyAffected(g, []string{"core/ok"}, VerifyOptions{Strict: true})
+	if res.Status != "passed" || res.TotalTargets != 2 || len(res.Pending) != 0 {
+		t.Fatalf("want both checked and passed: %+v", res)
+	}
+}
