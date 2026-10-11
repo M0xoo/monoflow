@@ -72,7 +72,7 @@ func InitRepo(targetDir string, binarySrcPath string) (*InitResult, error) {
 	// package (its verify commands, even ones blanked on purpose) and its verify_exclude; only
 	// new packages and fields the old config lacks (fix_cmd) come from discovery.
 	configPath := filepath.Join(agentsDir, "monoflow.config.json")
-	verifyExclude := graph.DefaultVerifyExclude(pkgNodes)
+	verifyExclude := graph.RepoVerifyExclude(absTarget, pkgNodes)
 	if data, err := os.ReadFile(configPath); err == nil {
 		var old graph.Config
 		if json.Unmarshal(data, &old) == nil {

@@ -244,3 +244,16 @@ func TestDiscoverFixCommand(t *testing.T) {
 		}
 	}
 }
+
+// verify_exclude follows what the repo's own scripts exclude from their task runs (directories
+// that hold packages), on top of examples/.
+func TestRepoVerifyExcludeFromScripts(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"package.json": `{"name":"root","scripts":{"build":"nx affected --target=build --exclude=examples/** --exclude=integrations/**","lint":"eslint --exclude=docs/**"}}`,
+	})
+	pkgs := []PackageNode{{Name: "core", Path: "packages/core"}, {Name: "ex", Path: "examples/react"}, {Name: "it", Path: "integrations/vue-vite"}}
+	got := RepoVerifyExclude(root, pkgs)
+	if !reflect.DeepEqual(got, []string{"examples/", "integrations/"}) {
+		t.Fatalf("got %v", got)
+	}
+}
