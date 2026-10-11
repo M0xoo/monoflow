@@ -150,11 +150,17 @@ func handlePR(rootDir string) {
 			os.Exit(1)
 		}
 
-		if asJSON {
+		switch {
+		case asJSON:
 			data, _ := json.MarshalIndent(res, "", "  ")
 			fmt.Println(string(data))
-		} else {
+		case hasFlag("--verbose") || stdoutIsTerminal():
 			fmt.Println(res.FormatView())
+		default:
+			// Agents read this through a pipe: the 12 KB dossier view cost them context for a
+			// handful of facts. --verbose (or a terminal) shows the full view.
+			data, _ := json.MarshalIndent(compactPRStatus(res), "", "  ")
+			fmt.Println(string(data))
 		}
 
 	case "review":
@@ -312,4 +318,46 @@ func compactPR(res *pr.PRMetadata) map[string]any {
 		out["remote_pr"] = res.RemotePR
 	}
 	return out
+}
+
+func compactPRStatus(res *pr.PRStatusResult) map[string]any {
+	out := map[string]any{
+		"pr_id":           res.PRID,
+		"state":           res.RemoteState,
+		"proof":           res.ProofStatus,
+		"dod":             fmt.Sprintf("%d/%d passed", res.DoDPassedChecks, res.DoDTotalChecks),
+		"unified_verdict": res.UnifiedVerdict,
+	}
+	if res.GitHubURL != "" {
+		out["url"] = res.GitHubURL
+	}
+	if res.RemoteCIStatus != "" {
+		out["remote_ci"] = res.RemoteCIStatus
+	}
+	if res.ReviewDecision != "" || res.RemoteReviewDecision != "" {
+		out["review"] = strings.TrimSpace(res.ReviewDecision + " " + res.RemoteReviewDecision)
+	}
+	if res.Mergeable != "" {
+		out["mergeable"] = res.Mergeable
+	}
+	if res.SyncState != "" && res.SyncState != "IN_SYNC" {
+		out["sync"] = res.SyncState
+	}
+	if res.ProofReceipt != nil {
+		var failed []string
+		for _, c := range res.ProofReceipt.DoDChecks {
+			if c.Status != "PASSED" {
+				failed = append(failed, c.ID+": "+c.Evidence)
+			}
+		}
+		if len(failed) > 0 {
+			out["checks_not_passed"] = failed
+		}
+	}
+	return out
+}
+
+func stdoutIsTerminal() bool {
+	fi, err := os.Stdout.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
 }

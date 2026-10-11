@@ -63,11 +63,15 @@ func handleEvents(rootDir string) {
 			}
 			list = mine
 		}
+		var shown any = list
+		if !hasFlag("--verbose") {
+			shown = compactEvents(list)
+		}
 		data, _ := json.MarshalIndent(map[string]any{
 			"scope":                scope,
 			"unread_count":         len(list),
 			"other_branches_count": others,
-			"events":               list,
+			"events":               shown,
 		}, "", "  ")
 		fmt.Println(string(data))
 
@@ -230,4 +234,29 @@ func handleEventsWait(rootDir string, em *events.EventManager) {
 	}
 	fmt.Printf(`{"status": "timeout", "commit": %q, "hint": "no CI result after %d minutes; check 'monoflow events list' and 'monoflow ci health'"}`+"\n", sha, timeoutMin)
 	os.Exit(2)
+}
+
+// compactEvents keeps what an agent acts on (type, commit, summary, the suggested fix and any
+// failure detail); ids, timestamps and run metadata are --verbose.
+func compactEvents(list []*events.Event) []map[string]any {
+	out := make([]map[string]any, 0, len(list))
+	for _, e := range list {
+		m := map[string]any{"type": e.Type, "summary": e.Summary}
+		if len(e.CommitSHA) >= 8 {
+			m["commit"] = e.CommitSHA[:8]
+		}
+		if e.RequiresAction {
+			m["requires_action"] = true
+		}
+		if e.SuggestedTask != "" {
+			m["suggested_task"] = e.SuggestedTask
+		}
+		for _, k := range []string{"failure", "failures", "error_summary", "consumer", "dependency", "version", "impact"} {
+			if v, ok := e.Payload[k]; ok {
+				m[k] = v
+			}
+		}
+		out = append(out, m)
+	}
+	return out
 }
