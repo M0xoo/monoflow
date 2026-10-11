@@ -4,6 +4,8 @@
 # (compiles code and tests) in every module of the pushed branch; a red branch goes back to its
 # agent (FIX_ROUNDS, default 1), so metrics are the cost to green.
 # Usage: e2e/bench/bigrepo.sh <workdir> <monoflow-binary> <out> <otel-git-dir> [model] [runs]
+# TASK_FILE=e2e/bench/tasks/<name>.txt swaps the task; GT_CMD (default "go vet ./...") is the
+# per-module ground-truth check, e.g. "go test ./..." for behavior changes caught only by tests.
 set -uo pipefail
 WORK=${1:?}; BIN=${2:?}; OUT=${3:?}; BASE=${4:?}; MODEL=${5:-opencode/big-pickle}; RUNS=${6:-2}
 mkdir -p "$OUT"
@@ -12,6 +14,8 @@ TASK='Rename the exported function `StringValue` in package go.opentelemetry.io/
 (attribute/value.go) to `StringVal`. Do not keep the old name or an alias. Update every caller in the
 repository so that every Go module in it still builds and its tests pass. This repository contains many
 Go modules (nested go.mod files) that depend on each other through replace directives.'
+[ -n "${TASK_FILE:-}" ] && TASK=$(cat "$TASK_FILE")
+GT_CMD=${GT_CMD:-go vet ./...}
 
 PLAIN='You are an autonomous coding agent working in the opentelemetry-go repository.
 Use git and the Go toolchain. Work on a branch named agent/rename, commit, and push it to origin.
@@ -39,7 +43,7 @@ ground_truth() { # dir out-file
     : > "$d.log"
     for m in $(cd "$d" && git ls-files '*go.mod' | xargs -n1 dirname); do
       grep -qxF "$m" "$WORK/base_fail.txt" && continue # already failing on main (upstream)
-      (cd "$d/$m" && go vet ./... >> "$d.log" 2>&1) || echo "FAIL $m" >> "$d.log"
+      (cd "$d/$m" && $GT_CMD >> "$d.log" 2>&1) || echo "FAIL $m" >> "$d.log"
     done
     if grep -q '^FAIL ' "$d.log"; then echo "$br FAIL" >> "$f"; else echo "$br PASS" >> "$f"; fi
   done
@@ -69,8 +73,8 @@ run_condition() { # cond run
     [ -n "$sid" ] || break
     s=$(date +%s)
     perl -e 'alarm shift; exec @ARGV' "${AGENT_TIMEOUT:-2400}" opencode run --dir "$dir/src" -s "$sid" -m "$MODEL" --auto --format json \
-      "Full CI (go vet ./... in every module) failed on your pushed branch $br:
-$(grep -E '^FAIL |\.go:[0-9]+' "$dir/gt-$(echo "$br" | tr / _).log" | head -40)
+      "Full CI ($GT_CMD in every module) failed on your pushed branch $br:
+$(grep -E '^FAIL |^--- FAIL|\.go:[0-9]+' "$dir/gt-$(echo "$br" | tr / _).log" | head -40)
 Fix it and push again the same way you did before. Do not wait for CI afterwards." >> "$out/agent.jsonl" 2>/dev/null
     echo $(( $(cat "$out/agent.secs") + $(date +%s) - s )) > "$out/agent.secs"; echo "$round" > "$out/agent.fixes"
     ground_truth "$dir" "$out/ci.txt"
@@ -87,7 +91,7 @@ Fix it and push again the same way you did before. Do not wait for CI afterwards
 # Modules that already fail on main (upstream debt, toolchain drift) are not the agent's doing.
 mkdir -p "$WORK"; : > "$WORK/base_fail.txt"
 for m in $(cd "$BASE" && git ls-files '*go.mod' | xargs -n1 dirname); do
-  (cd "$BASE/$m" && go vet ./... >/dev/null 2>&1) || echo "$m" >> "$WORK/base_fail.txt"
+  (cd "$BASE/$m" && $GT_CMD >/dev/null 2>&1) || echo "$m" >> "$WORK/base_fail.txt"
 done
 
 for r in $(seq 1 "$RUNS"); do

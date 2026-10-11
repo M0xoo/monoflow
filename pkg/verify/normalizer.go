@@ -2,6 +2,8 @@ package verify
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -16,6 +18,8 @@ type DiagnosticError struct {
 	Message  string `json:"message"`
 	Expected string `json:"expected,omitempty"`
 	Received string `json:"received,omitempty"`
+
+	goPkg string // import path from go test's "FAIL <pkg>" line, to place a bare file name
 }
 
 // StripANSI removes all ANSI escape sequences, spinners, and carriage returns.
@@ -48,8 +52,10 @@ func ParseDiagnostics(rawOutput string) []DiagnosticError {
 	// 2. Go: path/file.go:77:12: message
 	goRegex := regexp.MustCompile(`^(.+?\.go):(\d+):(\d+):\s*(.+)`)
 	// Go test assertion (t.Fatal/t.Error), indented under "--- FAIL: TestName": local_test.go:11: msg
-	goTestRegex := regexp.MustCompile(`^([^\s:]+_test\.go):(\d+):\s*(.+)`)
+	goTestRegex := regexp.MustCompile(`^([^\s:]+_test\.go):(\d+):\s*(.*)$`)
 	goFailRegex := regexp.MustCompile(`^--- FAIL:\s+(\S+)`)
+	goPkgFailRegex := regexp.MustCompile(`^FAIL\s+(\S+)\s+(\[|[\d.]+s)`)
+	pkgStart := 0 // first diagnostic not yet tied to a go package
 
 	// 3. Rust: error[E0308]: message ... --> path/file.rs:28:14
 	rustLocRegex := regexp.MustCompile(`^\s*-->\s*(.+?\.rs):(\d+):(\d+)`)
@@ -68,6 +74,9 @@ func ParseDiagnostics(rawOutput string) []DiagnosticError {
 	var lastRustCode string
 	var lastRustMsg string
 	var lastGoTest string
+	// testify prints "x_test.go:110:" then the message on following lines ("Error: Not equal:",
+	// a diff): fold them into that diagnostic.
+	testify, inDiff, diffLines := -1, false, 0
 
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
@@ -123,6 +132,48 @@ func ParseDiagnostics(rawOutput string) []DiagnosticError {
 			continue
 		}
 
+		if testify >= 0 {
+			d := &errors[testify]
+			switch {
+			case strings.HasPrefix(trimmed, "Error Trace:"), strings.HasPrefix(trimmed, "Test:"):
+				continue
+			case strings.HasPrefix(trimmed, "Error:"):
+				d.Message += strings.TrimSpace(strings.TrimPrefix(trimmed, "Error:"))
+				continue
+			case strings.HasPrefix(trimmed, "Messages:"):
+				d.Message += " (" + strings.TrimSpace(strings.TrimPrefix(trimmed, "Messages:")) + ")"
+				continue
+			case trimmed == "Diff:":
+				inDiff = true
+				continue
+			case inDiff && (strings.HasPrefix(trimmed, "---") || strings.HasPrefix(trimmed, "+++") || strings.HasPrefix(trimmed, "@@")):
+				continue
+			case inDiff && (strings.HasPrefix(trimmed, "-") || strings.HasPrefix(trimmed, "+")):
+				if diffLines < 6 {
+					d.Message += "\n" + trimmed
+				}
+				diffLines++
+				continue
+			case strings.HasPrefix(trimmed, "expected") || strings.HasPrefix(trimmed, "actual"):
+				if !strings.Contains(d.Message, "\n") && len(trimmed) <= 200 {
+					d.Message += " " + trimmed
+				}
+				continue
+			case !strings.HasPrefix(trimmed, "--- FAIL") && !strings.HasPrefix(trimmed, "FAIL") &&
+				!strings.HasPrefix(trimmed, "ok ") && goTestRegex.FindStringSubmatch(trimmed) == nil:
+				continue // diff context lines
+			}
+			testify, inDiff, diffLines = -1, false, 0
+		}
+
+		if matches := goPkgFailRegex.FindStringSubmatch(trimmed); matches != nil {
+			for i := pkgStart; i < len(errors); i++ {
+				errors[i].goPkg = matches[1]
+			}
+			pkgStart = len(errors)
+			continue
+		}
+
 		if matches := goFailRegex.FindStringSubmatch(trimmed); matches != nil {
 			lastGoTest = matches[1]
 			continue
@@ -139,6 +190,9 @@ func ParseDiagnostics(rawOutput string) []DiagnosticError {
 				Code:    "test-failure",
 				Message: msg,
 			})
+			if strings.TrimSpace(matches[3]) == "" {
+				testify = len(errors) - 1
+			}
 			continue
 		}
 
@@ -263,4 +317,32 @@ func CompactFailure(raw string) string {
 		out = "…" + out[len(out)-maxLen:]
 	}
 	return out
+}
+
+// ResolveGoTestFiles turns bare test file names (go test prints "codes_test.go:25") into paths
+// relative to the module dir, using the import path of the failing package and the module path.
+func ResolveGoTestFiles(errs []DiagnosticError, moduleDir string) {
+	data, err := os.ReadFile(filepath.Join(moduleDir, "go.mod"))
+	if err != nil {
+		return
+	}
+	var mod string
+	for _, l := range strings.Split(string(data), "\n") {
+		if f := strings.Fields(l); len(f) == 2 && f[0] == "module" {
+			mod = strings.Trim(f[1], `"`)
+			break
+		}
+	}
+	for i := range errs {
+		e := &errs[i]
+		if mod == "" || e.goPkg == "" || strings.ContainsAny(e.File, "/\\") {
+			continue
+		}
+		if e.goPkg == mod {
+			continue
+		}
+		if rel, ok := strings.CutPrefix(e.goPkg, mod+"/"); ok {
+			e.File = rel + "/" + e.File
+		}
+	}
 }

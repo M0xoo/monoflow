@@ -1,0 +1,6 @@
+Change go.opentelemetry.io/otel/codes so that Code.String() and Code's JSON encoding use the
+upper-case status names from the OpenTelemetry specification: "UNSET", "ERROR" and "OK" (instead of
+"Unset", "Error", "Ok"). UnmarshalJSON must keep accepting the old names as well as the new ones.
+Make sure everything in this repository that depends on this behavior still works: every Go module
+must build and its tests must pass. This repository contains many Go modules (nested go.mod files)
+that depend on each other through replace directives.

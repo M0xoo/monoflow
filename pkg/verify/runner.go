@@ -46,6 +46,11 @@ type TargetResult struct {
 	CommandRun string `json:"command_run,omitempty"`
 	// ErrorCount replaces Errors when DedupeErrors moved them to SuiteResult.Errors.
 	ErrorCount int `json:"error_count,omitempty"`
+
+	// remaining are the checks skipped after the failing one, and dir where they run: if
+	// that failure turns out to be preexisting they still have to run (see classifyPreexisting).
+	remaining []string
+	dir       string
 }
 
 // SuiteResult holds the aggregated verification results across all affected packages.
@@ -179,12 +184,13 @@ func (r *Runner) VerifyTarget(pkg *graph.PackageNode, opt VerifyOptions) TargetR
 	// 3. Cache Miss: run each check in order, stopping at the first failure.
 	var out []byte
 	var err error
-	for _, c := range cmds {
+	for i, c := range cmds {
 		var o []byte
 		o, err = r.runCheck(c, absPkgPath)
 		out = append(out, o...)
 		if err != nil {
 			res.CommandRun = c
+			res.remaining, res.dir = cmds[i+1:], absPkgPath
 			break
 		}
 	}
@@ -194,6 +200,7 @@ func (r *Runner) VerifyTarget(pkg *graph.PackageNode, opt VerifyOptions) TargetR
 	if err != nil {
 		rawOutput := string(out)
 		diagnostics := ParseDiagnostics(rawOutput)
+		ResolveGoTestFiles(diagnostics, absPkgPath)
 
 		// Filter quarantined flaky tests
 		activeErrors := make([]DiagnosticError, 0)

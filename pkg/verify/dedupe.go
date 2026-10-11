@@ -10,7 +10,7 @@ import (
 // SharedError is one distinct failure and the targets that report it.
 type SharedError struct {
 	DiagnosticError
-	Breaks  int      `json:"breaks_targets"`     // how many targets report this error
+	Breaks  int      `json:"breaks_targets"`    // how many targets report this error
 	Targets []string `json:"targets,omitempty"` // named only when there are at most 2
 }
 
@@ -28,7 +28,11 @@ func DedupeErrors(res *SuiteResult, root string, pathOf map[string]string, max i
 			continue
 		}
 		for _, e := range r.Errors {
-			e.File = repoRelative(root, pathOf[r.Target], e.File)
+			if e.Code == "execution_failure" {
+				e.File = filepath.ToSlash(pathOf[r.Target]) // already the package dir, not a file in it
+			} else {
+				e.File = repoRelative(root, pathOf[r.Target], e.File)
+			}
 			if len(e.Message) > 400 {
 				e.Message = e.Message[:400] + "…"
 			}

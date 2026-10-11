@@ -61,3 +61,54 @@ func TestPreexistingFailuresDoNotBlockButNewOnesDo(t *testing.T) {
 		t.Fatalf("--strict must block on pre-existing failures too")
 	}
 }
+
+// A preexisting lint failure stops the check chain; the tests after it must still run, or a
+// new test failure hides behind old lint debt (live: opentelemetry-go's unformatted semconv files
+// hid a broken root test, so the root module was reported green).
+func TestPreexistingLintFailureDoesNotHideNewTestFailure(t *testing.T) {
+	repo := t.TempDir()
+	git := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v (%s)", args, err, out)
+		}
+	}
+	write := func(rel, s string) {
+		p := filepath.Join(repo, rel)
+		_ = os.MkdirAll(filepath.Dir(p), 0755)
+		_ = os.WriteFile(p, []byte(s), 0644)
+	}
+	git("init", "-q", "-b", "main")
+	git("config", "user.email", "t@t")
+	git("config", "user.name", "t")
+	write("pkg/legacy.txt", "BAD from long ago\n")
+	write("pkg/value.txt", "1\n")
+	git("add", "-A")
+	git("commit", "-qm", "base with lint debt")
+	git("checkout", "-qb", "agent/x")
+
+	g := graph.New(repo)
+	g.AddPackage(&graph.PackageNode{Name: "pkg", Path: "pkg", Language: graph.LangGeneric,
+		LintCmd: `grep -l BAD *.txt && exit 1; exit 0`,
+		TestCmd: `grep -qx 1 value.txt || { echo "value_test.go:3: want 1"; exit 1; }`})
+	g.RebuildEdges()
+	r := NewRunner(repo)
+	r.SetCacheManager(cache.NewManager(repo, cache.Config{Enabled: true, Dir: filepath.Join(repo, ".agents", "cache")}))
+
+	write("pkg/value.txt", "2\n")
+	res := r.VerifyAffected(g, []string{"pkg/value.txt"}, VerifyOptions{BaseRef: "main", NoCache: true})
+	if res.Status != "failed" || len(res.Results[0].Errors) == 0 || res.Results[0].Errors[0].File != "value_test.go" {
+		t.Fatalf("new test failure behind preexisting lint debt must block: %+v", res.Results[0])
+	}
+	if len(res.Results[0].Preexisting) == 0 {
+		t.Fatalf("the old lint failure should still be reported as preexisting: %+v", res.Results[0])
+	}
+
+	write("pkg/value.txt", "1\n")
+	write("pkg/notes.txt", "unrelated edit\n") // keep a local change, as in the case above
+	res = r.VerifyAffected(g, []string{"pkg/notes.txt"}, VerifyOptions{BaseRef: "main", NoCache: true})
+	if res.Status != "passed" {
+		t.Fatalf("only preexisting lint debt: should pass: %+v", res.Results[0])
+	}
+}

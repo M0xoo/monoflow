@@ -49,14 +49,42 @@ func (r *Runner) classifyPreexisting(g *graph.DependencyGraph, results []TargetR
 			if !baseFailed {
 				return
 			}
-			if errorsInBaseline(res.Errors, baseOut) {
-				res.Status = "passed"
-				res.Preexisting = res.Errors
-				res.Errors = make([]DiagnosticError, 0)
+			if !errorsInBaseline(res.Errors, baseOut) {
+				return
 			}
+			res.Status = "passed"
+			res.Preexisting = res.Errors
+			res.Errors = make([]DiagnosticError, 0)
+			// The run stopped at that (old) failure, so later checks never ran: a preexisting
+			// lint finding must not hide a new test failure. Run them now, judging each the same way.
+			r.runRemaining(res, baseDir, dir)
 		}(&results[i], pkg.Path)
 	}
 	wg.Wait()
+}
+
+// runRemaining runs the checks skipped after a preexisting failure. A new failure blocks
+// with its own diagnostics; another preexisting one is noted and the next check runs.
+func (r *Runner) runRemaining(res *TargetResult, baseDir, basePkgDir string) {
+	for len(res.remaining) > 0 {
+		c := res.remaining[0]
+		res.remaining = res.remaining[1:]
+		out, err := r.runCheck(c, res.dir)
+		if err == nil {
+			continue
+		}
+		errs := ParseDiagnostics(string(out))
+		ResolveGoTestFiles(errs, res.dir)
+		if len(errs) == 0 {
+			errs = []DiagnosticError{{File: ".", Line: 1, Code: "execution_failure", Message: CompactFailure(StripANSI(string(out)))}}
+		}
+		if baseOut, baseFailed := runBaselineCheck(baseDir, basePkgDir, c); baseFailed && errorsInBaseline(errs, baseOut) {
+			res.Preexisting = append(res.Preexisting, errs...)
+			continue
+		}
+		res.Status, res.Errors, res.CommandRun = "failed", errs, c
+		return
+	}
 }
 
 // baselineDir returns (creating once) a detached checkout of the merge-base of HEAD and
