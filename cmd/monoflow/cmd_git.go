@@ -38,12 +38,22 @@ func handleCommit(rootDir string) {
 	out := map[string]any{"commit": res}
 	// The outer loop (local CI on the exact commit) starts now, so it is usually green by
 	// the time the agent pushes; push only happens once it is.
+	outerJob := ""
 	if !noOuter && res.CommitSHA != "" {
 		om := verify.NewOuterLoopManager(rootDir)
 		if job, err := om.StartJob(verify.OuterLoopOptions{CommitSHA: res.CommitSHA, Async: true, IncludeE2E: true}); err == nil {
+			outerJob = job.ID
 			out["outer_loop"] = map[string]any{"job": job.ID, "status": "running",
 				"note": "local CI on this exact commit. Next: 'monoflow ship' (waits for it, pushes, opens the PR), or more edits + commit"}
 		}
+	}
+	if !jsonMode() { // the agent wrote the message: do not echo it back
+		fmt.Printf("committed %s\n", res.CommitSHA[:min(10, len(res.CommitSHA))])
+		if outerJob != "" {
+			fmt.Println("local CI: running on this commit")
+		}
+		fmt.Println("next: monoflow ship (pushes and opens the PR once local CI is green), or more edits + commit")
+		return
 	}
 	printOut(out)
 }
@@ -170,7 +180,7 @@ func handlePush(rootDir string) {
 	durMs := float64(time.Since(start).Microseconds()) / 1000.0
 
 	if err != nil {
-		fmt.Printf(`{"status": "push_failed", "error": "%s", "output": "%s"}`+"\n", err, strings.TrimSpace(string(out)))
+		printRaw(fmt.Sprintf(`{"status": "push_failed", "error": %q, "output": %q}`, err, strings.TrimSpace(string(out))))
 		os.Exit(1)
 	}
 
@@ -270,7 +280,7 @@ func handleSync(rootDir string) {
 	cmdFetch := exec.Command("git", fetchArgs...)
 	cmdFetch.Dir = rootDir
 	if out, err := cmdFetch.CombinedOutput(); err != nil {
-		fmt.Printf(`{"status": "sync_failed", "step": "fetch", "error": %q, "output": %q}`+"\n", err.Error(), strings.TrimSpace(string(out)))
+		printRaw(fmt.Sprintf(`{"status": "sync_failed", "step": "fetch", "error": %q, "output": %q}`, err.Error(), strings.TrimSpace(string(out))))
 		os.Exit(1)
 	}
 
@@ -394,7 +404,7 @@ func printQueued(job *verify.OuterJob, sha, branch string) {
 	if job != nil {
 		id = job.ID
 	}
-	printOut(map[string]any{
+	res := map[string]any{
 		"status":          "queued_until_outer_green",
 		"branch":          branch,
 		"head_sha":        sha,
@@ -402,7 +412,12 @@ func printQueued(job *verify.OuterJob, sha, branch string) {
 		"verdict":         "The outer loop (local CI on this commit) is still running; it pushes automatically when green and then watches remote CI. Nothing is pushed if it fails.",
 		"ci_wait_command": "./bin/monoflow events wait " + sha,
 		"agent_directive": ciWaitDirective(sha),
-	})
+	}
+	if !jsonMode() {
+		fmt.Printf("queued: pushes %s once local CI on %s is green (nothing is pushed if it fails)\nnext: end your turn; the result is delivered to you\n", branch, sha[:min(10, len(sha))])
+		return
+	}
+	printOut(res)
 }
 
 func onlyNonCode(files []string) bool {

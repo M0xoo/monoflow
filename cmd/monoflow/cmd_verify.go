@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -58,7 +57,7 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 
 	g, err := graph.LoadOrDiscover(rootDir)
 	if err != nil {
-		fmt.Printf(`{"status": "failed", "error": "%s"}`+"\n", err)
+		printRaw(fmt.Sprintf(`{"status": "failed", "error": %q}`, err))
 		os.Exit(1)
 	}
 
@@ -71,7 +70,7 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 	if targetPkg != "" {
 		pkg, exists := resolvePackageArg(g, rootDir, targetPkg)
 		if !exists {
-			fmt.Printf(`{"status": "failed", "error": "package '%s' not found (use a name from 'monoflow graph list' or a path inside one)"}`+"\n", targetPkg)
+			printRaw(fmt.Sprintf(`{"status": "failed", "error": "package '%s' not found (use a name from 'monoflow graph list' or a path inside one)"}`, targetPkg))
 			os.Exit(1)
 		}
 		opts.ChangedFiles, opts.AllPackages = getGitChangedFiles(rootDir), true
@@ -154,8 +153,7 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 	if !verboseOut && !jsonMode() {
 		fmt.Print(verifyText(res, out.(map[string]any)))
 	} else {
-		data, _ := json.MarshalIndent(out, "", "  ")
-		fmt.Println(string(data))
+		printOut(out)
 	}
 
 	cb := guard.NewCircuitBreaker(rootDir, 5)
@@ -164,14 +162,13 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 	if res.Status == "failed" {
 		st, tripped, _ := cb.RecordFailure(rootDir, "active_task", targetKey)
 		if tripped {
-			circuitMsg, _ := json.MarshalIndent(map[string]any{
+			printOut(map[string]any{
 				"circuit_breaker": "TRIPPED",
 				"attempts":        st.Attempts,
 				"snapshot":        st.SnapshotID,
 				"advice":          "Same targets failed repeatedly. Step back: re-read the first error, check 'monoflow graph impact <file>', or 'monoflow checkpoint list' / 'checkpoint revert <id>' to restart from a known state. Your current work is saved as the snapshot above and was NOT reverted.",
 				"reason":          fmt.Sprintf("Target '%s' failed %d consecutive times without passing", targetKey, st.Attempts),
-			}, "", "  ")
-			fmt.Println(string(circuitMsg))
+			})
 		}
 		os.Exit(1)
 	} else {
@@ -183,7 +180,7 @@ func handleProofVerification(rootDir, taskID string) {
 	start := time.Now()
 	receipt, err := proof.LoadReceipt(rootDir, taskID)
 	if err != nil {
-		fmt.Printf(`{"status": "failed", "error": "%s"}`+"\n", err)
+		printRaw(fmt.Sprintf(`{"status": "failed", "error": %q}`, err))
 		os.Exit(1)
 	}
 
@@ -198,8 +195,7 @@ func handleProofVerification(rootDir, taskID string) {
 		"deliverable_sha":    receipt.DeliverableSHA,
 		"confidence_verdict": "APPROVED (1-Second Instant Verification Passed)",
 	}
-	data, _ := json.MarshalIndent(out, "", "  ")
-	fmt.Println(string(data))
+	printOut(out)
 }
 
 func getGitChangedFiles(rootDir string) []string {

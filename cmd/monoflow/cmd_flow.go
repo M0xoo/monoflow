@@ -20,7 +20,7 @@ import (
 // branch agent/<task-id> (full checkout unless --packages narrows it).
 func handleStart(rootDir string) {
 	if len(os.Args) < 3 || strings.HasPrefix(os.Args[2], "-") {
-		fmt.Println(`{"error": "usage: monoflow start <task-id>"}`)
+		printRaw(`{"error": "usage: monoflow start <task-id>"}`)
 		os.Exit(1)
 	}
 	os.Args = append([]string{os.Args[0], "worktree", "create"}, os.Args[2:]...)
@@ -51,13 +51,13 @@ func handleShip(rootDir string) {
 		case a == "--deliver": // internal: the detached second half of ship
 			deliver = true
 		default:
-			fmt.Printf(`{"error": "unknown flag %q: usage: monoflow ship -m \"<commit message>\" [--title=...] [--body=...]"}`+"\n", a)
+			printRaw(fmt.Sprintf(`{"error": "unknown flag %q: usage: monoflow ship -m \"<commit message>\" [--title=...] [--body=...]"}`, a))
 			os.Exit(1)
 		}
 	}
 	exe, err := os.Executable()
 	if err != nil {
-		fmt.Printf(`{"error": %q}`+"\n", err.Error())
+		printRaw(fmt.Sprintf(`{"error": %q}`, err.Error()))
 		os.Exit(1)
 	}
 	if deliver {
@@ -70,12 +70,12 @@ func handleShip(rootDir string) {
 	// (Haiku: git diff, start, git apply, git restore: 4 calls).
 	if b := currentBranch(rootDir); (b == "main" || b == "master") && len(uncommittedFiles(rootDir)) > 0 {
 		if msg == "" {
-			fmt.Println(`{"error": "uncommitted changes: pass -m \"<commit message>\""}`)
+			printRaw(`{"error": "uncommitted changes: pass -m \"<commit message>\""}`)
 			os.Exit(1)
 		}
 		wt, err := moveWorkToWorktree(exe, rootDir, msg)
 		if err != nil {
-			fmt.Printf(`{"error": %q}`+"\n", "could not move your changes off "+b+": "+err.Error())
+			printRaw(fmt.Sprintf(`{"error": %q}`, "could not move your changes off "+b+": "+err.Error()))
 			os.Exit(1)
 		}
 		rootDir = wt
@@ -83,7 +83,7 @@ func handleShip(rootDir string) {
 	}
 	if len(uncommittedFiles(rootDir)) > 0 {
 		if msg == "" {
-			fmt.Println(`{"error": "uncommitted changes: pass -m \"<commit message>\""}`)
+			printRaw(`{"error": "uncommitted changes: pass -m \"<commit message>\""}`)
 			os.Exit(1)
 		}
 		res, ok := runSelf(exe, rootDir, "commit", "-m", msg)

@@ -290,3 +290,14 @@ func scalarText(v any, indent string) string {
 	}
 	return fmt.Sprint(v)
 }
+
+// printRaw prints a hand-built JSON message (mostly errors) in the active format, so success
+// and error output look the same; a string that is not valid JSON is printed as is.
+func printRaw(s string) {
+	var node any
+	if json.Unmarshal([]byte(s), &node) != nil {
+		fmt.Println(s)
+		return
+	}
+	printOut(node)
+}

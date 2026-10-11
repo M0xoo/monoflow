@@ -13,7 +13,7 @@ import (
 func handleGraph(rootDir string) {
 	g, err := graph.LoadOrDiscover(rootDir)
 	if err != nil {
-		fmt.Printf(`{"error": "%s"}`+"\n", err)
+		printRaw(fmt.Sprintf(`{"error": %q}`, err))
 		os.Exit(1)
 	}
 
@@ -54,13 +54,13 @@ func handleGraph(rootDir string) {
 	switch sub {
 	case "query":
 		if len(os.Args) < 4 {
-			fmt.Println(`{"error": "missing package name for query"}`)
+			printRaw(`{"error": "missing package name for query"}`)
 			os.Exit(1)
 		}
 		pkgName := os.Args[3]
 		pkg, exists := resolvePackageArg(g, rootDir, pkgName)
 		if !exists {
-			fmt.Printf(`{"error": "package '%s' not found (use a name from 'monoflow graph' or a path inside a package)"}`+"\n", pkgName)
+			printRaw(fmt.Sprintf(`{"error": "package '%s' not found (use a name from 'monoflow graph' or a path inside a package)"}`, pkgName))
 			os.Exit(1)
 		}
 		out := map[string]any{
@@ -98,13 +98,13 @@ func handleGraph(rootDir string) {
 
 	case "impact":
 		if len(os.Args) < 4 {
-			fmt.Println(`{"error": "missing file path for impact analysis"}`)
+			printRaw(`{"error": "missing file path for impact analysis"}`)
 			os.Exit(1)
 		}
 		filePath := os.Args[3]
 		pkg := g.MapFileToPackage(filePath)
 		if pkg == nil {
-			fmt.Printf(`{"file": "%s", "impact": "none (untracked/root file)"}`+"\n", filePath)
+			printRaw(fmt.Sprintf(`{"file": %q, "impact": "none (untracked/root file)"}`, filePath))
 			return
 		}
 		// Compact for agents: one dependents list (direct ones are a subset of it).
