@@ -18,7 +18,7 @@ Go modules (nested go.mod files) that depend on each other through replace direc
 GT_CMD=${GT_CMD:-go vet ./...}
 
 PLAIN='You are an autonomous coding agent working in the opentelemetry-go repository.
-Use git and the Go toolchain. Work on a branch named agent/rename, commit, and push it to origin.
+Read AGENTS.md first if the repository has one (agent harnesses load it for you anyway). Use git and the Go toolchain. Work on a branch named agent/rename, commit, and push it to origin.
 Never push to main. Do not wait for or poll CI.
 
 YOUR TASK:

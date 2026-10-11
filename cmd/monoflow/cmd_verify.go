@@ -114,7 +114,14 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 			c["scope"] = fmt.Sprintf("%d changed packages checked first; %d dependents run once they pass", res.TotalTargets, len(res.Pending))
 			c["next"] = "fix errors[] (file:line), then monoflow verify again"
 		} else if targetPkg == "" && !verifyAll && res.TotalTargets > 0 {
-			c["scope"] = fmt.Sprintf("%d packages: every changed package and every package depending on them, repo-wide (what CI runs for this change)", res.TotalTargets)
+			// Name the packages left out and why: an agent told "every module must pass" saw
+			// "27 packages" in a 29-module repo and re-tested all 29 itself.
+			total := len(g.GetAllPackages())
+			if others := total - res.TotalTargets; others > 0 {
+				c["scope"] = fmt.Sprintf("%d of %d packages: every changed package and every package depending on them (what CI runs for this change); the other %d do not depend on your change, so it cannot break them", res.TotalTargets, total, others)
+			} else {
+				c["scope"] = fmt.Sprintf("all %d packages (every package depends on your change)", total)
+			}
 			if res.Status == "passed" {
 				c["next"] = `nothing else to run: monoflow ship -m "<commit message>"`
 			} else {
@@ -341,14 +348,13 @@ func compactSuite(res verify.SuiteResult, rootDir string, g *graph.DependencyGra
 	if len(failed) > 0 {
 		out["failed"] = failed // target -> error count
 	}
-	if len(preexisting) > 0 && len(preexisting) <= 10 {
-		out["preexisting"] = preexisting // target -> failures main also has (not blocking)
-	} else if len(preexisting) > 10 {
+	if len(preexisting) > 0 {
 		total := 0
 		for _, n := range preexisting {
 			total += n
 		}
-		out["preexisting"] = map[string]int{"targets": len(preexisting), "failures": total} // not blocking; --verbose lists them
+		// Spelled out: a bare {"pkg": 1} read as an unexplained failure and sent agents re-testing.
+		out["preexisting"] = fmt.Sprintf("%d failure(s) in %d package(s) that main already has: not caused by your change, not blocking (--verbose lists them)", total, len(preexisting))
 	}
 	if len(quarantined) > 0 {
 		out["quarantined"] = quarantined

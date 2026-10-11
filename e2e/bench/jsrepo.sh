@@ -15,7 +15,7 @@ TASK=$(cat "$TASK_FILE")
 NAME=$(basename "$BASE")
 
 PLAIN="You are an autonomous coding agent working in the $NAME repository (a pnpm monorepo).
-Use git, pnpm and the repository's own tooling. Work on a branch named agent/task, commit, and push it
+Read AGENTS.md first if the repository has one (agent harnesses load it for you anyway). Use git, pnpm and the repository's own tooling. Work on a branch named agent/task, commit, and push it
 to origin. Never push to main. Do not wait for or poll CI.
 
 YOUR TASK:
