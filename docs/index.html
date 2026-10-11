@@ -25,6 +25,7 @@
     <nav class="nav" aria-label="Sections">
       <a href="#loop">Agent loop</a>
       <a href="#provides">What you get</a>
+      <a href="#how">How it works</a>
       <a href="#measured">Benchmarks</a>
       <a href="#install">Install</a>
       <a href="#commands">Commands</a>
@@ -167,13 +168,53 @@ not affected: internal/tools, schema</code></pre>
         </article>
         <article class="feature f-isolate">
           <h3>One worktree per agent</h3>
-          <p>Sparse worktrees with their own dependencies, checkpoints outside Git history, and AST-level merges between agents.</p>
+          <p>Sparse worktrees with their own dependencies, checkpoints outside Git history, and AST-level merges of Go files between agents.</p>
         </article>
         <article class="feature f-guard">
           <h3>Guardrails</h3>
           <p>Commits are refused when assertions disappear or secrets leak. Risk scores and proof receipts tell reviewers where to look.</p>
         </article>
       </div>
+    </section>
+
+    <section id="how" class="how">
+      <div class="head-row">
+        <h2 class="big">How it works</h2>
+        <p>MonoFlow doesn't replace your compilers, test runners or CI. It decides what to run, where to run it, and how the agent hears about the result. Everything it knows is a plain file under <code>.agents/</code>.</p>
+      </div>
+      <ol class="how-steps">
+        <li class="how-step">
+          <h3>Graph</h3>
+          <p>Packages and their edges are read from the manifests already in the repo: <code>go.mod</code>, pnpm/npm/yarn workspaces, Cargo, <code>pyproject.toml</code>. A changed file belongs to the package with the longest matching path. The affected set is those packages plus every transitive dependent. For Go, <code>go list</code> runs in every module to find real importers.</p>
+          <p class="how-io">.agents/monoflow.config.json</p>
+        </li>
+        <li class="how-step">
+          <h3>Worktree</h3>
+          <p><code>start</code> fetches main and runs <code>git worktree add -b agent/&lt;id&gt;</code> from the newer of local and remote. Caches and events are symlinked to the root. Dependencies are installed offline (pnpm) or linked. <code>--packages</code> narrows it to a sparse cone.</p>
+          <p class="how-io">.agents/worktrees/&lt;id&gt;</p>
+        </li>
+        <li class="how-step">
+          <h3>Verify</h3>
+          <p>Changed packages run first, in parallel. Dependents run only once those pass. Results are keyed by a SHA-256 of files, command and upstream keys, so unchanged inputs aren't re-run. A failure is re-checked against main: if main fails the same way, it's reported as pre-existing and doesn't block. Output is stripped to <code>file:line</code> with source context.</p>
+          <p class="how-io">.agents/cache/verify/</p>
+        </li>
+        <li class="how-step">
+          <h3>Background</h3>
+          <p>A hook fires after each agent tool call. When edits have been quiet for 1.5s, <code>verify</code> starts in the background, keyed by HEAD plus the working-tree diff. When the agent asks about the same files, the result is often already there.</p>
+          <p class="how-io">.agents/verify/&lt;key&gt;</p>
+        </li>
+        <li class="how-step">
+          <h3>Ship</h3>
+          <p><code>ship</code> commits after the test-integrity and secret checks, then returns. A detached process checks the commit out cleanly and runs local CI. It pushes and opens the PR only on green. On red, it records the failure and pushes nothing.</p>
+          <p class="how-io">.agents/outer_loop/ · refs/monoflow/proofs/&lt;sha&gt;</p>
+        </li>
+        <li class="how-step">
+          <h3>Events</h3>
+          <p>A detached watcher polls <code>gh</code> so the agent doesn't have to. Results land as JSON files. Claude Code and opencode hooks add them to the agent's context, and the Stop hook waits on pending work and wakes the agent when something needs action.</p>
+          <p class="how-io">.agents/events/</p>
+        </li>
+      </ol>
+      <p class="note">Remote CI imports the proofs pushed by <code>ship</code>. Packages already verified locally on identical inputs count as cache hits, so CI runs only the rest.</p>
     </section>
 
     <section id="measured" class="measured">
