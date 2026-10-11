@@ -14,12 +14,25 @@ Ground truth: `ci/run.sh` (full CI) on every pushed branch.
 (Averages per agent. Runs 1-2 were invalid: the sparse outer-loop false regression, the
 headless opencode hang, a rate-limited model, and the push gate bug — all fixed.)
 
+### Cost to green CI (run 6)
+A red branch is not finished work. Since run 6 the harness hands every branch that fails full CI back to
+the same agent session with the CI output (`FIX_ROUNDS`, default 2), so metrics measure the cost to green:
+
+| run 6 | secs | tool calls | fresh tokens | fix rounds | red at the end |
+|---|---|---|---|---|---|
+| A (MonoFlow) | 102 | 19.1 | 138k | 0 | 0 / 8 |
+| B (plain git) | 107 | 19.2 | 147k | 2 | 0 / 8 |
+
+B's seconds exclude the remote CI run that reported the failure (minutes on real CI; here `ci/run.sh`
+runs locally). Small sample (8 agents per condition): read it as "on par to green, without the red push",
+not as a precise speed-up.
+
 ## Reading
 - **Remote CI protection works**: 0 of 24 MonoFlow branches failed full CI; 6 of 24 plain branches did
   (the same `agent-ledger` cross-package break every run — B agents only tested their own package).
-- **Cost**: MonoFlow agents spend ~20-35% more tokens and ~5-7 more tool calls. Those calls are the
-  verification and gating B skips; B's numbers exclude the second cycle a red branch costs (CI run,
-  failure triage, fix, push).
+- **Cost to push** (runs 3-5): MonoFlow agents spend ~20-35% more tokens and ~5-7 more tool calls on the
+  verification B skips. **Cost to green** (run 6, B fixes its red branches): on par or slightly lower, with
+  no red push and no extra remote CI run.
 - Run-to-run noise (B: 84-128 s) is larger than the effect of the output/workflow tweaks, so 4 and 5
   are not distinguishable. Measured directly instead: `pr create` output 6.0 KB -> 0.5 KB,
   `verify` 1.1 KB -> 0.56 KB, `outer wait` 1.6 KB -> 0.2 KB; redundant `push` calls 8 -> 0.
