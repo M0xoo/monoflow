@@ -122,7 +122,13 @@ Fix them and push again the same way you did before. Do not wait for CI afterwar
 }
 
 # Free models get rate-limited for hours; a silent agent then burns AGENT_TIMEOUT per run.
-model_ok() { perl -e 'alarm shift; exec @ARGV' 120 bash -c "$(declare -f agent_cli); MODEL='$MODEL' AGENT='${AGENT:-opencode}' agent_cli . '' 'reply with the single word OK'" 2>/dev/null | grep -q OK; }
+# Output captured before grepping: with pipefail, grep -q's early exit SIGPIPEs the agent and
+# fails the pipeline, so a model that answered looked dead.
+model_ok() {
+  local out
+  out=$(perl -e 'alarm shift; exec @ARGV' 120 bash -c "$(declare -f agent_cli); MODEL='$MODEL' AGENT='${AGENT:-opencode}' agent_cli . '' 'reply with the single word OK'" 2>/dev/null)
+  grep -q OK <<< "$out"
+}
 if ! { model_ok || { sleep 20; model_ok; } || { sleep 60; model_ok; }; }; then
   echo "model $MODEL is not answering (rate-limited?): aborting" >&2; exit 2
 fi
