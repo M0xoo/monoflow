@@ -97,3 +97,16 @@ restores the full output) and trimming AGENTS.md to 3.2 KB reversed the gap.
 Reading: on a large repo MonoFlow is now ahead on both time (-31%) and fresh tokens (-19%), with the
 same green rate, and it catches the cross-module breakage that root-only checks miss. Variance is
 high (460-1312 s per run), so treat the deltas as directional.
+
+## Live: idle opencode session woken by an event
+`opencode serve` on a fixture repo after `monoflow init` (installs `.opencode/plugin/monoflow.js`). The
+agent was told to edit, `monoflow commit`, and end its turn. The change passed `verify --affected`
+but read a gitignored file, so the outer loop (clean checkout of the exact commit) failed.
+With no command run by anyone, the plugin's `session.idle` handler waited for the outer loop and
+prompted the session with `[MonoFlow events] OUTER_LOOP_REGRESSION ...`. The agent found the cause,
+committed the fixture, re-verified, re-ran `outer start`, and the outer loop went green. Push stayed
+blocked until then. A green outer loop wakes nothing (no action needed), as intended.
+
+Found: the test failure was reported as `.:1:` (unparsed), so the agent spent 6 calls reading raw
+logs. Go test assertions (`--- FAIL: TestX` / `x_test.go:11: msg`) are now parsed into
+`file:line` diagnostics with the test name.

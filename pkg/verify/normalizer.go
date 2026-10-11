@@ -47,6 +47,9 @@ func ParseDiagnostics(rawOutput string) []DiagnosticError {
 
 	// 2. Go: path/file.go:77:12: message
 	goRegex := regexp.MustCompile(`^(.+?\.go):(\d+):(\d+):\s*(.+)`)
+	// Go test assertion (t.Fatal/t.Error), indented under "--- FAIL: TestName": local_test.go:11: msg
+	goTestRegex := regexp.MustCompile(`^([^\s:]+_test\.go):(\d+):\s*(.+)`)
+	goFailRegex := regexp.MustCompile(`^--- FAIL:\s+(\S+)`)
 
 	// 3. Rust: error[E0308]: message ... --> path/file.rs:28:14
 	rustLocRegex := regexp.MustCompile(`^\s*-->\s*(.+?\.rs):(\d+):(\d+)`)
@@ -64,6 +67,7 @@ func ParseDiagnostics(rawOutput string) []DiagnosticError {
 
 	var lastRustCode string
 	var lastRustMsg string
+	var lastGoTest string
 
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
@@ -115,6 +119,25 @@ func ParseDiagnostics(rawOutput string) []DiagnosticError {
 				Col:     colNum,
 				Code:    "go-error",
 				Message: strings.TrimSpace(matches[4]),
+			})
+			continue
+		}
+
+		if matches := goFailRegex.FindStringSubmatch(trimmed); matches != nil {
+			lastGoTest = matches[1]
+			continue
+		}
+		if matches := goTestRegex.FindStringSubmatch(trimmed); matches != nil {
+			lineNum, _ := strconv.Atoi(matches[2])
+			msg := strings.TrimSpace(matches[3])
+			if lastGoTest != "" {
+				msg = "[" + lastGoTest + "] " + msg
+			}
+			errors = append(errors, DiagnosticError{
+				File:    matches[1],
+				Line:    lineNum,
+				Code:    "test-failure",
+				Message: msg,
 			})
 			continue
 		}
