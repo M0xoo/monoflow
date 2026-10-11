@@ -118,7 +118,12 @@ func GuardPush(root, branch, rev string) error {
 
 // --- the watcher after a push ---
 
-// WatchInterval is how often a pushed branch is re-checked (MONOFLOW_CONFLICT_INTERVAL seconds).
+// One watcher per repository checks every branch pushed from it (a process per branch leaked:
+// dozens of 48-hour pollers after a day of agent runs). Pushed branches are listed in
+// .agents/conflict/branches; a branch leaves the list once merged into the base or deleted on
+// origin, and the watcher exits when the list is empty or after watchMaxAge without a push.
+
+// WatchInterval is how often pushed branches are re-checked (MONOFLOW_CONFLICT_INTERVAL seconds).
 func WatchInterval() time.Duration {
 	if s, err := strconv.Atoi(os.Getenv("MONOFLOW_CONFLICT_INTERVAL")); err == nil && s > 0 {
 		return time.Duration(s) * time.Second
@@ -128,23 +133,28 @@ func WatchInterval() time.Duration {
 
 const watchMaxAge = 48 * time.Hour
 
-func watchMarker(root, branch string) string {
-	return filepath.Join(root, ".agents", "conflict", strings.ReplaceAll(branch, "/", "_")+".pid")
-}
+func watchDir(root string) string { return filepath.Join(root, ".agents", "conflict") }
 
-// StartWatch launches the background watcher for a pushed branch, unless one runs already.
+// StartWatch adds a pushed branch to the repository's watch list and makes sure its one
+// watcher runs.
 func StartWatch(root, branch string) {
 	if branch == "" || os.Getenv("MONOFLOW_NO_CONFLICT_WATCH") != "" {
 		return
 	}
-	if pidAlive(watchMarker(root, branch)) {
+	dir := watchDir(root)
+	_ = os.MkdirAll(dir, 0755)
+	list := readBranches(dir)
+	if !contains(list, branch) {
+		writeBranches(dir, append(list, branch))
+	}
+	if pidAlive(filepath.Join(dir, "watch.pid")) {
 		return
 	}
 	exe, err := os.Executable()
 	if err != nil || strings.HasSuffix(filepath.Base(exe), ".test") {
 		return // never re-execute a Go test binary
 	}
-	cmd := exec.Command(exe, "conflict-watch", "--branch="+branch)
+	cmd := exec.Command(exe, "conflict-watch")
 	cmd.Dir = root
 	cmd.SysProcAttr = detached()
 	if cmd.Start() == nil {
@@ -152,12 +162,12 @@ func StartWatch(root, branch string) {
 	}
 }
 
-// Watch re-checks origin/<branch> against origin/<base> every WatchInterval, emitting
-// PR_CONFLICT when the base moves into a conflict with it, until the branch is merged into the
-// base, deleted on origin, or watchMaxAge passes. One watcher per branch.
-func Watch(root, branch string) {
-	marker := watchMarker(root, branch)
-	_ = os.MkdirAll(filepath.Dir(marker), 0755)
+// Watch re-checks every listed branch (origin/<branch>) against origin/<base> each
+// WatchInterval, emitting PR_CONFLICT when the base has moved into a conflict with it.
+func Watch(root string) {
+	dir := watchDir(root)
+	_ = os.MkdirAll(dir, 0755)
+	marker := filepath.Join(dir, "watch.pid")
 	me := strconv.Itoa(os.Getpid())
 	_ = os.WriteFile(marker, []byte(me), 0644)
 	defer func() {
@@ -165,30 +175,74 @@ func Watch(root, branch string) {
 			_ = os.Remove(marker)
 		}
 	}()
-	start := time.Now()
-	for time.Since(start) < watchMaxAge {
+	lastPush := time.Now()
+	for time.Since(lastPush) < watchMaxAge {
 		if data, _ := os.ReadFile(marker); string(data) != me {
 			return // a newer watcher took over
+		}
+		if fi, err := os.Stat(filepath.Join(dir, "branches")); err == nil && fi.ModTime().After(lastPush) {
+			lastPush = fi.ModTime()
 		}
 		base := BaseBranch(root)
 		if base == "" {
 			return
 		}
 		fetch(root, base)
-		fetch(root, branch)
-		remoteBranch := "origin/" + branch
-		head := revParse(root, remoteBranch)
-		if head == "" {
-			return // deleted on origin
+		dropped := map[string]bool{}
+		for _, branch := range readBranches(dir) {
+			fetch(root, branch)
+			remoteBranch := "origin/" + branch
+			head := revParse(root, remoteBranch)
+			if head == "" || git(root, "merge-base", "--is-ancestor", remoteBranch, "origin/"+base) == nil {
+				dropped[branch] = true // deleted on origin, or merged
+				continue
+			}
+			if r := mergeTree(root, base, "origin/"+base, remoteBranch); r.Conflicting() {
+				Emit(root, branch, head, r)
+			}
 		}
-		if git(root, "merge-base", "--is-ancestor", remoteBranch, "origin/"+base) == nil {
-			return // merged
+		// Re-read: a push may have added a branch during this round; it stays.
+		var next []string
+		for _, b := range readBranches(dir) {
+			if !dropped[b] {
+				next = append(next, b)
+			}
 		}
-		if r := mergeTree(root, base, "origin/"+base, remoteBranch); r.Conflicting() {
-			Emit(root, branch, head, r)
+		writeBranches(dir, next)
+		if len(next) == 0 {
+			return
 		}
 		time.Sleep(WatchInterval())
 	}
+}
+
+func readBranches(dir string) []string {
+	data, err := os.ReadFile(filepath.Join(dir, "branches"))
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, l := range strings.Split(string(data), "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+func writeBranches(dir string, list []string) {
+	tmp := filepath.Join(dir, "branches.tmp")
+	_ = os.WriteFile(tmp, []byte(strings.Join(list, "\n")+"\n"), 0644)
+	_ = os.Rename(tmp, filepath.Join(dir, "branches"))
+}
+
+func contains(list []string, s string) bool {
+	for _, x := range list {
+		if x == s {
+			return true
+		}
+	}
+	return false
 }
 
 // --- helpers ---

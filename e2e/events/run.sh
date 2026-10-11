@@ -12,6 +12,10 @@ T="$(mktemp -d "${TMPDIR:-/tmp}/mf-events.XXXXXX")"
 BIN="${1:-}"
 if [ -z "$BIN" ]; then BIN="$T/monoflow"; (cd "$REPO_ROOT" && go build -o "$BIN" ./cmd/monoflow) || exit 1; fi
 mkdir -p "$T/fakebin" && cp "$HERE/fake-gh" "$T/fakebin/gh"
+# Stop every background process the scenarios left (conflict and CI watchers, background
+# verifies): each records its pid under .agents/.
+cleanup() { find "$T" -path '*/.agents/*' -name '*.pid' 2>/dev/null | while read -r f; do kill "$(cat "$f" 2>/dev/null)" 2>/dev/null; done; }
+trap cleanup EXIT
 export PATH="$T/fakebin:$PATH" MONOFLOW_NO_WARM=1 MONOFLOW_NO_SPECULATE=1 MONOFLOW_FORMAT= MONOFLOW_CONFLICT_INTERVAL=2
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 
