@@ -70,6 +70,8 @@ func ParseDiagnostics(rawOutput string) []DiagnosticError {
 		if trimmed == "" {
 			continue
 		}
+		// go vet prefixes the first finding of a package: "vet: ./record_test.go:54:3: ...".
+		trimmed = strings.TrimPrefix(trimmed, "vet: ")
 
 		// Try TypeScript 1
 		if matches := tsRegex1.FindStringSubmatch(trimmed); matches != nil {

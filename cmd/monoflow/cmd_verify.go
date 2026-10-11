@@ -155,18 +155,11 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 		}
 	}
 
+	var out any = res
 	if !verboseOut {
-		// Cache keys and the exact command lines are for debugging the cache, not for the
-		// agent's next step; --verbose keeps them.
-		for i := range res.Results {
-			r := &res.Results[i]
-			r.CacheKey, r.CachedFrom = "", ""
-			if r.Status == "passed" {
-				r.CommandRun = ""
-			}
-		}
+		out = compactSuite(res, rootDir, g)
 	}
-	data, _ := json.MarshalIndent(res, "", "  ")
+	data, _ := json.MarshalIndent(out, "", "  ")
 	fmt.Println(string(data))
 
 	cb := guard.NewCircuitBreaker(rootDir, 5)
@@ -343,4 +336,52 @@ func changedFilesSince(rootDir, base string) []string {
 		add(out)
 	}
 	return files
+}
+
+// compactSuite is verify's default output: counts, each distinct error once (repo-relative,
+// with the targets it breaks), and which targets failed. Cache keys, command lines and passed
+// targets are --verbose only. On an opentelemetry-go rename that broke 22 modules this is
+// ~4 KB instead of 25 KB of the same compiler error repeated per module.
+func compactSuite(res verify.SuiteResult, rootDir string, g *graph.DependencyGraph) map[string]any {
+	pathOf := map[string]string{}
+	for _, p := range g.GetAllPackages() {
+		pathOf[p.Name] = p.Path
+	}
+	verify.DedupeErrors(&res, rootDir, pathOf, 30)
+	out := map[string]any{
+		"status":         res.Status,
+		"duration_ms":    res.DurationMs,
+		"total_targets":  res.TotalTargets,
+		"passed_targets": res.PassedTargets,
+		"failed_targets": res.FailedTargets,
+		"cached_targets": res.CachedTargets,
+	}
+	if len(res.AffectedPackages) <= 10 {
+		out["affected_packages"] = res.AffectedPackages
+	}
+	failed := map[string]int{}
+	var notes []verify.TargetResult
+	for _, r := range res.Results {
+		if r.Status == "failed" {
+			failed[r.Target] = r.ErrorCount
+		} else if len(r.Preexisting) > 0 || len(r.Quarantined) > 0 {
+			notes = append(notes, verify.TargetResult{Target: r.Target, Status: r.Status, Preexisting: r.Preexisting, Quarantined: r.Quarantined})
+		}
+	}
+	if len(failed) > 0 {
+		out["failed"] = failed // target -> error count
+	}
+	if len(notes) > 0 {
+		out["notes"] = notes
+	}
+	if len(res.Errors) > 0 {
+		out["errors"] = res.Errors
+	}
+	if res.ErrorsOmitted > 0 {
+		out["errors_omitted"] = res.ErrorsOmitted
+	}
+	if res.Hint != "" {
+		out["hint"] = res.Hint
+	}
+	return out
 }
