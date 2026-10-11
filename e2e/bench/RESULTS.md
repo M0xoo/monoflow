@@ -23,9 +23,17 @@ the same agent session with the CI output (`FIX_ROUNDS`, default 2), so metrics 
 | A (MonoFlow) | 102 | 19.1 | 138k | 0 | 0 / 8 |
 | B (plain git) | 107 | 19.2 | 147k | 2 | 0 / 8 |
 
+Runs 6-8 combined (16 agents per condition; runs 9-10 were aborted when the free model was rate-limited):
+
+| runs 6-8 | avg / median secs | tool calls | avg / median fresh tokens | red pushes (fix rounds) | red at the end |
+|---|---|---|---|---|---|
+| A (MonoFlow) | 105 / 109 | 19.1 | 140k / 149k | **0** | 0 / 16 |
+| B (plain git) | 110 / 102 | 19.1 | 140k / 133k | **4** | 0 / 16 |
+
 B's seconds exclude the remote CI run that reported the failure (minutes on real CI; here `ci/run.sh`
 runs locally). Small sample (8 agents per condition): read it as "on par to green, without the red push",
-not as a precise speed-up.
+not as a precise speed-up. With 16 agents per condition the cost to green is the same; the
+difference is 4 red pushes (4 wasted remote CI runs, each found minutes later in real CI) versus none.
 
 ## Reading
 - **Remote CI protection works**: 0 of 24 MonoFlow branches failed full CI; 6 of 24 plain branches did
