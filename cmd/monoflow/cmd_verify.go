@@ -119,6 +119,19 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 			total := len(g.GetAllPackages())
 			if others := total - res.TotalTargets; others > 0 {
 				c["scope"] = fmt.Sprintf("%d of %d packages: every changed package and every package depending on them (what CI runs for this change); the other %d do not depend on your change, so it cannot break them", res.TotalTargets, total, others)
+				if others <= 5 { // name them, so nobody goes looking (or re-tests them "to be sure")
+					in := map[string]bool{}
+					for _, n := range res.AffectedPackages {
+						in[n] = true
+					}
+					var out []string
+					for _, p := range g.GetAllPackages() {
+						if !in[p.Name] {
+							out = append(out, p.Path)
+						}
+					}
+					c["not_affected"] = out
+				}
 			} else {
 				c["scope"] = fmt.Sprintf("all %d packages (every package depends on your change)", total)
 			}

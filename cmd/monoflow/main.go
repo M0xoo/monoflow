@@ -20,10 +20,13 @@ func main() {
 
 	cmd := os.Args[1]
 	if isHelpArg(cmd) {
-		if len(os.Args) > 2 {
-			printCommandUsage(os.Args[2])
-		} else {
+		switch {
+		case len(os.Args) > 2 && os.Args[2] == "--all":
 			printUsage()
+		case len(os.Args) > 2:
+			printCommandUsage(os.Args[2])
+		default:
+			printShortUsage()
 		}
 		os.Exit(0)
 	}
@@ -133,6 +136,19 @@ func main() {
 
 func printUsage() {
 	usageText(os.Stdout)
+}
+
+// printShortUsage is what `monoflow help` prints: the agent path and command names. The full
+// list (3 KB) is behind `help --all`; agents read help early and carry it in context all run.
+func printShortUsage() {
+	fmt.Println(`MonoFlow. Agent path (4 calls):
+  monoflow start <task-id>      worktree + branch; cd into the printed path
+  monoflow verify               build+lint+test changed packages and every dependent (= CI for this change)
+  monoflow ship -m "<msg>"      commit, local CI on that commit, push, open the PR
+
+More: graph (query|impact) · checkpoint · commit · push · sync · events · ci · outer · worktree ·
+pr · review · queue · quarantine · version · task · guard · subset · cache · deliver · init · hook
+  monoflow help <command>       flags of one command      monoflow help --all   everything`)
 }
 
 func usageText(w io.Writer) {
