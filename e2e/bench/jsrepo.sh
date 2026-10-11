@@ -49,6 +49,24 @@ ground_truth() { # dir out-file
   done
 }
 
+# run_agent <jsonl> <cmd...>: run an agent, appending its JSON events to <jsonl>. Free models
+# stall mid-run (rate limits) without exiting: no new events for STALL_SECS (default 600) kills
+# it and marks the run stalled, so it is excluded instead of counted as a 30-minute failure.
+run_agent() {
+  local f=$1; shift
+  "$@" >> "$f" 2>/dev/null &
+  local pid=$! last=-1 idle=0 el=0 sz
+  while kill -0 "$pid" 2>/dev/null; do
+    sleep 20; el=$((el + 20)); sz=$(wc -c < "$f")
+    if [ "$sz" = "$last" ]; then idle=$((idle + 20)); else idle=0; last=$sz; fi
+    if [ "$idle" -ge "${STALL_SECS:-600}" ] || [ "$el" -ge "${AGENT_TIMEOUT:-2400}" ]; then
+      [ "$idle" -ge "${STALL_SECS:-600}" ] && echo "stalled after ${el}s" > "${f%.jsonl}.stalled"
+      pkill -P "$pid" 2>/dev/null; kill "$pid" 2>/dev/null; break
+    fi
+  done
+  wait "$pid" 2>/dev/null
+}
+
 run_condition() { # cond run
   local cond=$1 run=$2 dir="$WORK/$1-$2" out="$OUT/$1-$2"
   rm -rf "$dir"; mkdir -p "$dir" "$out"; rm -f "$out"/*
@@ -63,7 +81,8 @@ run_condition() { # cond run
     prompt="$MONO$TASK"
   fi
   s=$(date +%s)
-  perl -e 'alarm shift; exec @ARGV' "${AGENT_TIMEOUT:-2400}" opencode run --dir "$dir/src" -m "$MODEL" --auto --format json "$prompt" > "$out/agent.jsonl" 2>/dev/null
+  : > "$out/agent.jsonl"
+  run_agent "$out/agent.jsonl" opencode run --dir "$dir/src" -m "$MODEL" --auto --format json "$prompt"
   echo $(( $(date +%s) - s )) > "$out/agent.secs"
   ground_truth "$dir" "$out/ci.txt"
   local round
@@ -73,17 +92,17 @@ run_condition() { # cond run
     sid=$(jq -R -r 'fromjson? | select(type=="object" and .sessionID != null) | .sessionID' "$out/agent.jsonl" | head -1)
     [ -n "$sid" ] || break
     s=$(date +%s)
-    perl -e 'alarm shift; exec @ARGV' "${AGENT_TIMEOUT:-2400}" opencode run --dir "$dir/src" -s "$sid" -m "$MODEL" --auto --format json \
+    run_agent "$out/agent.jsonl" opencode run --dir "$dir/src" -s "$sid" -m "$MODEL" --auto --format json \
       "Full CI failed on your pushed branch $br. New failures (not on main):
 $(head -40 "$dir/gt-$(echo "$br" | tr / _).new")
-Fix them and push again the same way you did before. Do not wait for CI afterwards." >> "$out/agent.jsonl" 2>/dev/null
+Fix them and push again the same way you did before. Do not wait for CI afterwards."
     echo $(( $(cat "$out/agent.secs") + $(date +%s) - s )) > "$out/agent.secs"; echo "$round" > "$out/agent.fixes"
     ground_truth "$dir" "$out/ci.txt"
   done
-  jq -R -s --arg cond "$cond" --arg run "$run" --argjson secs "$(cat "$out/agent.secs")" --argjson fixes "$(cat "$out/agent.fixes" 2>/dev/null || echo 0)" '
+  jq -R -s --arg cond "$cond" --arg run "$run" --argjson secs "$(cat "$out/agent.secs")" --argjson fixes "$(cat "$out/agent.fixes" 2>/dev/null || echo 0)" --argjson stalled "$([ -f "$out/agent.stalled" ] && echo true || echo false)" '
     [split("\n")[] | fromjson? | select(type=="object")] as $e |
     [$e[] | select(.type=="step_finish") | .part.tokens] as $t |
-    { cond: $cond, run: $run, secs: $secs, fix_rounds: $fixes, steps: ($t|length),
+    { cond: $cond, run: $run, secs: $secs, fix_rounds: $fixes, stalled: $stalled, steps: ($t|length),
       tool_calls: ([$e[] | select(.type=="tool_use")] | length),
       fresh_tokens: (($t|map(.input)|add // 0) + ($t|map(.output)|add // 0)),
       cache_read: ($t|map(.cache.read // 0)|add // 0) }' "$out/agent.jsonl" > "$out/metrics.json"
@@ -104,7 +123,7 @@ for r in $(seq 1 "$RUNS"); do
   run_condition A "$r" & run_condition B "$r" & wait
 done
 for c in A B; do
-  jq -s --arg c "$c" '{cond: $c, runs: length, avg_secs: (map(.secs)|add/length|floor), avg_tool_calls: (map(.tool_calls)|add/length),
+  jq -s --arg c "$c" 'map(select(.stalled != true)) | {cond: $c, runs: length, avg_secs: (map(.secs)|add/length|floor), avg_tool_calls: (map(.tool_calls)|add/length),
     avg_fresh_tokens: (map(.fresh_tokens)|add/length|floor), fix_rounds: (map(.fix_rounds)|add)}' "$OUT"/$c-*/metrics.json
   printf '%s branches: %s\n' "$c" "$(cat "$OUT"/$c-*/ci.txt | tr '\n' ' ')"
 done | tee "$OUT/summary.txt"
