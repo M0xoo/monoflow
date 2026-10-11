@@ -122,7 +122,10 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 			// Name the packages left out and why: an agent told "every module must pass" saw
 			// "27 packages" in a 29-module repo and re-tested all 29 itself.
 			total := len(g.GetAllPackages())
-			if others := total - res.TotalTargets; others > 0 {
+			if res.Excluded > 0 {
+				c["excluded"] = fmt.Sprintf("%d dependent packages under %s skipped (verify_exclude in .agents/monoflow.config.json)", res.Excluded, strings.Join(g.VerifyExclude, ", "))
+			}
+			if others := total - res.TotalTargets - res.Excluded; others > 0 {
 				c["scope"] = fmt.Sprintf("%d of %d packages: every changed package and every package depending on them (what CI runs for this change); the other %d do not depend on your change, so it cannot break them", res.TotalTargets, total, others)
 				if others <= 5 { // name them, so nobody goes looking (or re-tests them "to be sure")
 					in := map[string]bool{}

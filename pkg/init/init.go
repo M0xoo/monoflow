@@ -70,8 +70,9 @@ func InitRepo(targetDir string, binarySrcPath string) (*InitResult, error) {
 
 	// 4. Write .agents/monoflow.config.json
 	cfg := graph.Config{
-		Version:  "1.0",
-		Packages: pkgNodes,
+		Version:       "1.0",
+		Packages:      pkgNodes,
+		VerifyExclude: graph.DefaultVerifyExclude(pkgNodes),
 	}
 	cfgData, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {

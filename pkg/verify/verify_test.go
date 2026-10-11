@@ -248,3 +248,27 @@ func TestVerifyRemovesFilesChecksCreate(t *testing.T) {
 		t.Fatalf("pre-existing untracked file must be kept")
 	}
 }
+
+// Example apps that merely depend on a change are skipped (verify_exclude, default examples/);
+// an example changed directly is still verified.
+func TestVerifyExcludeSkipsExampleDependents(t *testing.T) {
+	root := t.TempDir()
+	for _, d := range []string{"core", "app", "examples/demo"} {
+		_ = os.MkdirAll(filepath.Join(root, d), 0755)
+	}
+	g := graph.New(root)
+	g.AddPackage(&graph.PackageNode{Name: "core", Path: "core", Language: graph.LangGeneric, TestCmd: "true"})
+	g.AddPackage(&graph.PackageNode{Name: "app", Path: "app", Language: graph.LangGeneric, Dependencies: []string{"core"}, TestCmd: "true"})
+	g.AddPackage(&graph.PackageNode{Name: "demo", Path: "examples/demo", Language: graph.LangGeneric, Dependencies: []string{"core"}, TestCmd: "true"})
+	g.RebuildEdges()
+	g.VerifyExclude = []string{"examples/"}
+	r := NewRunner(root)
+	res := r.VerifyAffected(g, []string{"core/x"}, VerifyOptions{Strict: true})
+	if res.TotalTargets != 2 || res.Excluded != 1 {
+		t.Fatalf("want core+app verified, demo excluded: %+v", res)
+	}
+	res = r.VerifyAffected(g, []string{"examples/demo/x"}, VerifyOptions{Strict: true})
+	if res.TotalTargets != 1 || res.Excluded != 0 {
+		t.Fatalf("a directly changed example must be verified: %+v", res)
+	}
+}

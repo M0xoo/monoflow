@@ -83,6 +83,8 @@ type SuiteResult struct {
 	// Pending lists dependents not checked yet because a changed package failed: they run
 	// once the changed packages pass.
 	Pending []string `json:"pending,omitempty"`
+	// Excluded counts dependents skipped by verify_exclude (default: examples/).
+	Excluded int `json:"excluded,omitempty"`
 }
 
 // Runner executes verification tasks with maximum parallelism, caching, and minimal latency.
@@ -363,10 +365,16 @@ func (r *Runner) VerifyAffected(g *graph.DependencyGraph, changedFiles []string,
 		direct[n] = true
 	}
 	var rest []string
+	excluded := 0
 	for _, n := range affected.AllAffected {
-		if !direct[n] {
-			rest = append(rest, n)
+		if direct[n] {
+			continue
 		}
+		if p, ok := g.GetPackage(n); ok && g.ExcludedFromVerify(p) {
+			excluded++ // verify_exclude (default: examples/), as the repo's CI does
+			continue
+		}
+		rest = append(rest, n)
 	}
 	res := r.VerifyPackages(g, affected.DirectlyChanged, opt)
 	if res.Status == "failed" && len(rest) > 0 {
@@ -381,6 +389,7 @@ func (r *Runner) VerifyAffected(g *graph.DependencyGraph, changedFiles []string,
 		res.AffectedPackages = append(res.AffectedPackages, dep.AffectedPackages...)
 		res.Results = append(res.Results, dep.Results...)
 	}
+	res.Excluded = excluded
 	res.DurationMs = float64(time.Since(start).Microseconds()) / 1000.0
 	return res
 }
