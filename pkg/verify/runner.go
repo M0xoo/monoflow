@@ -1,6 +1,7 @@
 package verify
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -54,6 +55,8 @@ type TargetResult struct {
 	CommandRun string `json:"command_run,omitempty"`
 	// ErrorCount replaces Errors when DedupeErrors moved them to SuiteResult.Errors.
 	ErrorCount int `json:"error_count,omitempty"`
+	// Flaky: failed while many checks ran at once, passed when re-run alone.
+	Flaky bool `json:"flaky,omitempty"`
 
 	// remaining are the checks skipped after the failing one, and dir where they run: if
 	// that failure turns out to be preexisting they still have to run (see classifyPreexisting).
@@ -185,7 +188,21 @@ func (r *Runner) VerifyTarget(pkg *graph.PackageNode, opt VerifyOptions) TargetR
 		cacheKey, _ = r.cacheMgr.ComputePackageKey(pkg, r.upstreamKeys(pkg), cmdStr, modeTag)
 		if !opt.NoCache && cacheKey != "" {
 			res.CacheKey = cacheKey
-			if rec, hit := r.cacheMgr.GetVerification(cacheKey); hit && rec.Status == "passed" {
+			rec, hit := r.cacheMgr.GetVerification(cacheKey)
+			if hit && rec.Status == "preexisting" && !opt.Strict {
+				// Only failures main already has, judged against the same baseline commit: they
+				// stay what they were (re-running them every verify cost minutes on trpc).
+				var stored struct {
+					Base   string            `json:"base"`
+					Errors []DiagnosticError `json:"errors"`
+				}
+				if json.Unmarshal([]byte(rec.Output), &stored) == nil && stored.Base != "" && stored.Base == r.baselineSHA(opt.BaseRef) {
+					res.Status, res.Cached, res.Preexisting = "passed", true, stored.Errors
+					res.DurationMs = float64(time.Since(start).Microseconds()) / 1000.0
+					return res
+				}
+			}
+			if hit && rec.Status == "passed" {
 				res.Status = "passed"
 				res.Cached = true
 				if strings.HasPrefix(rec.Output, "monoflow-proof:") {
@@ -430,8 +447,30 @@ func (r *Runner) VerifyPackages(g *graph.DependencyGraph, names []string, opt Ve
 	wg.Wait()
 	results = append(results, prepFailures...)
 
+	// A failure under the load of many checks at once (test timeouts, spawned processes) is not
+	// a failure of the change: re-run a few failed targets once, alone, before reporting. A
+	// pass then is reported as flaky, not hidden. (trpc: openapi CLI tests timed out at 5 s
+	// while 48 packages ran, blocking a correct change.)
+	var failedIdx []int
+	for i, res := range results {
+		if res.Status == "failed" && len(res.Errors) > 0 && res.Errors[0].Code != "package_not_projected" && res.Target != PrepareTarget {
+			failedIdx = append(failedIdx, i)
+		}
+	}
+	if len(failedIdx) > 0 && len(failedIdx) <= 5 {
+		for _, i := range failedIdx {
+			if pkg, ok := g.GetPackage(results[i].Target); ok {
+				if again := r.VerifyTarget(pkg, opt); again.Status == "passed" {
+					again.Flaky = true
+					results[i] = again
+				}
+			}
+		}
+	}
+
 	if !opt.Strict {
 		r.classifyPreexisting(g, results, opt)
+		r.cachePreexisting(results, opt)
 	}
 
 	totalDur := float64(time.Since(start).Microseconds()) / 1000.0
@@ -514,7 +553,7 @@ func (r *Runner) cachedPass(pkg *graph.PackageNode, opt VerifyOptions) bool {
 	}
 	key, _ := r.cacheMgr.ComputePackageKey(pkg, r.upstreamKeys(pkg), strings.Join(cmds, " && "), opt.Stage+":"+opt.Mode)
 	rec, hit := r.cacheMgr.PeekVerification(key)
-	return key != "" && hit && rec.Status == "passed"
+	return key != "" && hit && (rec.Status == "passed" || (rec.Status == "preexisting" && !opt.Strict))
 }
 
 // failedResult turns a failed command's output into a result with diagnostics.
@@ -536,4 +575,28 @@ func PassedKeys(results []TargetResult) []string {
 		}
 	}
 	return keys
+}
+
+// cachePreexisting stores results whose only failures main already has, with the baseline
+// commit they were judged against, so the next verify does not re-run them.
+func (r *Runner) cachePreexisting(results []TargetResult, opt VerifyOptions) {
+	if r.cacheMgr == nil || opt.NoCache {
+		return
+	}
+	base := ""
+	for _, res := range results {
+		if res.Status != "passed" || res.Cached || res.CacheKey == "" || len(res.Preexisting) == 0 || len(res.Errors) > 0 {
+			continue
+		}
+		if base == "" {
+			if base = r.baselineSHA(opt.BaseRef); base == "" {
+				return
+			}
+		}
+		data, _ := json.Marshal(map[string]any{"base": base, "errors": res.Preexisting})
+		_ = r.cacheMgr.PutVerification(&cache.VerificationRecord{
+			Key: res.CacheKey, Target: res.Target, Language: res.Language, Status: "preexisting",
+			CommandRun: res.CommandRun, Timestamp: time.Now().UTC(), Output: string(data),
+		})
+	}
 }

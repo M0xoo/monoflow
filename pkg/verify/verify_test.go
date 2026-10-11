@@ -201,3 +201,27 @@ func TestVerifyAffectedChecksChangedPackagesFirst(t *testing.T) {
 		t.Fatalf("want both checked and passed: %+v", res)
 	}
 }
+
+// A target that fails once and passes alone (a timeout under load) is reported as flaky, not
+// failed; a real failure stays failed.
+func TestFailedTargetRetriedOnceAndMarkedFlaky(t *testing.T) {
+	root := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(root, "flaky"), 0755)
+	_ = os.MkdirAll(filepath.Join(root, "broken"), 0755)
+	g := graph.New(root)
+	g.AddPackage(&graph.PackageNode{Name: "flaky", Path: "flaky", Language: graph.LangGeneric,
+		TestCmd: `if [ -f seen ]; then exit 0; fi; touch seen; echo "x_test.go:1: timed out"; exit 1`})
+	g.AddPackage(&graph.PackageNode{Name: "broken", Path: "broken", Language: graph.LangGeneric,
+		TestCmd: `echo "y_test.go:2: want 1"; exit 1`})
+	res := NewRunner(root).VerifyPackages(g, []string{"flaky", "broken"}, VerifyOptions{Strict: true})
+	got := map[string]TargetResult{}
+	for _, r := range res.Results {
+		got[r.Target] = r
+	}
+	if r := got["flaky"]; r.Status != "passed" || !r.Flaky {
+		t.Fatalf("flaky target: %+v", r)
+	}
+	if r := got["broken"]; r.Status != "failed" || r.Flaky {
+		t.Fatalf("broken target: %+v", r)
+	}
+}

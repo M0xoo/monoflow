@@ -377,6 +377,15 @@ func compactSuite(res verify.SuiteResult, rootDir string, g *graph.DependencyGra
 	if len(quarantined) > 0 {
 		out["quarantined"] = quarantined
 	}
+	var flaky []string
+	for _, r := range res.Results {
+		if r.Flaky {
+			flaky = append(flaky, r.Target)
+		}
+	}
+	if len(flaky) > 0 {
+		out["flaky"] = flaky // failed under load, passed re-run alone (not blocking)
+	}
 	if len(res.Errors) > 0 {
 		out["errors"] = res.Errors
 	}

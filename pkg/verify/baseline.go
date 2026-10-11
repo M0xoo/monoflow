@@ -112,7 +112,9 @@ func (r *Runner) runRemaining(res *TargetResult, baseDir, basePkgDir string) {
 
 // baselineDir returns (creating once) a detached checkout of the merge-base of HEAD and
 // the base branch, shared by all worktrees through the package cache directory.
-func (r *Runner) baselineDir(baseRef string) string {
+// baselineSHA is the commit failures are compared against: the merge-base with the base
+// branch, or HEAD's parent when HEAD is on the base branch with no local edits.
+func (r *Runner) baselineSHA(baseRef string) string {
 	cands := []string{"origin/main", "main", "origin/master", "master"}
 	if baseRef != "" {
 		cands = []string{baseRef}
@@ -126,7 +128,7 @@ func (r *Runner) baselineDir(baseRef string) string {
 		}
 	}
 	head, _ := exec.Command("git", "-C", r.RootDir, "rev-parse", "HEAD").Output()
-	if mb == "" || r.cacheMgr == nil {
+	if mb == "" {
 		return ""
 	}
 	if mb == strings.TrimSpace(string(head)) && !worktreeDirty(r.RootDir) {
@@ -137,6 +139,14 @@ func (r *Runner) baselineDir(baseRef string) string {
 			return "" // root commit: no baseline, failures are real
 		}
 		mb = strings.TrimSpace(string(parent))
+	}
+	return mb
+}
+
+func (r *Runner) baselineDir(baseRef string) string {
+	mb := r.baselineSHA(baseRef)
+	if mb == "" || r.cacheMgr == nil {
+		return ""
 	}
 	dir := filepath.Join(r.cacheMgr.LocalDir, "baselines", mb)
 	if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
