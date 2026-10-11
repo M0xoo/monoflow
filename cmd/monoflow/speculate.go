@@ -60,28 +60,35 @@ func treeStateKey(root string) string {
 
 // maybeVerifyInBackground starts a background verify for the current state unless one ran or
 // runs for it already. Cheap when nothing changed (one git diff).
-func maybeVerifyInBackground(root string) {
+// It never cancels a background run for an older state: agents edit every few seconds, so
+// cancelled runs never finished (trpc: an agent edited for a minute and its first verify still
+// took 110 s). A finished run caches every package it checked, so packages the agent has not
+// touched since are cache hits by the time it asks; the newest state starts once it is done.
+// It reports whether the current state is handled (started, running or done).
+func maybeVerifyInBackground(root string) bool {
 	if os.Getenv("MONOFLOW_RECORD_KEY") != "" || os.Getenv("MONOFLOW_NO_SPECULATE") != "" {
-		return
+		return true
 	}
 	// Only in agent worktrees: the shared root may hold someone's half-done work, and nobody
 	// asked for its CPU.
 	if !strings.Contains(filepath.ToSlash(root), "/.agents/worktrees/") {
-		return
+		return true
 	}
 	key := treeStateKey(root)
 	if key == "" {
-		return
+		return true
 	}
 	dir := specDir(root)
 	if _, err := os.Stat(filepath.Join(dir, key+".out")); err == nil || specRunAlive(dir, key) {
-		return // done or running for this state
+		return true // done or running for this state
+	}
+	if anySpecRunAlive(dir) {
+		return false // let it finish; the watcher starts this state afterwards
 	}
 	_ = os.MkdirAll(dir, 0755)
-	stopOtherSpecRuns(root, "") // a run for an older state is obsolete
 	exe, err := os.Executable()
 	if err != nil {
-		return
+		return true
 	}
 	tmp := filepath.Join(dir, key+".tmp")
 	script := fmt.Sprintf("sleep %.1f; MONOFLOW_RECORD_KEY=%s %q verify > %q 2>&1; rm -f %q",
@@ -90,11 +97,28 @@ func maybeVerifyInBackground(root string) {
 	cmd.Dir = root
 	cmd.SysProcAttr = detachedSysProcAttr()
 	if err := cmd.Start(); err != nil {
-		return
+		return true
 	}
 	_ = os.WriteFile(filepath.Join(dir, key+".pid"), []byte(strconv.Itoa(cmd.Process.Pid)), 0644)
 	_ = cmd.Process.Release()
 	pruneSpecResults(dir, 20)
+	return true
+}
+
+// anySpecRunAlive reports a verify in progress for any state: a background run or the agent's own.
+func anySpecRunAlive(dir string) bool {
+	for _, ext := range []string{"*.pid", "*.run"} {
+		marks, _ := filepath.Glob(filepath.Join(dir, ext))
+		for _, m := range marks {
+			if filepath.Base(m) == "watch.pid" {
+				continue
+			}
+			if specRunAlive(dir, strings.TrimSuffix(strings.TrimSuffix(filepath.Base(m), ".pid"), ".run")) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // speculatedResult returns the stored verify output for the current state, waiting (up to
@@ -259,15 +283,19 @@ func speculateWatch(root string) {
 	me := strconv.Itoa(os.Getpid())
 	marker := filepath.Join(specDir(root), "watch.pid")
 	_ = os.WriteFile(marker, []byte(me), 0644)
-	last, lastChange := "", time.Now()
+	last, handled, lastChange := "", "", time.Now()
 	for time.Since(lastChange) < time.Hour {
 		time.Sleep(time.Second)
 		if data, err := os.ReadFile(marker); err != nil || string(data) != me {
 			return // worktree removed, or a newer watcher took over
 		}
-		if k := treeStateKey(root); k != last {
+		k := treeStateKey(root)
+		if k != last {
 			last, lastChange = k, time.Now()
-			maybeVerifyInBackground(root)
+		}
+		// Retried every second until started: a run for an older state may still be going.
+		if k != handled && maybeVerifyInBackground(root) {
+			handled = k
 		}
 	}
 	_ = os.Remove(marker)

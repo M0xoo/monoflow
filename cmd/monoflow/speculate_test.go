@@ -156,3 +156,65 @@ func TestVerifyReusesResultForSameFiles(t *testing.T) {
 		t.Fatalf("changed files must not reuse: %s", out)
 	}
 }
+
+// A background run is not cancelled by a newer edit: it finishes (its packages are cached for
+// the agent's verify), then the newest state gets its own run.
+func TestBackgroundVerifyFinishesThenRunsNewestState(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "monoflow")
+	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
+		t.Fatalf("build: %v %s", err, out)
+	}
+	repo := filepath.Join(t.TempDir(), ".agents", "worktrees", "agent2")
+	write := func(rel, s string) {
+		_ = os.MkdirAll(filepath.Dir(filepath.Join(repo, rel)), 0755)
+		if err := os.WriteFile(filepath.Join(repo, rel), []byte(s), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run := func(name string, args ...string) {
+		cmd := exec.Command(name, args...)
+		cmd.Dir = repo
+		_ = cmd.Run()
+	}
+	write("go.mod", "module example.com/m\n\ngo 1.21\n")
+	write("a/a.go", "package a\n\nfunc One() int { return 1 }\n")
+	write("a/a_test.go", "package a\n\nimport (\n\t\"testing\"\n\t\"time\"\n)\n\nfunc TestOne(t *testing.T) {\n\ttime.Sleep(3 * time.Second)\n\tif One() != 1 {\n\t\tt.Fatal(\"want 1\")\n\t}\n}\n")
+	write(".gitignore", "/.agents/verify\n/.agents/cache\n")
+	run("git", "init", "-q", "-b", "main")
+	run("git", "-c", "user.email=t@t", "-c", "user.name=t", "add", "-A")
+	run("git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init")
+
+	watcher := exec.Command(bin, "speculate-watch")
+	watcher.Dir = repo
+	watcher.Env = append(os.Environ(), "MONOFLOW_NO_WARM=1")
+	if err := watcher.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = watcher.Process.Kill(); _ = watcher.Wait() }()
+	time.Sleep(1200 * time.Millisecond)
+
+	write("a/a.go", "package a\n\nfunc One() int { return 2 }\n")
+	key1 := treeStateKey(repo)
+	time.Sleep(3500 * time.Millisecond) // the first run is now in its slow test
+	write("a/a.go", "package a\n\nfunc One() int { return 3 }\n")
+	key2 := treeStateKey(repo)
+
+	waitOut := func(key string) bool {
+		deadline := time.Now().Add(60 * time.Second)
+		for time.Now().Before(deadline) {
+			if _, err := os.Stat(filepath.Join(repo, ".agents", "verify", key+".out")); err == nil {
+				return true
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+		return false
+	}
+	if !waitOut(key2) {
+		t.Fatal("the newest state never got its background run")
+	}
+	// key1's run finished; its output was discarded only because the files changed under it,
+	// but its packages' results are in the cache: nothing was killed half-way.
+	if _, err := os.Stat(filepath.Join(repo, ".agents", "verify", key1+".pid")); err == nil {
+		t.Fatal("the first run is still marked running")
+	}
+}
