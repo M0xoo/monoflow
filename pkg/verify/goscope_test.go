@@ -49,6 +49,9 @@ func TestGoScopedCommandsRunOnlyImportingPackages(t *testing.T) {
 		t.Fatalf("gofmt must check the changed file only: %s", all)
 	}
 
+	if _, _, ok := goScopedCommands(root, app, []string{"lib/codes/codes.go", "lib/CHANGELOG.md"}); !ok {
+		t.Fatalf("a CHANGELOG edit must not disable scoping")
+	}
 	if _, _, ok := goScopedCommands(root, app, []string{"lib/go.mod"}); ok {
 		t.Fatalf("a go.mod change must not be narrowed")
 	}

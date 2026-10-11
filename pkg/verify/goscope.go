@@ -61,6 +61,9 @@ func goChangedImports(root string, pkg *graph.PackageNode, changed []string) (im
 		if modDir == "" {
 			continue // not in a Go module
 		}
+		if isDocChange(f) {
+			continue // CHANGELOG.md, README.md: not visible to the build (an agent's CHANGELOG entry disabled scoping)
+		}
 		if !strings.HasSuffix(f, ".go") {
 			return nil, nil, false
 		}
@@ -199,4 +202,14 @@ func GoImporters(root string, g *graph.DependencyGraph, dir string) (importPath 
 		sort.Strings(byModule[m])
 	}
 	return importPath, byModule, true
+}
+
+// isDocChange reports documentation files, which cannot change what Go builds or tests run
+// (testdata is excluded: tests may read it).
+func isDocChange(f string) bool {
+	switch strings.ToLower(filepath.Ext(f)) {
+	case ".md", ".mdx", ".rst", ".adoc":
+		return !strings.Contains("/"+f, "/testdata/")
+	}
+	return false
 }
