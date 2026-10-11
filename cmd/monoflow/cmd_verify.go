@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -405,12 +406,18 @@ func compactSuite(res verify.SuiteResult, rootDir string, g *graph.DependencyGra
 		out["failed"] = failed // target -> error count
 	}
 	if len(preexisting) > 0 {
-		total := 0
-		for _, n := range preexisting {
-			total += n
+		names := make([]string, 0, len(preexisting))
+		for t := range preexisting {
+			names = append(names, t)
+		}
+		sort.Strings(names)
+		parts := make([]string, len(names))
+		for i, t := range names {
+			parts[i] = fmt.Sprintf("%s (%d)", t, preexisting[t])
 		}
 		// Spelled out: a bare {"pkg": 1} read as an unexplained failure and sent agents re-testing.
-		out["preexisting"] = fmt.Sprintf("%d failure(s) in %d package(s) that main already has: not caused by your change, not blocking (--verbose lists them)", total, len(preexisting))
+		// No pointer to --verbose: agents followed it and read pages of other people's lint debt.
+		out["preexisting"] = "main already fails these too; not caused by your change, not blocking, nothing to do: " + strings.Join(parts, ", ")
 	}
 	if len(quarantined) > 0 {
 		out["quarantined"] = quarantined

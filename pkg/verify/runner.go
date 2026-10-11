@@ -518,6 +518,17 @@ func (r *Runner) VerifyPackages(g *graph.DependencyGraph, names []string, opt Ve
 		}
 	}
 
+	// A test that fails while dozens of checks run at once but passes alone (trpc: a websocket
+	// keep-alive assertion) blocked a correct change and cost the agent two more full verifies.
+	// Re-running only the failed test files is seconds, so every new test failure gets it once.
+	for i := range results {
+		pkg, ok := g.GetPackage(results[i].Target)
+		if ok && results[i].Status == "failed" && !results[i].Flaky && r.retryFailedTestFiles(&results[i], pkg.Path) {
+			results[i].Status, results[i].Flaky = "passed", true
+			results[i].Errors, results[i].ErrorCount = []DiagnosticError{}, 0
+		}
+	}
+
 	if !opt.Strict {
 		r.classifyPreexisting(g, results, opt)
 		r.cachePreexisting(results, opt)
@@ -684,6 +695,46 @@ func removeNewUntracked(dir string, before map[string]bool) {
 			}
 		}
 	}
+}
+
+// testRunnerCall finds the repo's own root-level vitest/jest invocation in a check command.
+var testRunnerCall = regexp.MustCompile(`cd "\$\(git rev-parse --show-toplevel\)" && (\S+(?: exec| x)?) (vitest run|jest)\b`)
+
+// jsTestFile matches the test files vitest/jest report failures in.
+var jsTestFile = regexp.MustCompile(`\.(test|spec)\.[cm]?[jt]sx?$`)
+
+// retryFailedTestFiles re-runs, once and alone, the test files a vitest/jest check reported
+// failing, and reports whether they pass. Only when every error is in a test file: a type or
+// lint error is deterministic. At most 10 files. Paths may be repo- or package-relative.
+func (r *Runner) retryFailedTestFiles(res *TargetResult, pkgPath string) bool {
+	m := testRunnerCall.FindStringSubmatch(res.CommandRun)
+	if m == nil || len(res.Errors) == 0 {
+		return false
+	}
+	seen := map[string]bool{}
+	var files []string
+	for _, e := range res.Errors {
+		if !jsTestFile.MatchString(e.File) {
+			return false
+		}
+		f := filepath.ToSlash(filepath.Clean(e.File)) // repo- or package-relative
+		if _, err := os.Stat(filepath.Join(r.RootDir, f)); err != nil {
+			f = filepath.ToSlash(filepath.Join(pkgPath, f))
+			if _, err := os.Stat(filepath.Join(r.RootDir, f)); err != nil {
+				return false
+			}
+		}
+		if !seen[f] {
+			seen[f] = true
+			files = append(files, "'"+strings.ReplaceAll(f, "'", `'\''`)+"'")
+		}
+	}
+	if len(files) > 10 {
+		return false
+	}
+	cmd := exec.Command("sh", "-c", m[1]+" "+m[2]+" "+strings.Join(files, " "))
+	cmd.Dir = r.RootDir
+	return cmd.Run() == nil
 }
 
 // timingFlake matches failures that load can cause (a deterministic assertion or snapshot

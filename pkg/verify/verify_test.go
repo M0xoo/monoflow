@@ -262,6 +262,42 @@ func TestLocalCIRetriesAnyFailureOnce(t *testing.T) {
 	}
 }
 
+// verify re-runs only the failed test files of a vitest check, once: a test that passes alone is
+// reported flaky and does not block; one that fails again stays failed.
+func TestVerifyRetriesFailedTestFilesOnce(t *testing.T) {
+	root := t.TempDir()
+	_ = exec.Command("git", "-C", root, "init", "-q").Run()
+	for _, f := range []string{"ws/src/a.test.ts", "broken/src/b.test.ts"} {
+		_ = os.MkdirAll(filepath.Dir(filepath.Join(root, f)), 0755)
+		_ = os.WriteFile(filepath.Join(root, f), []byte("test"), 0644)
+	}
+	// A stand-in for "pnpm exec vitest": the ws test fails on its first run only.
+	fake := `case "$*" in
+*broken*) printf ' FAIL  |broken| src/b.test.ts > s > t\nAssertionError: want 1\n ❯ src/b.test.ts:2:1\n'; exit 1;;
+esac
+if [ -f "$(git rev-parse --show-toplevel)/.seen" ]; then exit 0; fi
+touch "$(git rev-parse --show-toplevel)/.seen"
+printf ' FAIL  |ws| src/a.test.ts > keep alive > pong\nAssertionError: expected "vi.fn()" to be called at least once\n ❯ src/a.test.ts:1552:7\n'
+exit 1
+`
+	_ = os.WriteFile(filepath.Join(root, "vitest"), []byte(fake), 0755)
+	g := graph.New(root)
+	for _, name := range []string{"ws", "broken"} {
+		g.AddPackage(&graph.PackageNode{Name: name, Path: name, Language: graph.LangTypeScript,
+			TestCmd: `cd "$(git rev-parse --show-toplevel)" && sh vitest run --passWithNoTests ` + name})
+	}
+	got := map[string]TargetResult{}
+	for _, r := range NewRunner(root).VerifyPackages(g, []string{"ws", "broken"}, VerifyOptions{Strict: true}).Results {
+		got[r.Target] = r
+	}
+	if r := got["ws"]; r.Status != "passed" || !r.Flaky {
+		t.Fatalf("a test file passing alone must be reported flaky, not failed: %+v", r)
+	}
+	if r := got["broken"]; r.Status != "failed" {
+		t.Fatalf("a test failing again stays failed: %+v", r)
+	}
+}
+
 // Files a check leaves in the repo (Playwright test-results/, coverage) are removed, so they
 // cannot end up in the agent's commit; files that existed before are kept.
 func TestVerifyRemovesFilesChecksCreate(t *testing.T) {
