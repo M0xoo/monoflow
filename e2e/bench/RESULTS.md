@@ -142,3 +142,34 @@ agents time. From the transcripts:
 - Before this run: a preexisting lint failure (otel's unformatted semconv files) stopped the check
   chain, so the root module's tests never ran and were reported green. Fixed: checks after a
   preexisting failure still run.
+
+## MonoFlow's worst case, rerun with Claude Haiku (opentelemetry-go, `tasks/status-codes.txt`)
+Same task as above, where MonoFlow had lost (75k vs 51k tokens). Agent: Claude Haiku as a Claude Code
+subagent, one run at a time, fresh clone each run; both arms told to read AGENTS.md; ground truth
+`go test ./...` in every module of the pushed branch. All 19 runs pushed a green branch.
+
+| | runs | time avg (median) | tool calls avg (median) | tokens avg (median) |
+|---|---|---|---|---|
+| plain git | 4 | 177 s (130 s) | 24 (14.5) | 60.4k (55k) |
+| MonoFlow, first build (A-1..A-3) | 3 | 183 s | 20 | 65k |
+| MonoFlow, current build (A-8..A-11) | 4 | **101 s (101 s)** | **15 (14.5)** | 59.9k (59.9k) |
+
+Plain-git runs: 114 / 109 / 338 / 146 s, 15 / 13 / 14 / 54 calls, 53 / 51 / 57 / 81k tokens.
+MonoFlow runs: 112 / 110 / 90 / 93 s, 14 / 17 / 15 / 14 calls, 60 / 61 / 59 / 59k tokens.
+
+Reading: MonoFlow is now faster (median -22%, mean -43%) and far more predictable (90-112 s vs
+109-338 s; 14-17 calls vs 13-54). Tokens: mean equal, median ~9% higher (the MonoFlow guide and
+its outputs in context); a plain run that loses its way costs far more (81k). Every MonoFlow push
+was gated on local CI on the exact commit; a plain push is not.
+
+What got it there (each from a transcript, in order):
+- one verify path for every mode: --affected, --all and --package used to disagree on old gofmt debt
+- verify states its scope ("27 of 29 packages... the other 2: internal/tools, schema, cannot be
+  affected") and the next step; preexisting failures spelled out; agents stopped re-testing
+- Go package-level affected testing: only packages whose code or tests import the change, gofmt on
+  changed files only (CHANGELOG/README edits do not disable it); 28 s vs 58 s for an agent's loop
+- `graph query <dir>`: every package in every module importing it, in 0.9 s, instead of grep
+- upstream cache keys memoised per run: cached outer loop 14.7 s -> 7.8 s
+- `ship` returns at once (push + PR once local CI is green, SHIP_FAILED otherwise); on main it
+  moves the work to its own branch and worktree itself
+- compact help (0.6 KB) and agent guide (1.4 KB, first in AGENTS.md)
