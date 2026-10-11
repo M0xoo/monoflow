@@ -293,6 +293,22 @@ func (r *Runner) VerifyTarget(pkg *graph.PackageNode, opt VerifyOptions) TargetR
 				Timestamp:  time.Now().UTC(),
 				Output:     string(out),
 			})
+			// A pass with -u is also a pass of the plain checks on the files as -u left them:
+			// store it under that key too, or the next plain verify re-ran every package (trpc:
+			// 11 packages, 60 s, after the agent's snapshot run).
+			if opt.UpdateSnapshots && r.graph != nil {
+				plain := opt
+				plain.UpdateSnapshots = false
+				if cmds, _ := r.commandsFor(pkg, plain); len(cmds) > 0 {
+					plainCmd := strings.Join(cmds, " && ")
+					if key, err := r.cacheMgr.ComputePackageKey(pkg, r.cacheMgr.UpstreamKeysFresh(r.graph, pkg), plainCmd, opt.Stage+":"+opt.Mode); err == nil && key != "" {
+						_ = r.cacheMgr.PutVerification(&cache.VerificationRecord{
+							Key: key, Target: pkg.Name, Language: string(pkg.Language), Status: "passed",
+							DurationMs: durationMs, CommandRun: plainCmd, Timestamp: time.Now().UTC(), Output: string(out),
+						})
+					}
+				}
+			}
 		}
 	}
 
@@ -419,7 +435,9 @@ func (r *Runner) VerifyAffected(g *graph.DependencyGraph, changedFiles []string,
 // --affected green and --all red stopped trusting both.
 func (r *Runner) VerifyPackages(g *graph.DependencyGraph, names []string, opt VerifyOptions) SuiteResult {
 	start := time.Now()
-	if r.cacheMgr != nil {
+	// No key memo when -u rewrites snapshots mid-run: keys computed before the rewrite would
+	// file later packages' passes under content that no longer exists.
+	if r.cacheMgr != nil && !opt.UpdateSnapshots {
 		r.cacheMgr.BeginRun()
 		defer r.cacheMgr.EndRun()
 	}
@@ -703,25 +721,26 @@ var testRunnerCall = regexp.MustCompile(`cd "\$\(git rev-parse --show-toplevel\)
 // jsTestFile matches the test files vitest/jest report failures in.
 var jsTestFile = regexp.MustCompile(`\.(test|spec)\.[cm]?[jt]sx?$`)
 
-// retryFailedTestFiles re-runs, once and alone, the test files a vitest/jest check reported
-// failing, and reports whether they pass. Only when every error is in a test file: a type or
-// lint error is deterministic. At most 10 files. Paths may be repo- or package-relative.
-func (r *Runner) retryFailedTestFiles(res *TargetResult, pkgPath string) bool {
+// failedTestFilesCmd returns the command running only the test files a vitest/jest check
+// reported failing (repo-relative paths, run from the repo root), when every error is in such
+// a file (a type or lint error is not) and there are at most 10. Paths in errors may be repo-
+// or package-relative.
+func (r *Runner) failedTestFilesCmd(res *TargetResult, pkgPath string) (string, bool) {
 	m := testRunnerCall.FindStringSubmatch(res.CommandRun)
 	if m == nil || len(res.Errors) == 0 {
-		return false
+		return "", false
 	}
 	seen := map[string]bool{}
 	var files []string
 	for _, e := range res.Errors {
 		if !jsTestFile.MatchString(e.File) {
-			return false
+			return "", false
 		}
-		f := filepath.ToSlash(filepath.Clean(e.File)) // repo- or package-relative
+		f := filepath.ToSlash(filepath.Clean(e.File))
 		if _, err := os.Stat(filepath.Join(r.RootDir, f)); err != nil {
 			f = filepath.ToSlash(filepath.Join(pkgPath, f))
 			if _, err := os.Stat(filepath.Join(r.RootDir, f)); err != nil {
-				return false
+				return "", false
 			}
 		}
 		if !seen[f] {
@@ -730,9 +749,19 @@ func (r *Runner) retryFailedTestFiles(res *TargetResult, pkgPath string) bool {
 		}
 	}
 	if len(files) > 10 {
+		return "", false
+	}
+	return repoRootPrefix + m[1] + " " + m[2] + " " + strings.Join(files, " "), true
+}
+
+// retryFailedTestFiles re-runs, once and alone, the failed test files of a vitest/jest check,
+// and reports whether they pass.
+func (r *Runner) retryFailedTestFiles(res *TargetResult, pkgPath string) bool {
+	c, ok := r.failedTestFilesCmd(res, pkgPath)
+	if !ok {
 		return false
 	}
-	cmd := exec.Command("sh", "-c", m[1]+" "+m[2]+" "+strings.Join(files, " "))
+	cmd := exec.Command("sh", "-c", c)
 	cmd.Dir = r.RootDir
 	return cmd.Run() == nil
 }

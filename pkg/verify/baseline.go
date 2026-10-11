@@ -58,7 +58,13 @@ func (r *Runner) classifyPreexisting(g *graph.DependencyGraph, results []TargetR
 			if _, err := os.Stat(dir); err != nil {
 				return // package is new in this change: nothing to compare against
 			}
-			baseOut, baseFailed := runBaselineCheck(baseDir, dir, res.CommandRun)
+			// Only the failed test files when that is all that failed: running the package's
+			// whole command (typecheck, lint, every test) on main again took ~20 s per verify.
+			baseCmd, narrow := r.failedTestFilesCmd(res, pkgPath)
+			if !narrow {
+				baseCmd = res.CommandRun
+			}
+			baseOut, baseFailed := runBaselineCheck(baseDir, dir, baseCmd)
 			if !baseFailed {
 				return
 			}

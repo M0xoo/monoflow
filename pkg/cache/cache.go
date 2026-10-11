@@ -220,6 +220,16 @@ func (m *Manager) SetHTTPClient(client *http.Client) {
 // dependent's cached verification and build artifact. Pinned dependencies need no entry:
 // the pinned version is part of the consumer's own (hashed) manifest.
 func (m *Manager) UpstreamKeys(g *graph.DependencyGraph, pkg *graph.PackageNode) map[string]string {
+	return m.upstreamKeys(g, pkg, true)
+}
+
+// UpstreamKeysFresh is UpstreamKeys from the files as they are now, ignoring the run's memo
+// (after a check rewrote files, e.g. snapshot updates).
+func (m *Manager) UpstreamKeysFresh(g *graph.DependencyGraph, pkg *graph.PackageNode) map[string]string {
+	return m.upstreamKeys(g, pkg, false)
+}
+
+func (m *Manager) upstreamKeys(g *graph.DependencyGraph, pkg *graph.PackageNode, memo bool) map[string]string {
 	keys := map[string]string{}
 	visited := map[string]bool{pkg.Name: true}
 	queue := g.GetUpstream(pkg.Name)
@@ -231,11 +241,11 @@ func (m *Manager) UpstreamKeys(g *graph.DependencyGraph, pkg *graph.PackageNode)
 		}
 		visited[name] = true
 		if dep, ok := g.GetPackage(name); ok {
-			if k, ok := m.sourceKeys.Load(name); ok && m.memoOn.Load() {
+			if k, ok := m.sourceKeys.Load(name); ok && memo && m.memoOn.Load() {
 				keys[name] = k.(string)
 			} else {
 				keys[name], _ = m.ComputePackageKey(dep, nil, "", "source")
-				if m.memoOn.Load() {
+				if memo && m.memoOn.Load() {
 					m.sourceKeys.Store(name, keys[name])
 				}
 			}

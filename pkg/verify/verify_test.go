@@ -298,6 +298,26 @@ exit 1
 	}
 }
 
+// A pass with --update-snapshots is reused by the next plain verify on the files -u left: it
+// used to be stored only under the "-u" command, so the plain run re-ran every package.
+func TestSnapshotUpdatePassIsReusedByPlainVerify(t *testing.T) {
+	root := t.TempDir()
+	_ = exec.Command("git", "-C", root, "init", "-q").Run()
+	_ = os.MkdirAll(filepath.Join(root, "app"), 0755)
+	_ = os.WriteFile(filepath.Join(root, "app", "snap.txt"), []byte("old\n"), 0644)
+	_ = os.WriteFile(filepath.Join(root, "app", "check.sh"), []byte(`if [ "$1" = "-u" ]; then echo new > snap.txt; fi; [ "$(cat snap.txt)" = new ]`), 0644)
+	g := graph.New(root)
+	g.AddPackage(&graph.PackageNode{Name: "app", Path: "app", Language: graph.LangTypeScript, TestCmd: "sh check.sh"})
+
+	if res := NewRunner(root).VerifyPackages(g, []string{"app"}, VerifyOptions{UpdateSnapshots: true, Strict: true}); res.Status != "passed" {
+		t.Fatalf("-u run: %+v", res.Results)
+	}
+	res := NewRunner(root).VerifyPackages(g, []string{"app"}, VerifyOptions{Strict: true})
+	if res.Status != "passed" || res.CachedTargets != 1 {
+		t.Fatalf("plain verify after -u should be a cache hit: cached=%d %+v", res.CachedTargets, res.Results)
+	}
+}
+
 // Files a check leaves in the repo (Playwright test-results/, coverage) are removed, so they
 // cannot end up in the agent's commit; files that existed before are kept.
 func TestVerifyRemovesFilesChecksCreate(t *testing.T) {
