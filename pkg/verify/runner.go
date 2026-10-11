@@ -365,6 +365,10 @@ func (r *Runner) VerifyAffected(g *graph.DependencyGraph, changedFiles []string,
 // --affected green and --all red stopped trusting both.
 func (r *Runner) VerifyPackages(g *graph.DependencyGraph, names []string, opt VerifyOptions) SuiteResult {
 	start := time.Now()
+	if r.cacheMgr != nil {
+		r.cacheMgr.BeginRun()
+		defer r.cacheMgr.EndRun()
+	}
 	if r.graph == nil {
 		r.graph = g
 	}
