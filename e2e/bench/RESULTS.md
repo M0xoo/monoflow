@@ -41,3 +41,18 @@ not as a precise speed-up.
 outer loop false red from sparse worktrees; headless opencode idle hang; `push` blocked every
 branch with commits; worktrees cut from a stale local main; `events wait` answering with a pre-PR
 CI_SKIPPED; `pr create --body-file` silently ignored; local verify skipping `cmd/` tests.
+
+## CI proof reuse on real Linux (2026-10-11)
+Sandbox PR M0xoo/monoflow-sim-acme#26: a `proof-agent` workflow on ubuntu-latest plays the agent
+(outer loop on the exact commit, then `monoflow ci proofs publish`), then the PR's `monoflow-ci`
+run imports them.
+
+| PR CI run | proofs | targets cached | verify step |
+|---|---|---|---|
+| no proofs for the changed packages | – | 4 / 6 (unchanged packages, actions/cache) | 21.6 s |
+| proofs published by the agent | imported 6 records | **6 / 6** | **0.03 s** |
+
+Found on the way: the vendored `.agents/bin/monoflow-linux-amd64` from the sim setup was older
+than `ci proofs` and silently ran a different command (keep the vendored binary current, or let
+CI download the release); proofs were published after the branch push, racing an open PR's CI
+(now published first).
