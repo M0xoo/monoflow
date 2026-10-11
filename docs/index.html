@@ -262,10 +262,10 @@ not affected: internal/tools, schema</code></pre>
         <article class="stat">
           <header><b>trpc</b><span>pnpm and Turborepo; 400 to 422 across packages</span></header>
           <dl>
-            <div class="win"><dt>Plain git + Turbo</dt><dd>237<small>s</small></dd></div>
-            <div><dt>MonoFlow</dt><dd>377<small>s</small></dd></div>
+            <div class="level"><dt>Plain git + Turbo</dt><dd>274<small>s</small></dd></div>
+            <div class="level"><dt>MonoFlow</dt><dd>277<small>s</small></dd></div>
           </dl>
-          <p>Best run of each. Plain git with Turbo is ahead here, on time and on tokens. We are working on it.</p>
+          <p>Plain: mean of 3 runs (237 to 345 s). MonoFlow: latest run, which used the fewest tool calls of any (22 against 29 to 36); tokens at the top of the plain range (87k against 79k to 87k). Level, not ahead: the fastest plain runs are still quicker. MonoFlow started at 377 to 586 s.</p>
         </article>
       </div>
       <p class="note">Every MonoFlow push was gated on local CI; plain pushes were not.</p>

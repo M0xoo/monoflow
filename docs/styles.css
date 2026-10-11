@@ -359,7 +359,7 @@ h3 {
 }
 .stat dd small { font-size: 0.3em; letter-spacing: 0; margin-left: 6px; font-variation-settings: "wdth" 100; }
 .stat .win dt { color: var(--red); }
-.stat .win dd { color: var(--ink); }
+.stat .win dd, .stat .level dd { color: var(--ink); }
 .stat p { margin: 0; color: var(--ink-2); font-size: 0.95rem; max-width: 52ch; }
 
 /* Install */
