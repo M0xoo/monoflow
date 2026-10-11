@@ -6,12 +6,13 @@ Run it as ` + "`" + `./bin/monoflow` + "`" + ` (or ` + "`" + `.agents/bin/monofl
 
 1. ` + "`" + `monoflow start <task-id>` + "`" + `, then ` + "`" + `cd` + "`" + ` into the printed ` + "`" + `path` + "`" + `: your own worktree and branch
    ` + "`" + `agent/<task-id>` + "`" + ` off the latest main (other agents may be working in the repo root).
-2. Find what to change: ` + "`" + `monoflow graph impact <file>` + "`" + ` lists every package, repo-wide, that depends
-   on that file (the callers grep would have to find module by module).
-3. Edit, then ` + "`" + `monoflow verify` + "`" + `. It builds, lints and tests every changed package and every package
-   depending on them: what CI runs for this change, cached. Failures that main already has are
-   reported but do not block. Fix the ` + "`" + `errors[]` + "`" + ` (` + "`" + `file:line` + "`" + `) and run it again until it passes.
-   Do not also run go test / npm test / tsc / ` + "`" + `verify --all` + "`" + `: ` + "`" + `verify` + "`" + ` already covered them.
+2. Make the change itself (` + "`" + `monoflow graph impact <file>` + "`" + ` shows which packages, repo-wide, depend on
+   the file you are about to change).
+3. Run ` + "`" + `monoflow verify` + "`" + ` right away instead of searching for what your change breaks: it builds, lints and
+   tests every changed package and every package depending on them (what CI runs for this change,
+   cached) and lists each break as ` + "`" + `errors[]` + "`" + ` with ` + "`" + `file:line` + "`" + ` and the failing test, in any package.
+   Fix exactly those and run it again until it passes. Failures main already has do not block.
+   Do not also run go test / npm test / tsc / ` + "`" + `verify --all` + "`" + ` or grep for affected tests: ` + "`" + `verify` + "`" + ` covers them.
 4. ` + "`" + `monoflow ship -m "<commit message>"` + "`" + ` (optional ` + "`" + `--title=... --body=...` + "`" + `): commits, runs CI locally on
    that exact commit, pushes and opens the PR. Then end your turn: CI results are delivered to you
    (on CI_FAILED: fix, ` + "`" + `verify` + "`" + `, ` + "`" + `ship` + "`" + ` again).
@@ -49,7 +50,7 @@ Run as ` + "`" + `./bin/monoflow` + "`" + `. Full guide: ` + "`" + `AGENTS.md` +
 
 1. ` + "`" + `monoflow start <task-id>` + "`" + ` → cd into the printed path
 2. ` + "`" + `monoflow graph impact <file>` + "`" + ` → every dependent package, repo-wide
-3. edit → ` + "`" + `monoflow verify` + "`" + ` → fix ` + "`" + `errors[].file:line` + "`" + ` → repeat (covers what CI runs; nothing else to run)
+3. make the change → ` + "`" + `monoflow verify` + "`" + ` right away (lists every break, any package, as ` + "`" + `errors[].file:line` + "`" + `) → fix those → repeat
 4. ` + "`" + `monoflow ship -m "<msg>"` + "`" + ` → commit, local CI, push, PR; end your turn
 `
 
