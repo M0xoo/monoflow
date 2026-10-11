@@ -121,6 +121,9 @@ monoflow graph impact packages/core/x.go  # which packages a change to this file
 - **Flaky tests.** A timing-like failure is retried once alone and reported as flaky. Deterministic failures are not retried.
 - **Runs in the background.** In a worktree from `start`, `verify` starts as soon as the agent's edits settle. When the agent asks, the result for those exact files is often already there.
 - **Snapshots.** `verify -u` rewrites mismatched vitest/jest snapshots when the new values are intended.
+- **Formatting is done for you.** Before checking, `verify` (and `ship`, before committing) runs each package's `fix_cmd` on the files the agent changed and lists what it formatted. `init` picks the repo's own formatter: prettier, biome, oxfmt or dprint for JS (from the root `format` script or config), gofmt for Go, ruff for Python, cargo fmt for Rust.
+
+Every package's commands live in `.agents/monoflow.config.json` and can be changed per package: `test_cmd`, `typecheck_cmd`, `lint_cmd`, `fix_cmd` (`{files}` or `{files:.go}` stands for the changed files; `"none"` turns it off) and `prepare_cmd`. Re-running `init` keeps what you set.
 
 ### 3. 🚢 `ship`: nothing red reaches the remote
 

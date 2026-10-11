@@ -61,6 +61,7 @@ func (g *DependencyGraph) discoverPythonPackages(files []string) {
 			Version:  orDefault(tomlString(sections["project"], "version"), "1.0.0"),
 			TestCmd:  "python -m pytest -q",
 			LintCmd:  "ruff check .",
+			FixCmd:   "ruff format {files:.py}",
 		}, deps: deps})
 	}
 	inRepo := map[string]bool{}

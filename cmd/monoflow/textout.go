@@ -52,6 +52,12 @@ func verifyText(res verify.SuiteResult, c map[string]any) string {
 	if s, ok := c["excluded"].(string); ok {
 		b.WriteString("skipped: " + s + "\n")
 	}
+	if f, ok := c["formatted"].([]string); ok {
+		b.WriteString(fixLines(verify.FixResult{Fixed: f}))
+	}
+	if f, ok := c["fix_failed"].([]string); ok {
+		b.WriteString(fixLines(verify.FixResult{Failed: f}))
+	}
 	if len(res.Pending) > 0 {
 		fmt.Fprintf(&b, "pending: %d dependents run once the changed packages pass\n", len(res.Pending))
 	}

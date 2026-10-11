@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -203,5 +204,43 @@ func TestDiscoverPrepareStepFromNxOrTurbo(t *testing.T) {
 	}
 	if q, _ := g.GetPackage("@t/plain"); q == nil || q.PrepareCmd != "" { // "test" has no dependsOn
 		t.Fatalf("no prepare expected: %+v", q)
+	}
+}
+
+// fix_cmd comes from the formatter the repo's root "format" script runs (file arguments only),
+// else from a formatter configured at the root; Go modules get gofmt on their changed files.
+func TestDiscoverFixCommand(t *testing.T) {
+	oxfmt := writeTree(t, map[string]string{
+		"package.json":            `{"name":"root","private":true,"scripts":{"format":"oxfmt"}}`,
+		"pnpm-workspace.yaml":     "packages:\n  - \"packages/*\"\n",
+		"pnpm-lock.yaml":          "",
+		"packages/a/package.json": `{"name":"@q/a","scripts":{"test":"vitest"}}`,
+	})
+	if p, _ := discover(t, oxfmt).GetPackage("@q/a"); p == nil || p.FixCmd != `cd "$(git rev-parse --show-toplevel)" && pnpm exec oxfmt {files}` {
+		t.Fatalf("oxfmt: %+v", p)
+	}
+	prettier := writeTree(t, map[string]string{
+		"package.json":            `{"name":"root","private":true,"devDependencies":{"prettier":"3"}}`,
+		"pnpm-workspace.yaml":     "packages:\n  - \"packages/*\"\n",
+		"pnpm-lock.yaml":          "",
+		"packages/a/package.json": `{"name":"@q/a","scripts":{"test":"vitest"}}`,
+	})
+	if p, _ := discover(t, prettier).GetPackage("@q/a"); p == nil || !strings.Contains(p.FixCmd, "prettier --write --ignore-unknown {files}") {
+		t.Fatalf("prettier: %+v", p)
+	}
+	none := writeTree(t, map[string]string{
+		"package.json":            `{"name":"root","private":true,"scripts":{"format":"node scripts/format-all.js"}}`,
+		"pnpm-workspace.yaml":     "packages:\n  - \"packages/*\"\n",
+		"pnpm-lock.yaml":          "",
+		"packages/a/package.json": `{"name":"@q/a","scripts":{"test":"vitest"}}`,
+	})
+	if p, _ := discover(t, none).GetPackage("@q/a"); p == nil || p.FixCmd != "" {
+		t.Fatalf("a whole-repo script must not become fix_cmd: %+v", p)
+	}
+	goRepo := writeTree(t, map[string]string{"go.mod": "module example.com/m\n\ngo 1.21\n"})
+	for _, p := range discover(t, goRepo).GetAllPackages() {
+		if p.FixCmd != "gofmt -w {files:.go}" {
+			t.Fatalf("go: %+v", p)
+		}
 	}
 }

@@ -230,6 +230,7 @@ One call replaces commit + pr create. Afterwards end your turn: CI results are d
   verify --update-snapshots | -u      Rewrite mismatched vitest/jest snapshots (when the new values are intended)
   verify --base=<ref>                 Changes since the merge-base with <ref> (CI: the PR base)
   verify --strict                     Also block on failures that pre-exist on the base branch
+  verify --no-fix                     Do not run the packages' fix_cmd (formatter) on your changed files first
   verify --proof=<task-id>            Verify a Proof-of-Work receipt
 In a worktree from 'start', verify already runs in the background once your edits settle;
 'monoflow verify' then prints that result (or waits for it) when the files are unchanged.`,

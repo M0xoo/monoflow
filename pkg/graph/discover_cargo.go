@@ -56,6 +56,7 @@ func (g *DependencyGraph) discoverCargoPackages(files []string) {
 			TestCmd:      "cargo test -p " + name,
 			LintCmd:      "cargo clippy -p " + name + " -- -D warnings",
 			TypecheckCmd: "cargo check -p " + name,
+			FixCmd:       "cargo fmt -p " + name,
 		}, deps: deps})
 	}
 	for _, c := range crates {

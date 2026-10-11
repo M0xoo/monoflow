@@ -68,17 +68,29 @@ func InitRepo(targetDir string, binarySrcPath string) (*InitResult, error) {
 		}
 	}
 
-	// 4. Write .agents/monoflow.config.json
+	// 4. Write .agents/monoflow.config.json. Re-running init keeps what the repo set per
+	// package (its verify commands, even ones blanked on purpose) and its verify_exclude; only
+	// new packages and fields the old config lacks (fix_cmd) come from discovery.
+	configPath := filepath.Join(agentsDir, "monoflow.config.json")
+	verifyExclude := graph.DefaultVerifyExclude(pkgNodes)
+	if data, err := os.ReadFile(configPath); err == nil {
+		var old graph.Config
+		if json.Unmarshal(data, &old) == nil {
+			pkgNodes = mergeConfiguredCommands(pkgNodes, old.Packages)
+			if old.VerifyExclude != nil {
+				verifyExclude = old.VerifyExclude
+			}
+		}
+	}
 	cfg := graph.Config{
 		Version:       "1.0",
 		Packages:      pkgNodes,
-		VerifyExclude: graph.DefaultVerifyExclude(pkgNodes),
+		VerifyExclude: verifyExclude,
 	}
 	cfgData, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return nil, err
 	}
-	configPath := filepath.Join(agentsDir, "monoflow.config.json")
 	if err := os.WriteFile(configPath, cfgData, 0644); err != nil {
 		return nil, err
 	}
@@ -376,4 +388,25 @@ func linkRootBinary(root string) {
 		_, _ = f.WriteString("\n# MonoFlow binary link\n/bin/monoflow\n")
 		_ = f.Close()
 	}
+}
+
+// mergeConfiguredCommands keeps the commands an existing config sets for a package (matched by
+// name) over the discovered ones; dependencies and paths come from discovery.
+func mergeConfiguredCommands(discovered, configured []graph.PackageNode) []graph.PackageNode {
+	byName := make(map[string]graph.PackageNode, len(configured))
+	for _, p := range configured {
+		byName[p.Name] = p
+	}
+	for i, p := range discovered {
+		old, ok := byName[p.Name]
+		if !ok {
+			continue
+		}
+		discovered[i].TestCmd, discovered[i].LintCmd, discovered[i].TypecheckCmd = old.TestCmd, old.LintCmd, old.TypecheckCmd
+		discovered[i].PrepareCmd = old.PrepareCmd
+		if old.FixCmd != "" {
+			discovered[i].FixCmd = old.FixCmd
+		}
+	}
+	return discovered
 }

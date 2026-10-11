@@ -88,6 +88,11 @@ func handleShip(rootDir string) {
 			printRaw(`{"error": "uncommitted changes: pass -m \"<commit message>\""}`)
 			os.Exit(1)
 		}
+		// The repo's formatter on the changed files, so nothing unformatted is committed even
+		// when the agent shipped without a final verify.
+		if fr := fixChangedFiles(rootDir); len(fr.Fixed) > 0 {
+			out["formatted"] = fr.Fixed
+		}
 		res, ok := runSelf(exe, rootDir, "commit", "-m", msg)
 		if !ok {
 			res["step"] = "commit"

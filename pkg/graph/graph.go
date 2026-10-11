@@ -37,7 +37,11 @@ type PackageNode struct {
 	TestCmd            string   `json:"test_cmd,omitempty"`
 	LintCmd            string   `json:"lint_cmd,omitempty"`
 	TypecheckCmd       string   `json:"typecheck_cmd,omitempty"`
-	Visibility         string   `json:"visibility,omitempty"` // "public" or "internal"
+	// FixCmd formats / auto-fixes the package's changed files before verify checks them and
+	// before ship commits ({files} or {files:.ext,...} is replaced by those files; "none" turns
+	// it off). See verify.FixChanged.
+	FixCmd     string `json:"fix_cmd,omitempty"`
+	Visibility string `json:"visibility,omitempty"` // "public" or "internal"
 	// PrepareCmd builds what this package's checks need from its dependencies (Nx/Turborepo
 	// "dependsOn: ^build"), through the repo's task runner. The runner appends the upstream
 	// packages and runs it once for all packages about to be checked, before the checks run
