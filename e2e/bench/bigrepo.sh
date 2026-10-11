@@ -88,6 +88,11 @@ Fix it and push again the same way you did before. Do not wait for CI afterwards
       cache_read: ($t|map(.cache.read // 0)|add // 0) }' "$out/agent.jsonl" > "$out/metrics.json"
 }
 
+# Free models get rate-limited for hours; a silent agent then burns AGENT_TIMEOUT per run.
+if ! perl -e 'alarm shift; exec @ARGV' 120 opencode run -m "$MODEL" "reply with the single word OK" 2>/dev/null | grep -q OK; then
+  echo "model $MODEL is not answering (rate-limited?): aborting" >&2; exit 2
+fi
+
 # Modules that already fail on main (upstream debt, toolchain drift) are not the agent's doing.
 mkdir -p "$WORK"; : > "$WORK/base_fail.txt"
 for m in $(cd "$BASE" && git ls-files '*go.mod' | xargs -n1 dirname); do

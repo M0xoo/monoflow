@@ -89,6 +89,11 @@ Fix them and push again the same way you did before. Do not wait for CI afterwar
       cache_read: ($t|map(.cache.read // 0)|add // 0) }' "$out/agent.jsonl" > "$out/metrics.json"
 }
 
+# Free models get rate-limited for hours; a silent agent then burns AGENT_TIMEOUT per run.
+if ! perl -e 'alarm shift; exec @ARGV' 120 opencode run -m "$MODEL" "reply with the single word OK" 2>/dev/null | grep -q OK; then
+  echo "model $MODEL is not answering (rate-limited?): aborting" >&2; exit 2
+fi
+
 # Failures main already has (flaky tests, toolchain drift) are not the agent's doing.
 if [ ! -s "$WORK/base.fail" ]; then
   (cd "$BASE" && sh -c "$GT_CMD") > "$WORK/base.log" 2>&1
