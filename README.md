@@ -15,6 +15,7 @@
 [Documentation (Live)](https://m0xoo.github.io/monoflow/) •
 [Quickstart](#-quickstart-in-10-seconds) •
 [Why MonoFlow?](#-why-monoflow) •
+[How It Works](#-how-it-works) •
 [Core Pillars](#-core-pillars) •
 [CLI Reference](#-cli-reference) •
 [Polyglot Support](#-polyglot-support) •
@@ -56,6 +57,79 @@ MonoFlow automatically:
 3. Installs the zero-dependency, statically compiled binary into `.agents/bin/monoflow`.
 4. Provisions agent rules, Antigravity skills, task boundary templates, and flaky test quarantine.
 5. Configures GitHub Actions package cache & two-tier CI workflows (`monoflow init --setup-gh-actions` or `--gh`).
+
+---
+
+## ⚙️ How It Works
+
+MonoFlow is a single static Go binary that sits between the agent and Git and your toolchains. It doesn't replace your compilers, test runners, or CI. It decides **what** to run, **where** to run it, and **how** to report the result, so an agent spends its tokens on the code instead of on the repository.
+
+```mermaid
+flowchart LR
+    A["Agent"] -->|"monoflow ..."| B["MonoFlow CLI"]
+    B --> G["Dependency Graph\n.agents/monoflow.config.json"]
+    B --> W["Isolated Worktree\n.agents/worktrees/<id>"]
+    B --> V["Affected Verify\nparallel goroutines + cache"]
+    B --> C["Checkpoints\ngit write-tree / read-tree"]
+    B --> S["Guards\nboundaries · test integrity · secrets"]
+    B --> E["Event Inbox\n.agents/events/*.json"]
+    V -->|"compact JSON"| A
+    E -->|"monoflow events unread"| A
+```
+
+### 1. The repo becomes a graph (`monoflow init`, `pkg/graph`)
+On `init`, MonoFlow detects package boundaries from native manifests: npm/pnpm workspaces, Cargo workspaces, `go.mod`, and Python `pyproject.toml`. Anything else falls back to a directory heuristic. It records each package's path, language, upstream dependencies, and typecheck/lint/test commands in `.agents/monoflow.config.json`.
+* Any file maps to its owning package by **longest-prefix match**, so nested packages resolve correctly.
+* `graph query` and `graph impact` answer "who depends on this?" from the graph. The agent never has to grep the repo to guess, which saves both tokens and wrong guesses.
+
+### 2. Each agent works in its own worktree (`monoflow worktree`, `pkg/worktree`)
+`worktree create <id> --packages=...` runs `git worktree add --detach` under `.agents/worktrees/<id>`. It then applies a **sparse-checkout cone** that contains only the requested packages and their upstream dependencies.
+* Heavy dependency directories (`node_modules`, `.venv`, `target`, `.agents/cache`) are **symlinked** from the root. With `--isolated-deps`, they are **copy-on-write cloned** instead (`cp -c` on APFS, `cp --reflink` on Btrfs/XFS). Spinning up an agent therefore doesn't mean reinstalling dependencies.
+* `.env*` files, the task contract, and the MonoFlow binary are copied in, so the agent doesn't invent missing configuration.
+* Each worktree carries a heartbeat lease in a registry. `worktree gc` reclaims worktrees that agents abandoned.
+
+Concurrent agents never share a working directory. They can't overwrite each other's files or corrupt a shared index.
+
+### 3. Checkpoints use Git plumbing, not history (`monoflow checkpoint`, `pkg/checkpoint`)
+`checkpoint save` stages the working tree and calls `git write-tree`. That gives a content-addressed tree object with no commit, branch, or reflog entry. It records the tree SHA in a local history file.
+`checkpoint revert` runs `git read-tree -u --reset <tree>` to restore the working tree to that exact state. Agents can try a hypothesis and throw it away in milliseconds without polluting `git log`.
+
+### 4. Verification runs only what changed (`monoflow verify --affected`, `pkg/verify`)
+1. **Diff → packages:** changed files come from Git, each one maps to its owning package, and the graph is walked **downstream** to collect every transitive dependent.
+2. **Fan out:** each affected package is verified in its own goroutine. The inner loop prefers the fastest signal (typecheck → lint → test), and `--mode=test` or the outer loop runs the real tests.
+3. **Cache first:** before running anything, MonoFlow computes a SHA-256 key over the package's source files, command, mode, OS/arch, and upstream keys. A previous pass with the same key returns from `.agents/cache/` (or the shared `cache serve` daemon) without executing.
+4. **Normalize:** raw compiler output has ANSI codes and spinner glyphs stripped. It is then parsed by per-language patterns (tsc, Go, rustc, Ruff/Flake8/mypy, pytest) into `{file, line, col, code, message}`, plus `expected`/`received` where they can be inferred.
+
+The agent gets a short JSON document that points at the exact line, not 5,000 tokens of terminal scrollback.
+
+### 5. Guardrails are checked mechanically (`pkg/task`, `pkg/guard`)
+* **Task boundaries:** `.agents/task.json` declares `allowed_paths` and `read_only_paths`, and `task check` glob-matches every modified file against them.
+* **Test integrity:** the diff is scanned for deleted assertions (`expect(`, `assert`, `t.Fatal`, …), commented-out tests, and tautologies like `expect(true).toBe(true)`. Any of these blocks the commit.
+* **Secret scanning:** staged and untracked changes are scanned for keys and tokens before every commit or proof.
+* **Circuit breaker:** failures are counted per `task:target`. After 3 attempts, MonoFlow reverts to the latest checkpoint and escalates to a human instead of letting the agent loop.
+* **Git shield:** `init` installs `pre-commit`/`pre-push` hooks that reject raw `git commit`/`git push` unless they come from MonoFlow (`MONOFLOW_INTERNAL=1`). Every change therefore passes through the guards above.
+
+### 6. Proof instead of trust (`monoflow task prove`, `monoflow queue`, `pkg/proof`, `pkg/queue`)
+`task prove` re-runs the boundary and integrity checks, builds the deliverable, and writes a receipt with SHA-256 fingerprints to `.agents/proofs/<task>.json`. `verify --proof` only has to check the receipt, which is why reviewing it takes milliseconds instead of a checkout and rebuild.
+The speculative queue rebases the change onto `main` in a scratch worktree and tests the affected set, skipping quarantined flaky tests. It then emits a signed receipt keyed by commit SHA. In CI, `VerifyCIGate` recomputes the signature: a matching receipt unlocks the fast-path tier, and a missing or tampered one falls back to the full pipeline.
+
+### 7. Merging understands code (`pkg/merge`)
+When two agents edit the same file, MonoFlow first tries a **Go AST three-way merge**: it parses base, ours, and theirs, unions non-overlapping declarations, and deduplicates imports. If that doesn't apply, it falls back to a block-level semantic merge and then to a line merge. Two agents adding different functions to one file get a merged result instead of conflict markers.
+
+### 8. Waiting costs zero tokens (`monoflow push`, `pkg/events`)
+`push` starts a background CI watcher and returns right away. The watcher, not the agent, polls GitHub through `gh run list` and `gh pr view`. It records the outcome as a JSON event in `.agents/events/`: CI passed, CI failed (with the failing log excerpt and a suggested next task), PR conflict, or timeout. The agent ends its turn or picks up other work, then reads `monoflow events unread` when it resumes. No context is spent on polling loops.
+
+### Why this makes agents better
+| Agent failure mode | What MonoFlow does behind the scenes |
+| :--- | :--- |
+| Burns context reading noisy output | ANSI-stripped, regex-normalized JSON diagnostics |
+| Guesses dependencies by grepping | Pre-computed package DAG with longest-prefix file ownership |
+| Runs the whole test suite | Downstream-closure of changed packages + content-addressed cache |
+| Leaves a mess after a failed attempt | Tree-object checkpoints restored with `read-tree` |
+| Collides with other agents | Sparse, per-agent worktrees with shared or CoW dependencies |
+| "Fixes" tests by deleting them | Diff-level test-integrity guard + circuit breaker |
+| Sits in CI polling loops | Background watcher + file-based event inbox |
+| Reviewers can't trust the claim | Hash-fingerprinted proof receipts and CI gate signatures |
 
 ---
 

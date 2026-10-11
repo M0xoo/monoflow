@@ -703,6 +703,35 @@ button {
   background: var(--border-muted);
 }
 
+/* How It Works pipeline strip */
+.hiw-flow {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0;
+  margin: 0 0 1rem;
+}
+
+.hiw-flow li {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.8rem;
+  border: 1px solid var(--border-hairline);
+  border-radius: 999px;
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.hiw-flow-num {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--accent);
+}
+
 /* ==========================================================================
    Subsystems Architectural Deep Dives
    ========================================================================== */

@@ -1251,6 +1251,7 @@ input[type="range"]::-webkit-slider-thumb {
         <a href="#demo-video" class="header-link">90s Video</a>
         <a href="#workbench" class="header-link">Live Console</a>
         <a href="#benchmarks" class="header-link">Benchmarks</a>
+        <a href="#how-it-works" class="header-link">How It Works</a>
         <a href="#architecture" class="header-link">Architecture</a>
         <a href="#calculator" class="header-link">ROI Calculator</a>
         <a href="#cli" class="header-link">CLI Reference</a>
@@ -1677,6 +1678,138 @@ input[type="range"]::-webkit-slider-thumb {
       </div>
     </section>
 
+    <!-- How It Works -->
+    <section id="how-it-works" class="architecture-section container">
+      <div class="section-label">Behind the Scenes</div>
+      <h2 class="section-heading">How MonoFlow Works</h2>
+      <p class="section-subtext">
+        MonoFlow is a single Go binary that sits between the agent, Git, and your toolchains. It doesn't replace your compilers or CI. It decides <em>what</em> to run, <em>where</em> to run it, and <em>how</em> to report the result, so agents spend tokens on code instead of on the repository.
+      </p>
+
+      <ol class="hiw-flow">
+        <li><span class="hiw-flow-num">1</span>Map the repo</li>
+        <li><span class="hiw-flow-num">2</span>Isolate the agent</li>
+        <li><span class="hiw-flow-num">3</span>Checkpoint</li>
+        <li><span class="hiw-flow-num">4</span>Verify affected</li>
+        <li><span class="hiw-flow-num">5</span>Guard</li>
+        <li><span class="hiw-flow-num">6</span>Prove</li>
+        <li><span class="hiw-flow-num">7</span>Push &amp; wait for free</li>
+      </ol>
+
+      <div class="subsystem-grid">
+        <div class="subsystem-card">
+          <div class="subsystem-num">01 / pkg/graph</div>
+          <h3 class="subsystem-title">The repo becomes a graph</h3>
+          <p class="subsystem-body">
+            <code>monoflow init</code> reads native manifests (npm/pnpm workspaces, Cargo, <code>go.mod</code>, <code>pyproject.toml</code>) and writes packages, dependencies, and typecheck/lint/test commands to <code>.agents/monoflow.config.json</code>. Files map to packages by longest-prefix match, so <code>graph impact</code> answers "who depends on this?" without the agent grepping the repo.
+          </p>
+          <div class="subsystem-chip-row">
+            <span class="subsystem-chip">Manifest Discovery</span>
+            <span class="subsystem-chip">Longest-Prefix Ownership</span>
+          </div>
+        </div>
+
+        <div class="subsystem-card">
+          <div class="subsystem-num">02 / pkg/worktree</div>
+          <h3 class="subsystem-title">One worktree per agent</h3>
+          <p class="subsystem-body">
+            <code>worktree create &lt;id&gt; --packages=…</code> runs <code>git worktree add --detach</code> and applies a sparse-checkout cone with just those packages plus their upstream dependencies. <code>node_modules</code>, <code>.venv</code>, and <code>target</code> are symlinked, or CoW-cloned with <code>--isolated-deps</code>. Heartbeat leases let <code>worktree gc</code> reclaim abandoned ones.
+          </p>
+          <div class="subsystem-chip-row">
+            <span class="subsystem-chip">Sparse Cone</span>
+            <span class="subsystem-chip">Shared / CoW Deps</span>
+          </div>
+        </div>
+
+        <div class="subsystem-card">
+          <div class="subsystem-num">03 / pkg/checkpoint</div>
+          <h3 class="subsystem-title">Checkpoints without history</h3>
+          <p class="subsystem-body">
+            <code>checkpoint save</code> stages the tree and calls <code>git write-tree</code>, which produces a content-addressed tree object with no commit or branch. <code>checkpoint revert</code> restores it with <code>git read-tree -u --reset</code>. Agents can test a hypothesis and discard it in milliseconds.
+          </p>
+          <div class="subsystem-chip-row">
+            <span class="subsystem-chip">write-tree</span>
+            <span class="subsystem-chip">read-tree --reset</span>
+          </div>
+        </div>
+
+        <div class="subsystem-card">
+          <div class="subsystem-num">04 / pkg/verify</div>
+          <h3 class="subsystem-title">Verify only what changed</h3>
+          <p class="subsystem-body">
+            Changed files → owning packages → transitive downstream dependents. Each one runs in its own goroutine, using the fastest signal first (typecheck → lint → test). A SHA-256 key over sources, command, OS/arch, and upstream keys skips anything already verified. Output is stripped of ANSI codes and parsed into <code>{file, line, col, code, message}</code>.
+          </p>
+          <div class="subsystem-chip-row">
+            <span class="subsystem-chip">Downstream Closure</span>
+            <span class="subsystem-chip">Content-Addressed Cache</span>
+            <span class="subsystem-chip">JSON Diagnostics</span>
+          </div>
+        </div>
+
+        <div class="subsystem-card">
+          <div class="subsystem-num">05 / pkg/task · pkg/guard</div>
+          <h3 class="subsystem-title">Mechanical guardrails</h3>
+          <p class="subsystem-body">
+            Modified files are matched against <code>allowed_paths</code>/<code>read_only_paths</code> in <code>.agents/task.json</code>. The diff is scanned for deleted or commented-out assertions, tautologies, and leaked secrets. After 3 failed attempts, the circuit breaker reverts to the last checkpoint. Git hooks reject raw <code>git commit</code>/<code>push</code>, so every change goes through these checks.
+          </p>
+          <div class="subsystem-chip-row">
+            <span class="subsystem-chip">Task Contract</span>
+            <span class="subsystem-chip">Test Integrity</span>
+            <span class="subsystem-chip">Circuit Breaker</span>
+          </div>
+        </div>
+
+        <div class="subsystem-card">
+          <div class="subsystem-num">06 / pkg/proof · pkg/queue</div>
+          <h3 class="subsystem-title">Proof instead of trust</h3>
+          <p class="subsystem-body">
+            <code>task prove</code> re-runs boundary and integrity checks, builds the deliverable, and writes a fingerprinted receipt to <code>.agents/proofs/</code>. The speculative queue rebases onto <code>main</code> in a scratch worktree, tests the affected set, and signs a receipt. CI recomputes that signature to unlock its fast-path tier.
+          </p>
+          <div class="subsystem-chip-row">
+            <span class="subsystem-chip">Proof Receipts</span>
+            <span class="subsystem-chip">Two-Tier CI Gate</span>
+          </div>
+        </div>
+
+        <div class="subsystem-card">
+          <div class="subsystem-num">07 / pkg/merge</div>
+          <h3 class="subsystem-title">Merges that read code</h3>
+          <p class="subsystem-body">
+            When two agents edit the same file, MonoFlow first tries a Go AST three-way merge: it unions non-overlapping declarations and deduplicates imports. If that doesn't apply, it falls back to a block-level semantic merge and then to a line merge, so parallel additions don't end in conflict markers.
+          </p>
+          <div class="subsystem-chip-row">
+            <span class="subsystem-chip">AST 3-Way Merge</span>
+            <span class="subsystem-chip">Graceful Fallback</span>
+          </div>
+        </div>
+
+        <div class="subsystem-card">
+          <div class="subsystem-num">08 / pkg/events</div>
+          <h3 class="subsystem-title">Waiting costs zero tokens</h3>
+          <p class="subsystem-body">
+            <code>monoflow push</code> starts a background watcher and returns right away. The watcher, not the agent, polls GitHub through <code>gh</code>. It writes the outcome (pass, failure with log excerpt, PR conflict, or timeout) as JSON to <code>.agents/events/</code>, and the agent reads it later with <code>events unread</code>.
+          </p>
+          <div class="subsystem-chip-row">
+            <span class="subsystem-chip">Background Watcher</span>
+            <span class="subsystem-chip">File-Based Inbox</span>
+          </div>
+        </div>
+
+        <div class="subsystem-card">
+          <div class="subsystem-num">∑ / OUTCOME</div>
+          <h3 class="subsystem-title">Why agents do better</h3>
+          <p class="subsystem-body">
+            Less context spent on noise. No guessing at dependencies. Feedback in seconds instead of minutes. Cheap rollback. No collisions between agents. No "fixing" tests by deleting them. No polling loops. Claims reviewers can verify instead of taking on trust.
+          </p>
+          <div class="subsystem-chip-row">
+            <span class="subsystem-chip">Fewer Tokens</span>
+            <span class="subsystem-chip">Faster Loops</span>
+            <span class="subsystem-chip">Safer Swarms</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- Subsystems Architecture Matrix -->
     <section id="architecture" class="architecture-section container">
       <div class="section-label">Core Engineering Subsystems</div>
@@ -2022,6 +2155,7 @@ input[type="range"]::-webkit-slider-thumb {
         <a href="#demo-video">90s Video</a>
         <a href="#workbench">Systems Console</a>
         <a href="#benchmarks">Benchmarks</a>
+        <a href="#how-it-works">How It Works</a>
         <a href="#architecture">Architecture</a>
         <a href="#cli">CLI Reference</a>
       </nav>
