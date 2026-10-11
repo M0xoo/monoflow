@@ -99,3 +99,10 @@ func TestHelpFlagsExitZero(t *testing.T) {
 		}
 	}
 }
+
+// Background baseline warm-ups would write into test repos while they are being removed; the
+// test that checks them turns them back on.
+func TestMain(m *testing.M) {
+	_ = os.Setenv("MONOFLOW_NO_WARM", "1")
+	os.Exit(m.Run())
+}

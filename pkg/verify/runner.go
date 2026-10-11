@@ -108,6 +108,9 @@ type Runner struct {
 	// within one run: they do not depend on the package, so N packages run them once.
 	rootMu   sync.Mutex
 	rootRuns map[string]*rootRun
+	// assumeEdits makes baselineSHA treat the tree as having local edits (WarmBaseline runs
+	// before the agent's first edit and must prepare the baseline its later verifies use).
+	assumeEdits bool
 }
 
 type rootRun struct {

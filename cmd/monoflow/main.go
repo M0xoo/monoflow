@@ -20,6 +20,7 @@ func main() {
 	}
 
 	cmd := os.Args[1]
+	maybeWarmBaseline(cmd)
 	if isHelpArg(cmd) {
 		switch {
 		case len(os.Args) > 2 && os.Args[2] == "--all":
@@ -87,6 +88,9 @@ func main() {
 
 	case "ci":
 		handleCI(rootDir)
+
+	case "baseline-warm": // internal: see maybeWarmBaseline
+		warmBaseline(rootDir)
 
 	case "speculate-watch": // internal: started by start, see speculate.go
 		speculateWatch(rootDir)

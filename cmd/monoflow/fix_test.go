@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // verify formats the agent's changed files with the package's fix_cmd before checking: a badly
@@ -48,5 +49,41 @@ func TestVerifyFormatsChangedFiles(t *testing.T) {
 	}
 	if out, _ := run(bin, "verify", "--no-fix"); strings.Contains(out, "formatted:") {
 		t.Fatalf("--no-fix must not format: %s", out)
+	}
+}
+
+// Any monoflow call prepares, in the background, the baseline checkout a failing verify will
+// compare against (the commit the agent's edits sit on), so the first failure does not pay for it.
+func TestFirstCommandWarmsBaseline(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "monoflow")
+	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
+		t.Fatalf("build: %v %s", err, out)
+	}
+	repo := t.TempDir()
+	run := func(env []string, name string, args ...string) string {
+		cmd := exec.Command(name, args...)
+		cmd.Dir = repo
+		cmd.Env = append(append(os.Environ(), "MONOFLOW_FORMAT=", "MONOFLOW_NO_SPECULATE=1"), env...)
+		out, _ := cmd.CombinedOutput()
+		return string(out)
+	}
+	_ = os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module example.com/m\n\ngo 1.21\n"), 0644)
+	run(nil, "git", "init", "-q", "-b", "main")
+	run([]string{"MONOFLOW_NO_WARM=1"}, bin, "init")
+	run(nil, "git", "-c", "user.email=t@t", "-c", "user.name=t", "-c", "core.hooksPath=/dev/null", "add", "-A")
+	run(nil, "git", "-c", "user.email=t@t", "-c", "user.name=t", "-c", "core.hooksPath=/dev/null", "commit", "-qm", "init")
+	head := strings.TrimSpace(run(nil, "git", "rev-parse", "HEAD"))
+
+	run([]string{"MONOFLOW_NO_WARM="}, bin, "graph")
+	ready := filepath.Join(repo, ".agents", "cache", "baselines", head, ".monoflow-ready")
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		if _, err := os.Stat(ready); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("baseline was not prepared in the background")
+		}
+		time.Sleep(200 * time.Millisecond)
 	}
 }

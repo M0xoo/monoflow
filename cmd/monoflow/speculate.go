@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/antigravity/monoflow/pkg/verify"
 )
 
 // Speculative verification: verify runs while the agent is still thinking, not after it asks.
@@ -270,3 +272,39 @@ func speculateWatch(root string) {
 	}
 	_ = os.Remove(marker)
 }
+
+// maybeWarmBaseline prepares, in the background, the baseline checkout verify compares failures
+// against, when it is missing: an agent's first monoflow call (help, start, graph) comes long
+// before its first failing verify, which otherwise paid ~30 s for the checkout and install.
+func maybeWarmBaseline(cmd string) {
+	switch cmd {
+	case "init", "clone", "hook", "baseline-warm", "speculate-watch", "outer", "scenario":
+		return
+	}
+	if os.Getenv("MONOFLOW_NO_WARM") != "" || os.Getenv("MONOFLOW_RECORD_KEY") != "" {
+		return
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		return
+	}
+	if _, err := os.Stat(filepath.Join(root, ".agents", "monoflow.config.json")); err != nil {
+		return
+	}
+	if verify.BaselineReady(root) {
+		return
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return
+	}
+	c := exec.Command(exe, "baseline-warm")
+	c.Dir = root
+	c.Env = append(os.Environ(), "MONOFLOW_NO_WARM=1")
+	c.SysProcAttr = detachedSysProcAttr()
+	if c.Start() == nil {
+		_ = c.Process.Release()
+	}
+}
+
+func warmBaseline(root string) { verify.WarmBaseline(root) }
