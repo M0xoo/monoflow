@@ -12,7 +12,7 @@ T="$(mktemp -d "${TMPDIR:-/tmp}/mf-events.XXXXXX")"
 BIN="${1:-}"
 if [ -z "$BIN" ]; then BIN="$T/monoflow"; (cd "$REPO_ROOT" && go build -o "$BIN" ./cmd/monoflow) || exit 1; fi
 mkdir -p "$T/fakebin" && cp "$HERE/fake-gh" "$T/fakebin/gh"
-export PATH="$T/fakebin:$PATH" MONOFLOW_NO_WARM=1 MONOFLOW_NO_SPECULATE=1 MONOFLOW_FORMAT=
+export PATH="$T/fakebin:$PATH" MONOFLOW_NO_WARM=1 MONOFLOW_NO_SPECULATE=1 MONOFLOW_FORMAT= MONOFLOW_CONFLICT_INTERVAL=2
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 
 PASS=0; FAIL=0
@@ -198,6 +198,49 @@ P="$W/.opencode/plugin/$(ls "$T/s10/repo/.opencode/plugin/" | head -1)"
 o=$(node "$HERE/opencode-drive.mjs" "$P" "$W" 2>&1)
 check "idle session is prompted with the failure (hook stop through the plugin)" '[[ "$o" == *"IDLE_PROMPT<<"*TestAdd* || "$o" == *"IDLE_PROMPT<<"*SHIP_FAILED* || "$o" == *"IDLE_PROMPT<<"*REGRESSION* ]]' "$o"
 check "a tool's output does not repeat what the idle prompt delivered" '[[ "$o" == *"AFTER<<tool output>>"* && "$o" == *"AFTER2<<tool output>>"* ]]' "$o"
+
+# ---------------------------------------------------------------------------------------------
+echo "S11 monoflow push refuses a branch that conflicts with origin/main"
+new_repo s11
+W=$(start s11 pushc)
+printf 'agent\n' > "$W/notes.txt"
+mf "$W" commit -m "chore: agent notes" >/dev/null 2>&1
+waitfor 60 "mf \"$W\" events list 2>/dev/null | grep -q OUTER_LOOP_PASSED"
+(cd "$T/s11/other" && printf 'someone else\n' > notes.txt && rawgit commit -qam "main moved" && rawgit push -q origin main)
+out=$(mf "$W" push 2>&1)
+check "push refused, with the conflicting file" '[[ "$out" == *conflict* && "$out" == *notes.txt* ]]' "$out"
+check "nothing pushed" '! remote_has s11 agent/pushc'
+d=$(deliver_text "$W")
+check "the agent gets PR_CONFLICT" '[[ "$d" == *PR_CONFLICT* ]]' "$d"
+
+# ---------------------------------------------------------------------------------------------
+echo "S12 the base moves while local CI runs: the queued push is refused when it would happen"
+new_repo s12
+W=$(start s12 queued)
+printf 'agent\n' > "$W/notes.txt"
+printf 'package calc\n\nimport "time"\n\nfunc init() { time.Sleep(4 * time.Second) }\n' > "$W/calc/slow.go"
+mf "$W" commit -m "chore: agent notes" >/dev/null 2>&1
+out=$(mf "$W" push 2>&1)
+(cd "$T/s12/other" && printf 'someone else\n' > notes.txt && rawgit commit -qam "main moved" && rawgit push -q origin main)
+check "push was queued behind local CI" '[[ "$out" == *queued* ]]' "$out"
+waitfor 90 "mf \"$W\" events list 2>/dev/null | grep -q PR_CONFLICT"
+check "the queued push is refused: nothing pushed" '! remote_has s12 agent/queued'
+d=$(deliver_text "$W")
+check "the agent gets PR_CONFLICT" '[[ "$d" == *PR_CONFLICT* && "$d" == *notes.txt* ]]' "$d"
+
+# ---------------------------------------------------------------------------------------------
+echo "S13 after a push, a background watcher tells the agent when main moves into a conflict"
+new_repo s13
+W=$(start s13 watched)
+printf 'package calc\n\n// Add adds two ints.\nfunc Add(a, b int) int { return a + b }\n' > "$W/calc/calc.go"
+mf "$W" ship -m "docs: Add" >/dev/null 2>&1
+waitfor 90 "remote_has s13 agent/watched"
+deliver_text "$W" >/dev/null
+check "a conflict watcher runs for the pushed branch" 'waitfor 10 "ls \"$T/s13/repo/.agents/worktrees/watched/.agents/conflict/\"*.pid >/dev/null 2>&1 || ls \"$T/s13/repo/.agents/conflict/\"*.pid >/dev/null 2>&1"'
+(cd "$T/s13/other" && rawgit pull -q origin main && printf 'package calc\n\n// Add sums.\nfunc Add(a, b int) int { return a + b }\n' > calc/calc.go && rawgit commit -qam "main edits calc" && rawgit push -q origin main)
+check "PR_CONFLICT arrives at the next tool call, with no command run" 'waitfor 30 "deliver_text \"$W\" | tee -a \"$T/s13.d\" | grep -q PR_CONFLICT" || grep -q PR_CONFLICT "$T/s13.d"' "$(cat "$T/s13.d" 2>/dev/null)"
+(cd "$T/s13/other" && rawgit fetch -q origin && rawgit reset -q --hard origin/agent/watched && rawgit push -q -f origin HEAD:main)
+check "the watcher stops once the branch is merged" 'waitfor 20 "! ls \"$T/s13/repo/.agents/worktrees/watched/.agents/conflict/\"*.pid >/dev/null 2>&1 && ! ls \"$T/s13/repo/.agents/conflict/\"*.pid >/dev/null 2>&1"'
 
 echo
 echo "passed $PASS, failed $FAIL   (work dir: $T)"

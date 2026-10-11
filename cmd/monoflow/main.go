@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/antigravity/monoflow/pkg/conflict"
 	"io"
 	"os"
 	"os/exec"
@@ -88,6 +89,15 @@ func main() {
 
 	case "ci":
 		handleCI(rootDir)
+
+	case "conflict-watch": // internal: started after a push, see pkg/conflict
+		branch := ""
+		for _, a := range os.Args[2:] {
+			if strings.HasPrefix(a, "--branch=") {
+				branch = strings.TrimPrefix(a, "--branch=")
+			}
+		}
+		conflict.Watch(rootDir, branch)
 
 	case "baseline-warm": // internal: see maybeWarmBaseline
 		warmBaseline(rootDir)

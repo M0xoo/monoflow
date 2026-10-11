@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/antigravity/monoflow/pkg/cache"
+	"github.com/antigravity/monoflow/pkg/conflict"
 	"github.com/antigravity/monoflow/pkg/events"
 	"github.com/antigravity/monoflow/pkg/graph"
 	"github.com/antigravity/monoflow/pkg/guard"
@@ -168,7 +169,11 @@ func handlePush(rootDir string) {
 		}
 	}
 
-	// 3. Perform push
+	// 3. Perform push: never with conflicts against the base.
+	if err := conflict.GuardPush(rootDir, branch, "HEAD"); err != nil {
+		printOut(map[string]any{"status": "conflict", "error": err.Error()})
+		os.Exit(1)
+	}
 	start := time.Now()
 	pushArgs := []string{"push", "-u", remote, branch}
 	if forceDirect && branch != "main" && branch != "master" {
@@ -184,6 +189,7 @@ func handlePush(rootDir string) {
 		os.Exit(1)
 	}
 
+	conflict.StartWatch(rootDir, branch) // tell the agent if the base moves into a conflict later
 	res := map[string]any{
 		"status":      "pushed",
 		"remote":      remote,
