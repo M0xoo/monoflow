@@ -250,6 +250,7 @@ func ResolveWithOptions(g *graph.DependencyGraph, targets []string, strategy Dep
 	pathSet := make(map[string]bool)
 	// Always include .agents directory for monorepo configuration, tasks, and telemetry
 	pathSet[".agents"] = true
+	rootIncluded := false
 
 	for _, name := range included {
 		p := allMap[name]
@@ -260,10 +261,17 @@ func ResolveWithOptions(g *graph.DependencyGraph, targets []string, strategy Dep
 		cleanPath = strings.ReplaceAll(cleanPath, "\\", "/")
 		cleanPath = strings.TrimPrefix(cleanPath, "/")
 
-		// If package path is ".", root is included; cone mode includes all root files by default
-		if cleanPath != "." && cleanPath != "" {
-			pathSet[cleanPath] = true
+		if cleanPath == "." || cleanPath == "" {
+			rootIncluded = true
+			continue
 		}
+		pathSet[cleanPath] = true
+	}
+	// A root package (e.g. a Go module at the repo root) owns every subdirectory that is not
+	// another package; cone mode would project only its top-level files. Nothing can be
+	// omitted then: nil sparsePaths means a full checkout.
+	if rootIncluded {
+		return included, nil, nil, nil
 	}
 
 	sparsePaths = make([]string, 0, len(pathSet))
@@ -485,6 +493,9 @@ func Apply(repoDir string, targets []string, includeDeps bool) (*SubsetResult, e
 }
 
 // ApplyWithOptions configures an existing repository with an explicit dependency strategy.
+// MethodFullRoot: a root package was projected, so the worktree is a full checkout.
+const MethodFullRoot = "full-checkout (root package projected)"
+
 func ApplyWithOptions(repoDir string, targets []string, strategy DepStrategy) (*SubsetResult, error) {
 	start := time.Now()
 
@@ -501,6 +512,19 @@ func ApplyWithOptions(repoDir string, targets []string, strategy DepStrategy) (*
 	included, omitted, sparsePaths, err := ResolveWithOptions(g, targets, strategy)
 	if err != nil {
 		return nil, err
+	}
+
+	if sparsePaths == nil {
+		_ = exec.Command("git", "-C", absRepo, "sparse-checkout", "disable").Run()
+		_ = SyncGoWork(absRepo)
+		return &SubsetResult{
+			Status:           "success",
+			TargetDir:        absRepo,
+			IncludedPackages: included,
+			Method:           MethodFullRoot,
+			Message:          "A root package is projected: full checkout (it owns every non-package subdirectory).",
+			DurationMs:       float64(time.Since(start).Microseconds()) / 1000.0,
+		}, nil
 	}
 
 	// Initialize sparse-checkout

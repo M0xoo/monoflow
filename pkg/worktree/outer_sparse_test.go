@@ -51,3 +51,36 @@ func TestOuterLoopFromSparseWorktreeRunsRepoCI(t *testing.T) {
 		t.Fatalf("outer loop from a sparse worktree must pass (ci_cmd needs the full repo): status=%v err=%v summary=%s", job.Status, err, job.ErrorSummary)
 	}
 }
+
+// A root package (a Go module at the repo root) owns its subdirectories: projecting it must
+// not leave them out (benchmark: an agent's opentelemetry-go worktree had no attribute/).
+func TestWorktreeWithRootPackageIsFullCheckout(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, s string) {
+		p := filepath.Join(root, rel)
+		_ = os.MkdirAll(filepath.Dir(p), 0755)
+		_ = os.WriteFile(p, []byte(s), 0644)
+	}
+	write("go.mod", "module x\n\ngo 1.22\n")
+	write("attribute/value.go", "package attribute\n")
+	write("sdk/go.mod", "module x/sdk\n\ngo 1.22\n")
+	write("sdk/sdk.go", "package sdk\n")
+	write(".agents/monoflow.config.json", `{"version":"1.0","packages":[{"name":"x","path":".","language":"generic","dependencies":[]},{"name":"sdk","path":"sdk","language":"generic","dependencies":[]}]}`)
+	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"config", "user.email", "t@t"}, {"config", "user.name", "t"}, {"add", "-A"}, {"commit", "-qm", "init"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = root
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	info, err := NewManager(root).CreateWithOpts("root-agent", CreateOptions{Packages: []string{"x"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(info.Path, "attribute/value.go")); err != nil {
+		t.Fatalf("root package's subdirectory missing from the worktree: %v", err)
+	}
+	if info.IsSparse {
+		t.Fatal("a worktree projecting the root package must be reported as a full checkout")
+	}
+}

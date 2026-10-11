@@ -264,7 +264,7 @@ func (m *Manager) CreateWithOpts(agentID string, opts CreateOptions) (*WorktreeI
 		if errSub == nil && subRes != nil {
 			includedPkgs = subRes.IncludedPackages
 			omittedPkgs = subRes.OmittedPackages
-			isSparse = true
+			isSparse = subRes.Method != subset.MethodFullRoot
 		}
 	}
 
