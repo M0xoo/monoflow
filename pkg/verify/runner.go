@@ -30,6 +30,10 @@ type VerifyOptions struct {
 	// ChangedFiles (set by VerifyAffected) lets Go modules run only the packages that import
 	// the change (see goScopedCommands).
 	ChangedFiles []string
+	// AllPackages (verify --all / --package): run every package's tests, but judge formatting
+	// on the changed files only, like verify does: an agent saw verify report no preexisting
+	// failure and --all report old gofmt debt, and spent five runs reconciling them.
+	AllPackages bool
 }
 
 // TargetResult holds the result of verifying a single package.
@@ -268,7 +272,11 @@ func (r *Runner) VerifyTarget(pkg *graph.PackageNode, opt VerifyOptions) TargetR
 // importing the changed packages); unaffected=true when nothing in the package can be.
 func (r *Runner) commandsFor(pkg *graph.PackageNode, opt VerifyOptions) (cmds []string, unaffected bool) {
 	if len(opt.ChangedFiles) > 0 && (opt.Mode == "" || opt.Mode == "all") {
-		if c, skip, ok := goScopedCommands(r.RootDir, pkg, opt.ChangedFiles); ok {
+		if opt.AllPackages {
+			if c, ok := goFormatScopedCommands(r.RootDir, pkg, opt.ChangedFiles); ok {
+				return c, false
+			}
+		} else if c, skip, ok := goScopedCommands(r.RootDir, pkg, opt.ChangedFiles); ok {
 			return c, skip
 		}
 	}

@@ -213,3 +213,18 @@ func isDocChange(f string) bool {
 	}
 	return false
 }
+
+// goFormatScopedCommands keeps every package of the module (verify --all / --package) but runs
+// gofmt on the changed files only, as verify does.
+func goFormatScopedCommands(root string, pkg *graph.PackageNode, changed []string) ([]string, bool) {
+	if pkg.Language != graph.LangGo || pkg.TestCmd != "go test ./..." || pkg.LintCmd != graph.GoLintCmd ||
+		(pkg.TypecheckCmd != "" && pkg.TypecheckCmd != "go build ./...") {
+		return nil, false
+	}
+	_, ownFiles, _ := goChangedImports(root, pkg, changed)
+	var cmds []string
+	if len(ownFiles) > 0 {
+		cmds = append(cmds, "unformatted=$(gofmt -l "+strings.Join(ownFiles, " ")+"); if [ -n \"$unformatted\" ]; then echo \"gofmt needed (run gofmt -w):\"; echo \"$unformatted\"; exit 1; fi")
+	}
+	return append(cmds, "go vet ./...", "go test ./..."), true
+}

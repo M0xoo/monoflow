@@ -74,12 +74,14 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 			fmt.Printf(`{"status": "failed", "error": "package '%s' not found (use a name from 'monoflow graph list' or a path inside one)"}`+"\n", targetPkg)
 			os.Exit(1)
 		}
+		opts.ChangedFiles, opts.AllPackages = getGitChangedFiles(rootDir), true
 		res = runner.VerifyPackages(g, []string{pkg.Name}, opts)
 	} else if verifyAll {
 		var names []string
 		for _, p := range g.GetAllPackages() {
 			names = append(names, p.Name)
 		}
+		opts.ChangedFiles, opts.AllPackages = getGitChangedFiles(rootDir), true
 		res = runner.VerifyPackages(g, names, opts)
 	} else {
 		changedFiles := getGitChangedFiles(rootDir)
@@ -110,6 +112,9 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 		c := compactSuite(res, rootDir, g)
 		// Say what was covered and what to do next: agents that were not told re-ran
 		// verify --all and raw go test / npm test "to be sure" (benchmark: +6 calls a run).
+		if verifyAll && len(opts.ChangedFiles) > 0 {
+			c["note"] = "plain 'monoflow verify' already checks every package your change can affect; --all re-tests the rest too (not needed to ship)"
+		}
 		if targetPkg == "" && !verifyAll && len(res.Pending) > 0 {
 			c["scope"] = fmt.Sprintf("%d changed packages checked first; %d dependents run once they pass", res.TotalTargets, len(res.Pending))
 			c["next"] = "fix errors[] (file:line), then monoflow verify again"
