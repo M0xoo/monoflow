@@ -41,7 +41,7 @@ func TestShipFromMainMovesWorkToWorktree(t *testing.T) {
 
 	write("a.txt", "two\n")
 	write("dir/new.txt", "new\n")
-	cmd := exec.Command(bin, "ship", "-m", "feat: two and new", "--wait")
+	cmd := exec.Command(bin, "ship", "-m", "feat: two and new", "--wait", "--json")
 	cmd.Dir = repo
 	out, _ := cmd.Output() // pr create fails without a remote; the move and the commit happen first
 	var res map[string]any

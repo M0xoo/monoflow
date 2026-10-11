@@ -12,6 +12,7 @@ import (
 
 func main() {
 	_ = os.Setenv("MONOFLOW_INTERNAL", "1")
+	takeJSONFlag()
 
 	if len(os.Args) < 2 {
 		printUsage()

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -35,15 +34,14 @@ func handleCheckpoint(rootDir string) {
 			fmt.Printf(`{"error": "%s"}`+"\n", err)
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(map[string]any{
+		printOut(map[string]any{
 			"status":      "saved",
 			"id":          chk.ID,
 			"message":     chk.Message,
 			"tree_hash":   chk.TreeHash,
 			"duration_ms": durMs,
 			"files":       chk.Files,
-		}, "", "  ")
-		fmt.Println(string(data))
+		})
 
 	case "revert":
 		targetID := ""
@@ -57,19 +55,17 @@ func handleCheckpoint(rootDir string) {
 			fmt.Printf(`{"error": "%s"}`+"\n", err)
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(map[string]any{
+		printOut(map[string]any{
 			"status":      "reverted",
 			"checkpoint":  cp.ID,
 			"message":     cp.Message,
 			"files":       cp.Files,
 			"duration_ms": durMs,
-		}, "", "  ")
-		fmt.Println(string(data))
+		})
 
 	case "list":
 		list, _ := mgr.List()
-		data, _ := json.MarshalIndent(list, "", "  ")
-		fmt.Println(string(data))
+		printOut(list)
 	}
 }
 
@@ -152,8 +148,7 @@ func handleWorktree(rootDir string) {
 			resMap["strategy"] = info.Strategy
 		}
 		_ = durMs
-		data, _ := json.MarshalIndent(resMap, "", "  ")
-		fmt.Println(string(data))
+		printOut(resMap)
 
 	case "focus":
 		if len(os.Args) < 5 {
@@ -173,8 +168,7 @@ func handleWorktree(rootDir string) {
 			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(info, "", "  ")
-		fmt.Println(string(data))
+		printOut(info)
 
 	case "add", "add-package":
 		if len(os.Args) < 5 {
@@ -194,8 +188,7 @@ func handleWorktree(rootDir string) {
 			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(info, "", "  ")
-		fmt.Println(string(data))
+		printOut(info)
 
 	case "remove", "remove-package":
 		if len(os.Args) < 5 {
@@ -215,8 +208,7 @@ func handleWorktree(rootDir string) {
 			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(info, "", "  ")
-		fmt.Println(string(data))
+		printOut(info)
 
 	case "update":
 		if len(os.Args) < 4 {
@@ -241,8 +233,7 @@ func handleWorktree(rootDir string) {
 			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(res, "", "  ")
-		fmt.Println(string(data))
+		printOut(res)
 
 	case "isolate":
 		if len(os.Args) < 4 {
@@ -255,8 +246,7 @@ func handleWorktree(rootDir string) {
 			fmt.Printf(`{"error": "%s"}`+"\n", err)
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(res, "", "  ")
-		fmt.Println(string(data))
+		printOut(res)
 
 	case "list":
 		list, err := mgr.List()
@@ -264,8 +254,7 @@ func handleWorktree(rootDir string) {
 			fmt.Printf(`{"error": "%s"}`+"\n", err)
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(list, "", "  ")
-		fmt.Println(string(data))
+		printOut(list)
 
 	case "sync":
 		toID := ""
@@ -289,14 +278,13 @@ func handleWorktree(rootDir string) {
 			fmt.Printf(`{"error": "%s"}`+"\n", err)
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(map[string]any{
+		printOut(map[string]any{
 			"status":       "synced",
 			"to_agent":     toID,
 			"from_agent":   fromID,
 			"synced_files": synced,
 			"duration_ms":  durMs,
-		}, "", "  ")
-		fmt.Println(string(data))
+		})
 
 	case "finish":
 		if len(os.Args) < 4 {
@@ -317,12 +305,11 @@ func handleWorktree(rootDir string) {
 			fmt.Printf(`{"error": "%s"}`+"\n", err)
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(map[string]any{
+		printOut(map[string]any{
 			"status":      "finished",
 			"agent_id":    agentID,
 			"duration_ms": durMs,
-		}, "", "  ")
-		fmt.Println(string(data))
+		})
 
 	case "prune", "gc":
 		ttl := 1 * time.Hour
@@ -331,11 +318,10 @@ func handleWorktree(rootDir string) {
 			fmt.Printf(`{"error": "%s"}`+"\n", err)
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(map[string]any{
+		printOut(map[string]any{
 			"status":         "pruned",
 			"cleaned_up_wts": pruned,
-		}, "", "  ")
-		fmt.Println(string(data))
+		})
 	}
 }
 
@@ -361,11 +347,10 @@ func handleBranch(rootDir string) {
 				branches = append(branches, trimmed)
 			}
 		}
-		data, _ := json.MarshalIndent(map[string]any{
+		printOut(map[string]any{
 			"current":  current,
 			"branches": branches,
-		}, "", "  ")
-		fmt.Println(string(data))
+		})
 		return
 	}
 
@@ -398,12 +383,11 @@ func handleBranch(rootDir string) {
 		os.Exit(1)
 	}
 
-	data, _ := json.MarshalIndent(map[string]any{
+	printOut(map[string]any{
 		"status":  "switched",
 		"branch":  targetBranch,
 		"message": fmt.Sprintf("Switched to branch '%s'", targetBranch),
-	}, "", "  ")
-	fmt.Println(string(data))
+	})
 }
 
 func handleClone() {
@@ -458,8 +442,7 @@ func handleClone() {
 		os.Exit(1)
 	}
 
-	data, _ := json.MarshalIndent(res, "", "  ")
-	fmt.Println(string(data))
+	printOut(res)
 }
 
 func handleSubset(rootDir string) {
@@ -505,8 +488,7 @@ func handleSubset(rootDir string) {
 			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(res, "", "  ")
-		fmt.Println(string(data))
+		printOut(res)
 
 	case "add":
 		if len(os.Args) < 4 {
@@ -525,8 +507,7 @@ func handleSubset(rootDir string) {
 			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(res, "", "  ")
-		fmt.Println(string(data))
+		printOut(res)
 
 	case "remove":
 		if len(os.Args) < 4 {
@@ -545,8 +526,7 @@ func handleSubset(rootDir string) {
 			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(res, "", "  ")
-		fmt.Println(string(data))
+		printOut(res)
 
 	case "update":
 		var pkgs []string
@@ -567,8 +547,7 @@ func handleSubset(rootDir string) {
 			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(res, "", "  ")
-		fmt.Println(string(data))
+		printOut(res)
 
 	case "deps", "inspect":
 		if len(os.Args) < 4 {
@@ -586,8 +565,7 @@ func handleSubset(rootDir string) {
 			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(report, "", "  ")
-		fmt.Println(string(data))
+		printOut(report)
 
 	case "list", "status":
 		st, err := subset.Status(rootDir)
@@ -595,8 +573,7 @@ func handleSubset(rootDir string) {
 			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(st, "", "  ")
-		fmt.Println(string(data))
+		printOut(st)
 
 	case "check", "health":
 		res, err := subset.CheckSubsetHealth(rootDir)
@@ -604,8 +581,7 @@ func handleSubset(rootDir string) {
 			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(res, "", "  ")
-		fmt.Println(string(data))
+		printOut(res)
 		if res.Status == "error" {
 			os.Exit(1)
 		}

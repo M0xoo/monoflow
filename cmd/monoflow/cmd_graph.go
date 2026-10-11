@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -44,11 +43,10 @@ func handleGraph(rootDir string) {
 				TypecheckCmd: p.TypecheckCmd,
 			}
 		}
-		data, _ := json.MarshalIndent(map[string]any{
+		printOut(map[string]any{
 			"package_count": len(nodes),
 			"packages":      nodes,
-		}, "", "  ")
-		fmt.Println(string(data))
+		})
 		return
 	}
 
@@ -96,8 +94,7 @@ func handleGraph(rootDir string) {
 				delete(out, "direct_dependents")
 			}
 		}
-		data, _ := json.MarshalIndent(out, "", "  ")
-		fmt.Println(string(data))
+		printOut(out)
 
 	case "impact":
 		if len(os.Args) < 4 {
@@ -127,14 +124,12 @@ func handleGraph(rootDir string) {
 			out["pinned_dependents"] = pinned
 			out["pinned_note"] = "they build against a release of this package: unaffected now, notified on its next release"
 		}
-		data, _ := json.MarshalIndent(out, "", "  ")
-		fmt.Println(string(data))
+		printOut(out)
 
 	case "affected":
 		changedFiles := getGitChangedFiles(rootDir)
 		affected := g.ComputeAffected(changedFiles)
-		data, _ := json.MarshalIndent(affected, "", "  ")
-		fmt.Println(string(data))
+		printOut(affected)
 	}
 }
 

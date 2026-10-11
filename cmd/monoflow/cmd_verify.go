@@ -117,7 +117,7 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 		}
 		if targetPkg == "" && !verifyAll && len(res.Pending) > 0 {
 			c["scope"] = fmt.Sprintf("%d changed packages checked first; %d dependents run once they pass", res.TotalTargets, len(res.Pending))
-			c["next"] = "fix errors[] (file:line), then monoflow verify again"
+			c["next"] = "fix the errors listed (file:line), then monoflow verify"
 		} else if targetPkg == "" && !verifyAll && res.TotalTargets > 0 {
 			// Name the packages left out and why: an agent told "every module must pass" saw
 			// "27 packages" in a 29-module repo and re-tested all 29 itself.
@@ -126,7 +126,7 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 				c["excluded"] = fmt.Sprintf("%d dependent packages under %s skipped (verify_exclude in .agents/monoflow.config.json)", res.Excluded, strings.Join(g.VerifyExclude, ", "))
 			}
 			if others := total - res.TotalTargets - res.Excluded; others > 0 {
-				c["scope"] = fmt.Sprintf("%d of %d packages: every changed package and every package depending on them (what CI runs for this change); the other %d do not depend on your change, so it cannot break them", res.TotalTargets, total, others)
+				c["scope"] = fmt.Sprintf("%d of %d packages: the changed ones and all their dependents (what CI runs for this change); the other %d cannot be affected", res.TotalTargets, total, others)
 				if others <= 5 { // name them, so nobody goes looking (or re-tests them "to be sure")
 					in := map[string]bool{}
 					for _, n := range res.AffectedPackages {
@@ -144,15 +144,19 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 				c["scope"] = fmt.Sprintf("all %d packages (every package depends on your change)", total)
 			}
 			if res.Status == "passed" {
-				c["next"] = `nothing else to run: monoflow ship -m "<commit message>"`
+				c["next"] = `nothing else to run: monoflow ship -m "<msg>"`
 			} else {
-				c["next"] = "fix errors[] (file:line), then monoflow verify again"
+				c["next"] = "fix the errors listed (file:line), then monoflow verify"
 			}
 		}
 		out = c
 	}
-	data, _ := json.MarshalIndent(out, "", "  ")
-	fmt.Println(string(data))
+	if !verboseOut && !jsonMode() {
+		fmt.Print(verifyText(res, out.(map[string]any)))
+	} else {
+		data, _ := json.MarshalIndent(out, "", "  ")
+		fmt.Println(string(data))
+	}
 
 	cb := guard.NewCircuitBreaker(rootDir, 5)
 	targetKey := strings.Join(res.AffectedPackages, ",")
@@ -334,12 +338,18 @@ func changedFilesSince(rootDir, base string) []string {
 // with the targets it breaks), and which targets failed. Cache keys, command lines and passed
 // targets are --verbose only. On an opentelemetry-go rename that broke 22 modules this is
 // ~4 KB instead of 25 KB of the same compiler error repeated per module.
-func compactSuite(res verify.SuiteResult, rootDir string, g *graph.DependencyGraph) map[string]any {
+// dedupedSuite returns res with errors merged across targets (repo-relative, capped at 30).
+func dedupedSuite(res verify.SuiteResult, rootDir string, g *graph.DependencyGraph) verify.SuiteResult {
 	pathOf := map[string]string{}
 	for _, p := range g.GetAllPackages() {
 		pathOf[p.Name] = p.Path
 	}
 	verify.DedupeErrors(&res, rootDir, pathOf, 30)
+	return res
+}
+
+func compactSuite(res verify.SuiteResult, rootDir string, g *graph.DependencyGraph) map[string]any {
+	res = dedupedSuite(res, rootDir, g)
 	out := map[string]any{
 		"status":         res.Status,
 		"duration_ms":    res.DurationMs,

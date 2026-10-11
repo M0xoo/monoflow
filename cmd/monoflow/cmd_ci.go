@@ -23,8 +23,7 @@ import (
 func handleQuarantine(rootDir string) {
 	qm := verify.NewQuarantineManager(rootDir)
 	if len(os.Args) < 3 || os.Args[2] == "list" {
-		data, _ := json.MarshalIndent(qm.List(), "", "  ")
-		fmt.Println(string(data))
+		printOut(qm.List())
 		return
 	}
 
@@ -53,8 +52,7 @@ func handleReview(rootDir string) {
 			fmt.Printf(`{"error": "%s"}`+"\n", err)
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(res, "", "  ")
-		fmt.Println(string(data))
+		printOut(res)
 
 	case "audit":
 		title := "Agent Pull Request"
@@ -68,8 +66,7 @@ func handleReview(rootDir string) {
 			}
 		}
 		res := review.AuditPRDossier(title, desc, changedFiles)
-		data, _ := json.MarshalIndent(res, "", "  ")
-		fmt.Println(string(data))
+		printOut(res)
 		if !res.Valid {
 			os.Exit(1)
 		}
@@ -80,8 +77,7 @@ func handleReview(rootDir string) {
 			fmt.Printf(`{"error": "%s"}`+"\n", err)
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(status, "", "  ")
-		fmt.Println(string(data))
+		printOut(status)
 		if status.Throttled {
 			os.Exit(1)
 		}
@@ -114,8 +110,7 @@ func handleQueue(rootDir string) {
 			fmt.Printf(`{"status": "failed", "error": "%s"}`+"\n", err)
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(receipt, "", "  ")
-		fmt.Println(string(data))
+		printOut(receipt)
 
 	case "verify":
 		if len(os.Args) < 4 {
@@ -124,12 +119,11 @@ func handleQueue(rootDir string) {
 		}
 		sha := os.Args[3]
 		eligible, receipt, reason := qm.VerifyCIGate(sha)
-		data, _ := json.MarshalIndent(map[string]any{
+		printOut(map[string]any{
 			"fast_path_eligible": eligible,
 			"receipt":            receipt,
 			"reason":             reason,
-		}, "", "  ")
-		fmt.Println(string(data))
+		})
 		if !eligible {
 			os.Exit(1)
 		}
@@ -164,8 +158,7 @@ func handleCI(rootDir string) {
 			fmt.Printf(`{"error": "%s"}`+"\n", err)
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(job, "", "  ")
-		fmt.Println(string(data))
+		printOut(job)
 		return
 	}
 
@@ -189,14 +182,13 @@ func handleCI(rootDir string) {
 	if eligible {
 		tierStr = "TIER_1_FAST_PATH"
 	}
-	data, _ := json.MarshalIndent(map[string]any{
+	printOut(map[string]any{
 		"ci_tier":            tierStr,
 		"fast_path_eligible": eligible,
 		"head_sha":           headSHA,
 		"reason":             reason,
 		"receipt":            receipt,
-	}, "", "  ")
-	fmt.Println(string(data))
+	})
 }
 
 func handleCIHealth(rootDir string) {
@@ -252,22 +244,20 @@ func handleGuard(rootDir string) {
 	allViolations := append(testViolations, secretViolations...)
 
 	if len(allViolations) > 0 {
-		data, _ := json.MarshalIndent(map[string]any{
+		printOut(map[string]any{
 			"status":     "failed",
 			"violations": allViolations,
 			"verdict":    "Integrity or security violation detected. Commits or PRs with weakened tests or secrets are blocked.",
-		}, "", "  ")
-		fmt.Println(string(data))
+		})
 		os.Exit(1)
 	}
 
-	data, _ := json.MarshalIndent(map[string]any{
+	printOut(map[string]any{
 		"status":          "passed",
 		"test_integrity":  "verified (0 assertions deleted or commented out)",
 		"secret_scanning": "clean (0 credentials or keys detected)",
 		"verdict":         "All guard checks passed",
-	}, "", "  ")
-	fmt.Println(string(data))
+	})
 }
 
 func handleOuter(rootDir string) {
@@ -325,8 +315,7 @@ func handleOuter(rootDir string) {
 			fmt.Printf(`{"status": "failed", "error": "%s"}`+"\n", err)
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(job, "", "  ")
-		fmt.Println(string(data))
+		printOut(job)
 		if job.Status == verify.JobRegressed {
 			os.Exit(1)
 		}
@@ -367,8 +356,7 @@ func handleOuter(rootDir string) {
 			fmt.Printf(`{"error": "%s"}`+"\n", err)
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(jobs, "", "  ")
-		fmt.Println(string(data))
+		printOut(jobs)
 
 	default:
 		fmt.Printf(`{"error": "unknown outer subcommand: %s"}`+"\n", sub)
@@ -439,8 +427,7 @@ func outerJobArg(rootDir string, om *verify.OuterLoopManager) string {
 // printOuterJob prints the outcome an agent acts on; --verbose prints the whole job record.
 func printOuterJob(job *verify.OuterJob) {
 	if hasFlag("--verbose") {
-		data, _ := json.MarshalIndent(job, "", "  ")
-		fmt.Println(string(data))
+		printOut(job)
 		return
 	}
 	out := map[string]any{
@@ -468,8 +455,7 @@ func printOuterJob(job *verify.OuterJob) {
 			out[k] = v
 		}
 	}
-	data, _ := json.MarshalIndent(out, "", "  ")
-	fmt.Println(string(data))
+	printOut(out)
 }
 
 func hasFlag(name string) bool {

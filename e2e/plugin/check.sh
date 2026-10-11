@@ -3,6 +3,7 @@
 # Usage: e2e/plugin/check.sh <workdir> <monoflow-binary> [name=url@probe-file ...]
 # probe-file: a file whose one-line edit should affect its package and its dependents.
 set -uo pipefail
+export MONOFLOW_FORMAT=json # parsed with jq below
 WORK=${1:?workdir}; BIN=${2:?monoflow binary}; shift 2
 REPOS=("$@")
 [ ${#REPOS[@]} -eq 0 ] && REPOS=(

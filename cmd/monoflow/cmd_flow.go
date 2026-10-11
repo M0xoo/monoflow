@@ -89,7 +89,7 @@ func handleShip(rootDir string) {
 		res, ok := runSelf(exe, rootDir, "commit", "-m", msg)
 		if !ok {
 			res["step"] = "commit"
-			printJSON(res)
+			printOut(res)
 			os.Exit(1)
 		}
 		if c, ok := res["commit"].(map[string]any); ok {
@@ -111,7 +111,7 @@ func handleShip(rootDir string) {
 		if err := spawnShipDeliver(exe, rootDir, title, prArgs); err == nil {
 			out["status"] = "shipping"
 			out["next"] = "Done: end your turn. Local CI is running on this commit; it pushes and opens the PR when green. A failure is delivered to you (SHIP_FAILED / OUTER_LOOP_REGRESSION)."
-			printJSON(out)
+			printOut(out)
 			return
 		}
 	}
@@ -121,17 +121,18 @@ func handleShip(rootDir string) {
 	}
 	if !ok {
 		out["step"] = "pr create"
-		printJSON(out)
+		printOut(out)
 		os.Exit(1)
 	}
 	out["next"] = "Done: end your turn. CI results are delivered to you; act on CI_FAILED if it arrives."
-	printJSON(out)
+	printOut(out)
 }
 
 // runSelf runs a monoflow subcommand and parses its JSON output (the last JSON object printed).
 func runSelf(exe, dir string, args ...string) (map[string]any, bool) {
 	cmd := exec.Command(exe, args...)
 	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "MONOFLOW_FORMAT=json") // parsed below
 	raw, err := cmd.Output()
 	res := map[string]any{}
 	text := strings.TrimSpace(string(raw))
@@ -157,8 +158,7 @@ func runSelf(exe, dir string, args ...string) (map[string]any, bool) {
 }
 
 func printJSON(v any) {
-	data, _ := json.MarshalIndent(v, "", "  ")
-	fmt.Println(string(data))
+	printOut(v)
 }
 
 // spawnShipDeliver starts `monoflow ship --deliver` detached, logging to .agents/ship/.

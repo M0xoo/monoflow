@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -73,14 +72,13 @@ func handlePR(rootDir string) {
 		if err != nil {
 			var gateErr *pr.GateError
 			if errors.As(err, &gateErr) {
-				data, _ := json.MarshalIndent(map[string]any{
+				printOut(map[string]any{
 					"status":        "blocked",
 					"error":         err.Error(),
 					"proof_status":  gateErr.ProofStatus,
 					"failed_checks": gateErr.FailedChecks,
 					"audit":         gateErr.Audit,
-				}, "", "  ")
-				fmt.Println(string(data))
+				})
 				os.Exit(1)
 			}
 			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
@@ -90,8 +88,7 @@ func handlePR(rootDir string) {
 		if !verbose {
 			out = compactPR(res)
 		}
-		data, _ := json.MarshalIndent(out, "", "  ")
-		fmt.Println(string(data))
+		printOut(out)
 
 	case "list":
 		opts := pr.ListOptions{
@@ -112,8 +109,7 @@ func handlePR(rootDir string) {
 			fmt.Printf(`{"status": "error", "error": "%s"}`+"\n", err)
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(list, "", "  ")
-		fmt.Println(string(data))
+		printOut(list)
 
 	case "view":
 		if len(os.Args) < 4 {
@@ -126,8 +122,7 @@ func handlePR(rootDir string) {
 			fmt.Printf(`{"status": "error", "error": "%s"}`+"\n", err)
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(meta, "", "  ")
-		fmt.Println(string(data))
+		printOut(meta)
 
 	case "status":
 		prID := ""
@@ -152,15 +147,13 @@ func handlePR(rootDir string) {
 
 		switch {
 		case asJSON:
-			data, _ := json.MarshalIndent(res, "", "  ")
-			fmt.Println(string(data))
+			printOut(res)
 		case hasFlag("--verbose") || stdoutIsTerminal():
 			fmt.Println(res.FormatView())
 		default:
 			// Agents read this through a pipe: the 12 KB dossier view cost them context for a
 			// handful of facts. --verbose (or a terminal) shows the full view.
-			data, _ := json.MarshalIndent(compactPRStatus(res), "", "  ")
-			fmt.Println(string(data))
+			printOut(compactPRStatus(res))
 		}
 
 	case "review":
@@ -185,8 +178,7 @@ func handlePR(rootDir string) {
 			fmt.Printf(`{"status": "error", "error": "%s"}`+"\n", err)
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(res, "", "  ")
-		fmt.Println(string(data))
+		printOut(res)
 
 	case "test":
 		if len(os.Args) < 4 {
@@ -210,8 +202,7 @@ func handlePR(rootDir string) {
 			fmt.Printf(`{"status": "error", "error": "%s"}`+"\n", err)
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(res, "", "  ")
-		fmt.Println(string(data))
+		printOut(res)
 
 	case "local":
 		if len(os.Args) < 4 {
@@ -239,8 +230,7 @@ func handlePR(rootDir string) {
 			fmt.Printf(`{"status": "error", "error": "%s"}`+"\n", err)
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(res, "", "  ")
-		fmt.Println(string(data))
+		printOut(res)
 
 	case "merge":
 		if len(os.Args) < 4 {
@@ -266,8 +256,7 @@ func handlePR(rootDir string) {
 			fmt.Printf(`{"status": "error", "error": "%s"}`+"\n", err)
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(res, "", "  ")
-		fmt.Println(string(data))
+		printOut(res)
 
 	default:
 		// Fallback for previous monoflow pr test <id> syntax where id was directly second arg
@@ -277,8 +266,7 @@ func handlePR(rootDir string) {
 			fmt.Printf(`{"error": "unknown pr subcommand '%s'; usage: monoflow pr [create|list|view|status|review|test|local|merge]"}`+"\n", sub)
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(res, "", "  ")
-		fmt.Println(string(data))
+		printOut(res)
 	}
 }
 

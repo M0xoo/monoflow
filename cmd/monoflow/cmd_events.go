@@ -67,13 +67,12 @@ func handleEvents(rootDir string) {
 		if !hasFlag("--verbose") {
 			shown = compactEvents(list)
 		}
-		data, _ := json.MarshalIndent(map[string]any{
+		printOut(map[string]any{
 			"scope":                scope,
 			"unread_count":         len(list),
 			"other_branches_count": others,
 			"events":               shown,
-		}, "", "  ")
-		fmt.Println(string(data))
+		})
 
 	case "list", "all":
 		list, err := em.List(false)
@@ -81,11 +80,10 @@ func handleEvents(rootDir string) {
 			fmt.Printf(`{"error": "%s"}`+"\n", err)
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(map[string]any{
+		printOut(map[string]any{
 			"total_count": len(list),
 			"events":      list,
-		}, "", "  ")
-		fmt.Println(string(data))
+		})
 
 	case "ack":
 		if len(os.Args) < 4 {
@@ -148,8 +146,7 @@ func handleEvents(rootDir string) {
 			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(job, "", "  ")
-		fmt.Println(string(data))
+		printOut(job)
 		if job.Status == events.WatchStatusCompletedFailed || job.Status == events.WatchStatusTimedOut {
 			os.Exit(1)
 		}
@@ -223,8 +220,7 @@ func handleEventsWait(rootDir string, em *events.EventManager) {
 				continue
 			}
 			_ = em.Ack(e.ID)
-			data, _ := json.MarshalIndent(e, "", "  ")
-			fmt.Println(string(data))
+			printOut(e)
 			if e.Type == events.EventCIFailed || e.Type == events.EventOuterRegression {
 				os.Exit(1)
 			}

@@ -43,7 +43,7 @@ func handleInit(rootDir string) {
 		}
 	}
 
-	data, _ := json.MarshalIndent(map[string]any{
+	printOut(map[string]any{
 		"status":              "initialized",
 		"repo_root":           res.RepoRoot,
 		"package_count":       res.PackageCount,
@@ -52,9 +52,7 @@ func handleInit(rootDir string) {
 		"rule_file":           filepath.Join(res.RepoRoot, ".agents", "rules", "agentic-monorepo.md"),
 		"skill_file":          filepath.Join(res.RepoRoot, ".agents", "skills", "monoflow", "SKILL.md"),
 		"workflow_file":       workflowPath,
-	}, "", "  ")
-
-	fmt.Println(string(data))
+	})
 }
 
 func handleTask(rootDir string) {
@@ -74,16 +72,14 @@ func handleTask(rootDir string) {
 			_ = json.Unmarshal(data, &bundle)
 		}
 		res := task.CheckBoundaries(&bundle, changedFiles)
-		data, _ := json.MarshalIndent(res, "", "  ")
-		fmt.Println(string(data))
+		printOut(res)
 		if !res.Valid {
 			os.Exit(1)
 		}
 
 	case "slice":
 		slice := task.SliceStackedDiff(changedFiles)
-		data, _ := json.MarshalIndent(slice, "", "  ")
-		fmt.Println(string(data))
+		printOut(slice)
 
 	case "prove":
 		taskID := "task-001"
@@ -96,12 +92,11 @@ func handleTask(rootDir string) {
 			fmt.Printf(`{"status": "failed", "error": "%s"}`+"\n", err)
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(map[string]any{
+		printOut(map[string]any{
 			"status":              receipt.Status,
 			"receipt":             receipt,
 			"pr_markdown_dossier": dossier,
-		}, "", "  ")
-		fmt.Println(string(data))
+		})
 
 	case "changeset":
 		if len(os.Args) < 5 {
@@ -140,8 +135,7 @@ func handleDeliver(rootDir string) {
 		if target == "" || p.Name == target {
 			manifest, err := deliver.BuildDeliverableWithOptions(rootDir, p, opts)
 			if err == nil {
-				data, _ := json.MarshalIndent(manifest, "", "  ")
-				fmt.Println(string(data))
+				printOut(manifest)
 			}
 		}
 	}
@@ -160,15 +154,14 @@ func handleApp(rootDir string) {
 	}
 
 	durMs := float64(time.Since(start).Microseconds()) / 1000.0
-	data, _ := json.MarshalIndent(map[string]any{
+	printOut(map[string]any{
 		"status":            "ready",
 		"overlay_path":      overlayPath,
 		"graft_duration_ms": durMs,
 		"cached_packages":   len(g.GetAllPackages()) - len(affected.AllAffected),
 		"delta_packages":    affected.AllAffected,
 		"verdict":           "Full App assembled in < 5 seconds without recompiling unchanged packages",
-	}, "", "  ")
-	fmt.Println(string(data))
+	})
 }
 
 func handleCache(rootDir string) {
@@ -186,8 +179,7 @@ func handleCache(rootDir string) {
 	switch sub {
 	case "status":
 		stats := mgr.GetStats()
-		data, _ := json.MarshalIndent(stats, "", "  ")
-		fmt.Println(string(data))
+		printOut(stats)
 
 	case "clean", "purge":
 		if err := mgr.Clean(); err != nil {
@@ -251,8 +243,7 @@ func handleScenario(rootDir string) {
 	}
 
 	if asJSON {
-		data, _ := json.MarshalIndent(report, "", "  ")
-		fmt.Println(string(data))
+		printOut(report)
 		return
 	}
 

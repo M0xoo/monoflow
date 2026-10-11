@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -27,8 +26,7 @@ func handleVersion(rootDir string) {
 			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(rep, "", "  ")
-		fmt.Println(string(data))
+		printOut(rep)
 
 	case "bump":
 		refuseSharedRoot(rootDir, "version bump")
@@ -49,8 +47,7 @@ func handleVersion(rootDir string) {
 			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(res, "", "  ")
-		fmt.Println(string(data))
+		printOut(res)
 
 	case "edges", "releases", "release", "pin", "unpin", "upgrades", "upgrade", "suggest":
 		handleReleases(rootDir, sub)
@@ -61,8 +58,7 @@ func handleVersion(rootDir string) {
 			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(res, "", "  ")
-		fmt.Println(string(data))
+		printOut(res)
 
 	case "check", "verify":
 		rep, err := version.CheckVersionConsistency(rootDir)
@@ -70,8 +66,7 @@ func handleVersion(rootDir string) {
 			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(rep, "", "  ")
-		fmt.Println(string(data))
+		printOut(rep)
 		if rep.Status == "error" {
 			os.Exit(1)
 		}
@@ -82,8 +77,7 @@ func handleVersion(rootDir string) {
 			fmt.Printf(`{"version": %q, "error": %q}`+"\n", version.EngineVersion, err.Error())
 			return
 		}
-		data, _ := json.MarshalIndent(rep, "", "  ")
-		fmt.Println(string(data))
+		printOut(rep)
 	}
 }
 
@@ -110,8 +104,7 @@ func handleReleases(rootDir, sub string) {
 		}
 	}
 	out := func(v any) {
-		data, _ := json.MarshalIndent(v, "", "  ")
-		fmt.Println(string(data))
+		printOut(v)
 	}
 	fail := func(err error) {
 		fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
