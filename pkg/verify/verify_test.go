@@ -227,6 +227,41 @@ func TestFailedTargetRetriedOnceAndMarkedFlaky(t *testing.T) {
 	}
 }
 
+// An assertion that fails once (a keep-alive test under load) is not retried by verify, where
+// the agent waits, but is by local CI before it can block a push; a real failure stays failed.
+func TestLocalCIRetriesAnyFailureOnce(t *testing.T) {
+	setup := func() (*graph.DependencyGraph, string) {
+		root := t.TempDir()
+		_ = os.MkdirAll(filepath.Join(root, "ws"), 0755)
+		_ = os.MkdirAll(filepath.Join(root, "broken"), 0755)
+		g := graph.New(root)
+		g.AddPackage(&graph.PackageNode{Name: "ws", Path: "ws", Language: graph.LangGeneric,
+			TestCmd: `if [ -f seen ]; then exit 0; fi; touch seen; echo "ws.test.ts:1552: expected vi.fn() to be called at least once"; exit 1`})
+		g.AddPackage(&graph.PackageNode{Name: "broken", Path: "broken", Language: graph.LangGeneric,
+			TestCmd: `echo "y_test.go:2: want 1"; exit 1`})
+		return g, root
+	}
+	status := func(opt VerifyOptions) map[string]TargetResult {
+		g, root := setup()
+		opt.Strict = true
+		got := map[string]TargetResult{}
+		for _, r := range NewRunner(root).VerifyPackages(g, []string{"ws", "broken"}, opt).Results {
+			got[r.Target] = r
+		}
+		return got
+	}
+	if r := status(VerifyOptions{})["ws"]; r.Status != "failed" {
+		t.Fatalf("verify must not retry an assertion failure: %+v", r)
+	}
+	got := status(VerifyOptions{RetryAllFailures: true})
+	if r := got["ws"]; r.Status != "passed" || !r.Flaky {
+		t.Fatalf("local CI must retry and mark flaky: %+v", r)
+	}
+	if r := got["broken"]; r.Status != "failed" {
+		t.Fatalf("a real failure stays failed: %+v", r)
+	}
+}
+
 // Files a check leaves in the repo (Playwright test-results/, coverage) are removed, so they
 // cannot end up in the agent's commit; files that existed before are kept.
 func TestVerifyRemovesFilesChecksCreate(t *testing.T) {

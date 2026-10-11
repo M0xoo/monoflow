@@ -43,6 +43,10 @@ type VerifyOptions struct {
 	// KeepUntracked: do not remove files the checks created (background runs: the agent may be
 	// creating files at the same time).
 	KeepUntracked bool
+	// RetryAllFailures re-runs any failed package once, alone, before reporting it, not only
+	// timing-like failures. Local CI sets it: nobody waits on it, and a flaky test there blocks
+	// a correct push (trpc: a websocket keep-alive test failed under load, passed 3/3 alone).
+	RetryAllFailures bool
 }
 
 // TargetResult holds the result of verifying a single package.
@@ -499,11 +503,11 @@ func (r *Runner) VerifyPackages(g *graph.DependencyGraph, names []string, opt Ve
 	// while 48 packages ran, blocking a correct change.)
 	var failedIdx []int
 	for i, res := range results {
-		if res.Status == "failed" && len(res.Errors) > 0 && res.Errors[0].Code != "package_not_projected" && res.Target != PrepareTarget && timingFailure(res.Errors) {
+		if res.Status == "failed" && len(res.Errors) > 0 && res.Errors[0].Code != "package_not_projected" && res.Target != PrepareTarget && (opt.RetryAllFailures || timingFailure(res.Errors)) {
 			failedIdx = append(failedIdx, i)
 		}
 	}
-	if len(failedIdx) > 0 && len(failedIdx) <= 5 {
+	if len(failedIdx) > 0 && (len(failedIdx) <= 5 || opt.RetryAllFailures) {
 		for _, i := range failedIdx {
 			if pkg, ok := g.GetPackage(results[i].Target); ok {
 				if again := r.VerifyTarget(pkg, opt); again.Status == "passed" {
