@@ -152,7 +152,7 @@ func (r *Runner) baselineDir(baseRef string) string {
 	if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
 		if _, err := os.Lstat(filepath.Join(dir, "node_modules")); err != nil {
 			// Made before dependencies were linked: link them and drop results memoised without them.
-			graph.OverlayNodeModules(r.RootDir, dir)
+			graph.PrepareNodeModules(r.RootDir, dir)
 			if _, err := os.Lstat(filepath.Join(dir, "node_modules")); err == nil {
 				memos, _ := filepath.Glob(filepath.Join(dir, ".monoflow-baseline-*"))
 				for _, m := range memos {
@@ -170,7 +170,7 @@ func (r *Runner) baselineDir(baseRef string) string {
 	}
 	// Without dependencies every JS check fails differently on the baseline, so old failures
 	// all looked new (trpc: 40 of 48 packages "failed" on a one-line change).
-	graph.OverlayNodeModules(r.RootDir, dir)
+	graph.PrepareNodeModules(r.RootDir, dir)
 	return dir
 }
 

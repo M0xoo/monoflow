@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -410,6 +411,15 @@ func (r *Runner) VerifyPackages(g *graph.DependencyGraph, names []string, opt Ve
 		}
 	}
 
+	// A worktree's dependencies may still be installing in the background (pnpm, see
+	// graph.PrepareNodeModules): checks need them.
+	graph.WaitForDeps(r.RootDir, 10*time.Minute)
+
+	// Checks must not change the tree the agent commits: files they create (Playwright's
+	// test-results/, coverage) are removed afterwards. trpc: ship committed two of them.
+	before := untrackedFiles(r.RootDir)
+	defer removeNewUntracked(r.RootDir, before)
+
 	// Build what the checks need from upstream packages once, through the repo's task runner,
 	// before the checks run in parallel (only for packages that will actually run).
 	var toRun []*graph.PackageNode
@@ -428,10 +438,19 @@ func (r *Runner) VerifyPackages(g *graph.DependencyGraph, names []string, opt Ve
 	results := make([]TargetResult, len(names))
 	var wg sync.WaitGroup
 
+	// Bounded: every target at once (48 on trpc, each starting vitest/tsc with its own workers)
+	// oversubscribed the machine and made timing-sensitive tests fail (websocket reconnects).
+	limit := opt.Concurrency
+	if limit <= 0 {
+		limit = min(max(runtime.NumCPU()/2, 2), 8)
+	}
+	sem := make(chan struct{}, limit)
 	for i, pkgName := range names {
 		wg.Add(1)
 		go func(idx int, name string) {
 			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
 			pkg, exists := g.GetPackage(name)
 			if !exists {
 				results[idx] = TargetResult{
@@ -598,5 +617,40 @@ func (r *Runner) cachePreexisting(results []TargetResult, opt VerifyOptions) {
 			Key: res.CacheKey, Target: res.Target, Language: res.Language, Status: "preexisting",
 			CommandRun: res.CommandRun, Timestamp: time.Now().UTC(), Output: string(data),
 		})
+	}
+}
+
+// untrackedFiles lists files git would add (untracked, not ignored), or nil outside git.
+func untrackedFiles(dir string) map[string]bool {
+	out, err := exec.Command("git", "-C", dir, "ls-files", "--others", "--exclude-standard", "-z").Output()
+	if err != nil {
+		return nil
+	}
+	set := map[string]bool{}
+	for _, f := range strings.Split(strings.TrimRight(string(out), "\x00"), "\x00") {
+		if f != "" {
+			set[f] = true
+		}
+	}
+	return set
+}
+
+// removeNewUntracked deletes untracked files that appeared since before (and the directories
+// they leave empty).
+func removeNewUntracked(dir string, before map[string]bool) {
+	if before == nil {
+		return
+	}
+	for f := range untrackedFiles(dir) {
+		if before[f] || strings.HasPrefix(f, ".agents/") {
+			continue
+		}
+		p := filepath.Join(dir, f)
+		_ = os.Remove(p)
+		for d := filepath.Dir(p); d != dir && strings.HasPrefix(d, dir); d = filepath.Dir(d) {
+			if os.Remove(d) != nil { // stops at the first non-empty directory
+				break
+			}
+		}
 	}
 }

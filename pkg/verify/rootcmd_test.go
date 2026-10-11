@@ -15,7 +15,7 @@ import (
 func TestRepoRootCommandRunsOncePerSuite(t *testing.T) {
 	root := t.TempDir()
 	_ = exec.Command("git", "-C", root, "init", "-q").Run()
-	counter := filepath.Join(root, "runs.log")
+	counter := filepath.Join(t.TempDir(), "runs.log") // outside the repo: verify removes files checks leave in it
 	cmd := repoRootPrefix + "echo run >> " + counter
 	g := graph.New(root)
 	for _, p := range []string{"a", "b", "c"} {

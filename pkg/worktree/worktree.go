@@ -277,6 +277,10 @@ func (m *Manager) CreateWithOpts(agentID string, opts CreateOptions) (*WorktreeI
 				isolationMethod = method
 			}
 		}
+	} else if graph.UsesPnpmInstall(m.RootDir) && !isSparse {
+		// Real install, in the background: start returns at once and verify waits for it
+		// (graph.WaitForDeps). See graph.PrepareNodeModules for why links are not enough.
+		startBackgroundPnpmInstall(wtPath)
 	} else {
 		graph.OverlayNodeModules(m.RootDir, wtPath)
 	}
@@ -1134,4 +1138,32 @@ func mainRepoRoot(dir string) string {
 		}
 	}
 	return main
+}
+
+// startBackgroundPnpmInstall runs an offline pnpm install in wt in a detached shell, holding
+// graph.DepsMarker while it runs; on failure it falls back to nothing (verify still works with
+// whatever was installed, and reports what fails).
+func startBackgroundPnpmInstall(wt string) {
+	marker := filepath.Join(wt, graph.DepsMarker)
+	_ = os.MkdirAll(filepath.Dir(marker), 0755)
+	_ = os.WriteFile(marker, nil, 0644)
+	install := graph.PnpmInstallCmd(wt)
+	script := fmt.Sprintf("%s > .agents/deps-install.log 2>&1; rm -f %q", shellJoin(install.Args), marker)
+	cmd := exec.Command("sh", "-c", script)
+	cmd.Dir = wt
+	cmd.Env = install.Env
+	cmd.SysProcAttr = detachedSysProcAttr()
+	if err := cmd.Start(); err != nil {
+		_ = os.Remove(marker)
+		return
+	}
+	_ = cmd.Process.Release()
+}
+
+func shellJoin(args []string) string {
+	q := make([]string, len(args))
+	for i, a := range args {
+		q[i] = "'" + strings.ReplaceAll(a, "'", "'\\''") + "'"
+	}
+	return strings.Join(q, " ")
 }

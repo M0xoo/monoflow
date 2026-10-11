@@ -2,6 +2,7 @@ package verify
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -223,5 +224,27 @@ func TestFailedTargetRetriedOnceAndMarkedFlaky(t *testing.T) {
 	}
 	if r := got["broken"]; r.Status != "failed" || r.Flaky {
 		t.Fatalf("broken target: %+v", r)
+	}
+}
+
+// Files a check leaves in the repo (Playwright test-results/, coverage) are removed, so they
+// cannot end up in the agent's commit; files that existed before are kept.
+func TestVerifyRemovesFilesChecksCreate(t *testing.T) {
+	root := t.TempDir()
+	_ = exec.Command("git", "-C", root, "init", "-q").Run()
+	_ = os.MkdirAll(filepath.Join(root, "app"), 0755)
+	_ = os.WriteFile(filepath.Join(root, "app", "mine.txt"), []byte("agent's new file\n"), 0644)
+	g := graph.New(root)
+	g.AddPackage(&graph.PackageNode{Name: "app", Path: "app", Language: graph.LangGeneric,
+		TestCmd: "mkdir -p test-results && echo '{}' > test-results/.last-run.json"})
+	res := NewRunner(root).VerifyPackages(g, []string{"app"}, VerifyOptions{Strict: true})
+	if res.Status != "passed" {
+		t.Fatalf("unexpected: %+v", res)
+	}
+	if _, err := os.Stat(filepath.Join(root, "app", "test-results")); err == nil {
+		t.Fatalf("check output must be removed")
+	}
+	if _, err := os.Stat(filepath.Join(root, "app", "mine.txt")); err != nil {
+		t.Fatalf("pre-existing untracked file must be kept")
 	}
 }

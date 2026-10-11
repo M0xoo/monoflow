@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/antigravity/monoflow/pkg/agenthooks"
@@ -147,9 +148,12 @@ func inFlight(root, branch string) bool {
 	// after the outer loop finished: wait for it too, so its SHIP_FAILED event is delivered.
 	if markers, _ := filepath.Glob(filepath.Join(root, ".agents", "ship", "*.inflight")); len(markers) > 0 {
 		for _, m := range markers {
-			if fi, err := os.Stat(m); err == nil && time.Since(fi.ModTime()) < 30*time.Minute {
-				return true
+			fi, err := os.Stat(m)
+			if err != nil || time.Since(fi.ModTime()) > 30*time.Minute || !shipProcessAlive(m) {
+				_ = os.Remove(m) // stale: its process is gone (killed with its agent session)
+				continue
 			}
+			return true
 		}
 	}
 	if jobs, err := verify.NewOuterLoopManager(root).ListJobs(); err == nil {
@@ -202,4 +206,14 @@ func readHookStdin() []byte {
 	case <-time.After(300 * time.Millisecond):
 		return nil
 	}
+}
+
+// shipProcessAlive reports whether the ship process named by a "<pid>.inflight" marker runs.
+func shipProcessAlive(marker string) bool {
+	pid, err := strconv.Atoi(strings.TrimSuffix(filepath.Base(marker), ".inflight"))
+	if err != nil {
+		return false
+	}
+	p, err := os.FindProcess(pid)
+	return err == nil && p.Signal(syscall.Signal(0)) == nil
 }
