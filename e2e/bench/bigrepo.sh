@@ -49,6 +49,18 @@ ground_truth() { # dir out-file
   done
 }
 
+# agent_cli <workdir> <session-or-empty> <prompt>: the coding agent under test. AGENT=opencode
+# (default; MODEL like opencode/big-pickle) or AGENT=cursor (Cursor CLI; MODEL like auto), whose
+# stream-json reports real token usage (opencode's cursor-acp bridge reports 0).
+agent_cli() {
+  local d=$1 sid=$2 p=$3
+  if [ "${AGENT:-opencode}" = cursor ]; then
+    (cd "$d" && agent -p --force --trust --output-format stream-json --model "$MODEL" ${sid:+--resume "$sid"} "$p")
+  else
+    opencode run --dir "$d" ${sid:+-s "$sid"} -m "$MODEL" --auto --format json "$p"
+  fi
+}
+
 # run_agent <jsonl> <cmd...>: run an agent, appending its JSON events to <jsonl>. Free models
 # stall mid-run (rate limits) without exiting: no new events for STALL_SECS (default 600) kills
 # it and marks the run stalled, so it is excluded instead of counted as a 30-minute failure.
@@ -81,17 +93,17 @@ run_condition() { # cond run
   fi
   s=$(date +%s)
   : > "$out/agent.jsonl"
-  run_agent "$out/agent.jsonl" opencode run --dir "$dir/src" -m "$MODEL" --auto --format json "$prompt"
+  run_agent "$out/agent.jsonl" agent_cli "$dir/src" "" "$prompt"
   echo $(( $(date +%s) - s )) > "$out/agent.secs"
   ground_truth "$dir" "$out/ci.txt"
   local round
   for round in $(seq 1 "${FIX_ROUNDS:-1}"); do
     grep -q FAIL "$out/ci.txt" || break
     local br sid; br=$(awk '$2=="FAIL"{print $1; exit}' "$out/ci.txt")
-    sid=$(jq -R -r 'fromjson? | select(type=="object" and .sessionID != null) | .sessionID' "$out/agent.jsonl" | head -1)
+    sid=$(jq -R -r 'fromjson? | select(type=="object") | (.sessionID // .session_id // empty)' "$out/agent.jsonl" | head -1)
     [ -n "$sid" ] || break
     s=$(date +%s)
-    run_agent "$out/agent.jsonl" opencode run --dir "$dir/src" -s "$sid" -m "$MODEL" --auto --format json \
+    run_agent "$out/agent.jsonl" agent_cli "$dir/src" "$sid" \
       "Full CI ($GT_CMD in every module) failed on your pushed branch $br:
 $(grep -E '^FAIL |^--- FAIL|\.go:[0-9]+' "$dir/gt-$(echo "$br" | tr / _).log" | head -40)
 Fix it and push again the same way you did before. Do not wait for CI afterwards."
@@ -101,14 +113,15 @@ Fix it and push again the same way you did before. Do not wait for CI afterwards
   jq -R -s --arg cond "$cond" --arg run "$run" --argjson secs "$(cat "$out/agent.secs")" --argjson fixes "$(cat "$out/agent.fixes" 2>/dev/null || echo 0)" --argjson stalled "$([ -f "$out/agent.stalled" ] && echo true || echo false)" '
     [split("\n")[] | fromjson? | select(type=="object")] as $e |
     [$e[] | select(.type=="step_finish") | .part.tokens] as $t |
+    [$e[] | select(.type=="result" and .usage != null) | .usage] as $u |
     { cond: $cond, run: $run, secs: $secs, fix_rounds: $fixes, stalled: $stalled, steps: ($t|length),
-      tool_calls: ([$e[] | select(.type=="tool_use")] | length),
-      fresh_tokens: (($t|map(.input)|add // 0) + ($t|map(.output)|add // 0)),
-      cache_read: ($t|map(.cache.read // 0)|add // 0) }' "$out/agent.jsonl" > "$out/metrics.json"
+      tool_calls: ([$e[] | select(.type=="tool_use" or (.type=="tool_call" and .subtype=="started"))] | length),
+      fresh_tokens: (($t|map(.input)|add // 0) + ($t|map(.output)|add // 0) + ($u|map(.inputTokens + .outputTokens)|add // 0)),
+      cache_read: (($t|map(.cache.read // 0)|add // 0) + ($u|map(.cacheReadTokens // 0)|add // 0)) }' "$out/agent.jsonl" > "$out/metrics.json"
 }
 
 # Free models get rate-limited for hours; a silent agent then burns AGENT_TIMEOUT per run.
-if ! perl -e 'alarm shift; exec @ARGV' 120 opencode run -m "$MODEL" "reply with the single word OK" 2>/dev/null | grep -q OK; then
+if ! perl -e 'alarm shift; exec @ARGV' 120 bash -c "$(declare -f agent_cli); MODEL='$MODEL' AGENT='${AGENT:-opencode}' agent_cli . '' 'reply with the single word OK'" 2>/dev/null | grep -q OK; then
   echo "model $MODEL is not answering (rate-limited?): aborting" >&2; exit 2
 fi
 
