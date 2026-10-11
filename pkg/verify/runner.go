@@ -27,6 +27,9 @@ type VerifyOptions struct {
 	// merge-base (pre-existing in the repo, not caused by this change) does not block.
 	Strict  bool
 	BaseRef string // base for the baseline (default: origin/main, main, origin/master, master)
+	// ChangedFiles (set by VerifyAffected) lets Go modules run only the packages that import
+	// the change (see goScopedCommands).
+	ChangedFiles []string
 }
 
 // TargetResult holds the result of verifying a single package.
@@ -142,8 +145,13 @@ func (r *Runner) VerifyTarget(pkg *graph.PackageNode, opt VerifyOptions) TargetR
 		Errors:   make([]DiagnosticError, 0),
 	}
 
-	// 1. Determine the checks to run (see checkCommands).
-	cmds := checkCommands(pkg, opt)
+	// 1. Determine the checks to run (see commandsFor).
+	cmds, unaffected := r.commandsFor(pkg, opt)
+	if unaffected {
+		res.CommandRun = "(none: no package of this module imports the changed packages)"
+		res.DurationMs = float64(time.Since(start).Microseconds()) / 1000.0
+		return res
+	}
 	if len(cmds) == 0 {
 		res.DurationMs = float64(time.Since(start).Microseconds()) / 1000.0
 		return res
@@ -256,6 +264,17 @@ func (r *Runner) VerifyTarget(pkg *graph.PackageNode, opt VerifyOptions) TargetR
 	return res
 }
 
+// commandsFor is checkCommands narrowed to what the change can affect (Go: only packages
+// importing the changed packages); unaffected=true when nothing in the package can be.
+func (r *Runner) commandsFor(pkg *graph.PackageNode, opt VerifyOptions) (cmds []string, unaffected bool) {
+	if len(opt.ChangedFiles) > 0 && (opt.Mode == "" || opt.Mode == "all") {
+		if c, skip, ok := goScopedCommands(r.RootDir, pkg, opt.ChangedFiles); ok {
+			return c, skip
+		}
+	}
+	return checkCommands(pkg, opt), false
+}
+
 // checkCommands returns the commands for the requested checks, in run order.
 // The default (and "all") runs typecheck, lint and tests so the inner loop catches
 // everything remote CI would; --typecheck/--lint/--test narrow it to a single check.
@@ -309,6 +328,7 @@ func (r *Runner) VerifyAffected(g *graph.DependencyGraph, changedFiles []string,
 	}
 	_ = release.EnsurePinned(r.RootDir, g)
 	affected := g.ComputeAffected(changedFiles)
+	opt.ChangedFiles = changedFiles
 	// Changed packages first: while they fail, checking their dependents only slows the fix loop
 	// (each edit re-runs them all: 1-2 min on trpc, where an agent iterating on one package wants
 	// seconds). Once they pass, the dependents run, so a pass still covers what CI runs.
@@ -476,8 +496,8 @@ func (r *Runner) cachedPass(pkg *graph.PackageNode, opt VerifyOptions) bool {
 	if r.cacheMgr == nil || opt.NoCache {
 		return false
 	}
-	cmds := checkCommands(pkg, opt)
-	if len(cmds) == 0 {
+	cmds, unaffected := r.commandsFor(pkg, opt)
+	if unaffected || len(cmds) == 0 {
 		return true
 	}
 	key, _ := r.cacheMgr.ComputePackageKey(pkg, r.upstreamKeys(pkg), strings.Join(cmds, " && "), opt.Stage+":"+opt.Mode)
