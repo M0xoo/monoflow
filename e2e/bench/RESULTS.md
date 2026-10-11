@@ -64,3 +64,28 @@ Found on the way: the vendored `.agents/bin/monoflow-linux-amd64` from the sim s
 than `ci proofs` and silently ran a different command (keep the vendored binary current, or let
 CI download the release); proofs were published after the branch push, racing an open PR's CI
 (now published first).
+
+## Large repo: opentelemetry-go (29 Go modules), `e2e/bench/bigrepo.sh`
+Task: rename `attribute.StringValue` -> `StringVal` (root module) and fix every caller across
+nested modules. One agent per condition, `opencode/big-pickle`. Ground truth: `go vet ./...` in every
+module, ignoring modules already failing on main (the root module, upstream vet debt).
+
+Verification without an agent (partial rename, nested callers left broken): root-only
+`go build && go test ./...` passes in 12 s and misses all 22 broken modules; `monoflow verify --affected`
+finds them in 14 s.
+
+| build | A secs | B secs | A fresh tokens | B fresh tokens | green |
+|---|---|---|---|---|---|
+| before fixes (3 runs) | 382 | 208 | 102k | 72k | 3/3 vs 3/3 |
+| + cache keys, root projection, API-diff perf (5 runs) | **328** | 368 | 103k | 82k | 5/5 vs 5/5 |
+
+Fixed along the way (each was a MonoFlow cost on big repos): a root package projected only its
+top-level files into a worktree (~15 wasted agent calls); cache keys of a root package hashed every
+nested module, docs and ignored local files, so the outer loop re-ran 27 modules after `verify`
+(0 -> 26/27 cached, 46 s -> 8 s); the API diff in `pr create` parsed all 29 modules with one git
+process per file (15 s -> 1.2 s; `pr create` 38 s -> 7-9 s); verify printed the same compiler error
+once per module (25 KB -> 7 KB).
+
+Reading: on a task where a capable agent finds every caller with grep, MonoFlow is now at time parity
+on a large repo and catches the cross-module breakage that root-only checks miss; it still costs
+more tokens (agents read AGENTS.md and take more steps). Variance is high (230-618 s per run).
