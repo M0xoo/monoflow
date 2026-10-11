@@ -848,7 +848,9 @@ func (om *OuterLoopManager) emitPassed(job *OuterJob) {
 // spawnOuterProcess runs `monoflow outer exec --job=<id>` detached from the CLI process.
 func spawnOuterProcess(root, jobID string) error {
 	exe, err := os.Executable()
-	if err != nil || !strings.HasPrefix(filepath.Base(exe), "monoflow") {
+	// Only a go test binary (pkg.test) can't run `outer exec`; any other name is a monoflow
+	// build (renamed copies included), and refusing it left the job queued forever.
+	if err != nil || strings.HasSuffix(filepath.Base(exe), ".test") {
 		return fmt.Errorf("not running as monoflow")
 	}
 	logDir := filepath.Join(root, ".agents", "outer_loop", "logs")
