@@ -78,6 +78,10 @@ finds them in 14 s.
 |---|---|---|---|---|---|
 | before fixes (3 runs) | 382 | 208 | 102k | 72k | 3/3 vs 3/3 |
 | + cache keys, root projection, API-diff perf (5 runs) | **328** | 368 | 103k | 82k | 5/5 vs 5/5 |
+| + compact agent outputs, shorter AGENTS.md (3 runs, `step-5-preview-free`*) | **768** | 1120 | **65k** | 80k | 3/3 vs 3/3 |
+
+\* `big-pickle` was rate-limited for the whole rerun (every agent timed out with no output), so this
+row uses another free model. Compare A to B within a row, not across rows.
 
 Fixed along the way (each was a MonoFlow cost on big repos): a root package projected only its
 top-level files into a worktree (~15 wasted agent calls); cache keys of a root package hashed every
@@ -86,6 +90,10 @@ nested module, docs and ignored local files, so the outer loop re-ran 27 modules
 process per file (15 s -> 1.2 s; `pr create` 38 s -> 7-9 s); verify printed the same compiler error
 once per module (25 KB -> 7 KB).
 
-Reading: on a task where a capable agent finds every caller with grep, MonoFlow is now at time parity
-on a large repo and catches the cross-module breakage that root-only checks miss; it still costs
-more tokens (agents read AGENTS.md and take more steps). Variance is high (230-618 s per run).
+The token gap came from MonoFlow's own outputs: `pr status` returned 12 KB of JSON, `events unread`
+returned full event payloads, and AGENTS.md was 5.1 KB. Making these compact by default (`--verbose`
+restores the full output) and trimming AGENTS.md to 3.2 KB reversed the gap.
+
+Reading: on a large repo MonoFlow is now ahead on both time (-31%) and fresh tokens (-19%), with the
+same green rate, and it catches the cross-module breakage that root-only checks miss. Variance is
+high (460-1312 s per run), so treat the deltas as directional.
