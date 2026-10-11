@@ -5,6 +5,7 @@ const AgentRuleTemplate = `# MonoFlow (for coding agents)
 Run as ` + "`" + `./bin/monoflow` + "`" + `. Four calls take a change to a PR:
 
 1. ` + "`" + `monoflow start <task-id>` + "`" + ` first, then work in the printed ` + "`" + `path` + "`" + ` (your worktree and branch; same files).
+   Forgot and edited on main? ` + "`" + `ship` + "`" + ` moves your changes onto their own branch for you.
 2. ` + "`" + `monoflow graph query <dir>` + "`" + `: every package, in every module, importing it (instead of grep). Make the change.
 3. ` + "`" + `monoflow verify` + "`" + `: builds, lints and tests every package your change can affect (what CI runs for it)
    and lists each break as ` + "`" + `errors[]` + "`" + ` (` + "`" + `file:line` + "`" + `, failing test). Fix those, rerun until it passes.

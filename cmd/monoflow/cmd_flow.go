@@ -65,6 +65,22 @@ func handleShip(rootDir string) {
 		return
 	}
 	out := map[string]any{}
+	// Called on main with uncommitted work (the agent skipped start, or explored first): move
+	// that work onto its own branch and worktree instead of making the agent do it by hand
+	// (Haiku: git diff, start, git apply, git restore: 4 calls).
+	if b := currentBranch(rootDir); (b == "main" || b == "master") && len(uncommittedFiles(rootDir)) > 0 {
+		if msg == "" {
+			fmt.Println(`{"error": "uncommitted changes: pass -m \"<commit message>\""}`)
+			os.Exit(1)
+		}
+		wt, err := moveWorkToWorktree(exe, rootDir, msg)
+		if err != nil {
+			fmt.Printf(`{"error": %q}`+"\n", "could not move your changes off "+b+": "+err.Error())
+			os.Exit(1)
+		}
+		rootDir = wt
+		out["moved_to"] = wt
+	}
 	if len(uncommittedFiles(rootDir)) > 0 {
 		if msg == "" {
 			fmt.Println(`{"error": "uncommitted changes: pass -m \"<commit message>\""}`)
@@ -192,4 +208,73 @@ func shipDeliver(exe, rootDir, title string, prArgs []string) {
 		Summary:        "ship could not push / open the PR: " + reason,
 		SuggestedTask:  "Fix what it reports, 'monoflow verify', then 'monoflow ship -m \"<msg>\"' again (or 'monoflow ship --wait' to see it inline)",
 	})
+}
+
+// moveWorkToWorktree creates a worktree and branch named after the commit message (via
+// `monoflow start`), moves the uncommitted changes of rootDir (tracked and new files) into it,
+// and leaves rootDir clean. Returns the worktree path.
+func moveWorkToWorktree(exe, rootDir, msg string) (string, error) {
+	git := func(dir string, args ...string) ([]byte, error) {
+		return exec.Command("git", append([]string{"-C", dir}, args...)...).Output()
+	}
+	diff, err := git(rootDir, "diff", "HEAD", "--binary")
+	if err != nil {
+		return "", err
+	}
+	untrackedRaw, _ := git(rootDir, "ls-files", "--others", "--exclude-standard", "-z")
+	var untracked []string
+	for _, f := range strings.Split(strings.TrimRight(string(untrackedRaw), "\x00"), "\x00") {
+		if f != "" && !strings.HasPrefix(f, ".agents/") && f != "bin/monoflow" {
+			untracked = append(untracked, f)
+		}
+	}
+	id := shipID(msg)
+	res, ok := runSelf(exe, rootDir, "start", id)
+	wt, _ := res["path"].(string)
+	if !ok || wt == "" {
+		return "", fmt.Errorf("start %s: %v", id, res["error"])
+	}
+	if len(diff) > 0 {
+		apply := exec.Command("git", "-C", wt, "apply", "--binary", "-")
+		apply.Stdin = strings.NewReader(string(diff))
+		if out, err := apply.CombinedOutput(); err != nil {
+			return "", fmt.Errorf("apply to %s: %v (%s)", wt, err, strings.TrimSpace(string(out)))
+		}
+	}
+	for _, f := range untracked {
+		data, err := os.ReadFile(filepath.Join(rootDir, f))
+		if err != nil {
+			continue
+		}
+		dst := filepath.Join(wt, f)
+		_ = os.MkdirAll(filepath.Dir(dst), 0755)
+		if err := os.WriteFile(dst, data, 0644); err != nil {
+			return "", err
+		}
+	}
+	// Only now that the worktree holds the work: clean the root.
+	if len(diff) > 0 {
+		if out, err := exec.Command("git", "-C", rootDir, "checkout", "HEAD", "--", ".").CombinedOutput(); err != nil {
+			return "", fmt.Errorf("restore %s: %v (%s)", rootDir, err, strings.TrimSpace(string(out)))
+		}
+	}
+	for _, f := range untracked {
+		_ = os.Remove(filepath.Join(rootDir, f))
+	}
+	return wt, nil
+}
+
+// shipID derives a worktree/branch id from the commit message: "codes: use upper-case names"
+// -> "codes-use-upper-case-<time>".
+func shipID(msg string) string {
+	var words []string
+	for _, w := range strings.FieldsFunc(strings.ToLower(strings.SplitN(msg, "\n", 2)[0]), func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9')
+	}) {
+		words = append(words, w)
+		if len(words) == 4 {
+			break
+		}
+	}
+	return strings.Join(append(words, fmt.Sprintf("%x", time.Now().Unix()%0xfffff)), "-")
 }
