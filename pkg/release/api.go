@@ -71,15 +71,28 @@ func SurfaceAt(root string, pkg *graph.PackageNode, rev string) (API, error) {
 		return nil, err
 	}
 	api := API{}
+	kept := files[:0]
 	for _, f := range files {
-		if isTestFile(f) {
-			continue
+		if !isTestFile(f) && sourceExt.MatchString(f) {
+			kept = append(kept, f)
 		}
+	}
+	files = kept
+	var atRev map[string][]byte
+	if rev != "" {
+		atRev = readAtRev(root, rev, files) // one git process, not one per file
+	}
+	for _, f := range files {
 		var src []byte
 		if rev == "" {
 			src, err = readWorking(root, f)
 		} else {
-			src, err = exec.Command("git", "-C", root, "show", rev+":"+f).Output()
+			var ok bool
+			if src, ok = atRev[f]; !ok {
+				err = fmt.Errorf("missing")
+			} else {
+				err = nil
+			}
 		}
 		if err != nil {
 			continue
@@ -117,18 +130,85 @@ func listFiles(root, dir, rev string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	all := strings.Split(strings.TrimSpace(string(out)), "\n")
+	// A nested package (own manifest) is not part of this one: the root Go module of
+	// opentelemetry-go would otherwise parse all 29 modules (15 s per API diff).
+	base := strings.TrimSuffix(filepath.ToSlash(filepath.Clean(dir)), "/")
+	var nested []string
+	for _, f := range all {
+		d := filepath.ToSlash(filepath.Dir(f))
+		if d == base || (base == "." && d == ".") {
+			continue
+		}
+		switch filepath.Base(f) {
+		case "go.mod", "package.json", "Cargo.toml", "pyproject.toml", "setup.py":
+			nested = append(nested, d+"/")
+		}
+	}
 	var files []string
-	for _, f := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if f != "" && !strings.Contains(f, "/testdata/") && !strings.Contains(f, "/node_modules/") {
+	for _, f := range all {
+		if f == "" || strings.Contains(f, "/testdata/") || strings.Contains(f, "/node_modules/") {
+			continue
+		}
+		inNested := false
+		for _, n := range nested {
+			if strings.HasPrefix(f, n) {
+				inNested = true
+				break
+			}
+		}
+		if !inNested {
 			files = append(files, f)
 		}
 	}
 	return files, nil
 }
 
-func isTestFile(f string) bool {
-	return regexp.MustCompile(`(_test\.go|\.(test|spec)\.[cm]?[jt]sx?|(^|/)tests?/|(^|/)test_[^/]*\.py|_test\.py|(^|/)test\.[cm]?js)$|(^|/)tests?/`).MatchString(f)
+var sourceExt = regexp.MustCompile(`\.(go|[cm]?[jt]sx?|py|rs)$`)
+
+// readAtRev reads files at rev with a single `git cat-file --batch`.
+func readAtRev(root, rev string, files []string) map[string][]byte {
+	out := map[string][]byte{}
+	if len(files) == 0 {
+		return out
+	}
+	var in bytes.Buffer
+	for _, f := range files {
+		in.WriteString(rev + ":" + f + "\n")
+	}
+	cmd := exec.Command("git", "-C", root, "cat-file", "--batch")
+	cmd.Stdin = &in
+	data, err := cmd.Output()
+	if err != nil {
+		return out
+	}
+	for _, f := range files {
+		nl := bytes.IndexByte(data, '\n')
+		if nl < 0 {
+			break
+		}
+		header := strings.Fields(string(data[:nl]))
+		data = data[nl+1:]
+		if len(header) < 3 || header[1] != "blob" {
+			continue // "<rev>:<f> missing"
+		}
+		var size int
+		fmt.Sscanf(header[2], "%d", &size)
+		if size > len(data) {
+			break
+		}
+		out[f] = data[:size]
+		data = data[size:]
+		if len(data) > 0 && data[0] == '\n' {
+			data = data[1:]
+		}
+	}
+	return out
 }
+
+var testFileRe = regexp.MustCompile(`(_test\.go|\.(test|spec)\.[cm]?[jt]sx?|(^|/)tests?/|(^|/)test_[^/]*\.py|_test\.py|(^|/)test\.[cm]?js)$|(^|/)tests?/`)
+
+func isTestFile(f string) bool { return testFileRe.MatchString(f) }
 
 func goSurface(api API, file string, src []byte) {
 	fset := token.NewFileSet()

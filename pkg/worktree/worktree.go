@@ -125,9 +125,9 @@ func (m *Manager) CreateWithOpts(agentID string, opts CreateOptions) (*WorktreeI
 	} else {
 		base := opts.BaseBranch
 		if base == "" {
-			base = m.defaultBaseBranch()
+			base = m.freshestBase(m.defaultBaseBranch())
 		}
-		if _, err := m.runGit("worktree", "add", "-b", branch, wtPath, base); err != nil {
+		if _, err := m.runGit("worktree", "add", "--no-track", "-b", branch, wtPath, base); err != nil {
 			return nil, fmt.Errorf("failed to create git worktree: %w", err)
 		}
 	}
@@ -264,7 +264,7 @@ func (m *Manager) CreateWithOpts(agentID string, opts CreateOptions) (*WorktreeI
 		if errSub == nil && subRes != nil {
 			includedPkgs = subRes.IncludedPackages
 			omittedPkgs = subRes.OmittedPackages
-			isSparse = true
+			isSparse = subRes.Method != subset.MethodFullRoot
 		}
 	}
 
@@ -354,6 +354,35 @@ func (m *Manager) defaultBaseBranch() string {
 		}
 	}
 	return "HEAD"
+}
+
+// freshestBase returns origin/<base> when the local <base> is behind it (the shared root is
+// rarely pulled while agents work in worktrees), so a new task never starts from stale code.
+// The fetch is best-effort and bounded: offline, the local refs decide.
+func (m *Manager) freshestBase(base string) string {
+	if base == "HEAD" {
+		return base
+	}
+	fetch := exec.Command("git", "fetch", "--quiet", "origin", base)
+	fetch.Dir = m.RootDir
+	if fetch.Start() == nil {
+		done := make(chan error, 1)
+		go func() { done <- fetch.Wait() }()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			_ = fetch.Process.Kill()
+			<-done
+		}
+	}
+	remote := "origin/" + base
+	if _, err := m.runGit("rev-parse", "--verify", "--quiet", "refs/remotes/"+remote); err != nil {
+		return base
+	}
+	if _, err := m.runGit("merge-base", "--is-ancestor", base, remote); err == nil {
+		return remote
+	}
+	return base
 }
 
 // resolveMonoflowBinary finds the monoflow binary the root repo uses.

@@ -261,13 +261,111 @@ func (m *Manager) ComputePackageKey(pkg *graph.PackageNode, upstreamKeys map[str
 				}
 			}
 		}
+		// 4. Local-only (gitignored) files a test could read. A clean checkout of the commit
+		// (outer loop, CI) lacks them, so it must not reuse a result that may depend on them.
+		for _, relPath := range gitIgnoredLooseFiles(absPkgPath) {
+			if fileHash, err := hashFile(filepath.Join(absPkgPath, relPath)); err == nil {
+				fmt.Fprintf(hasher, "ignored:%s=%s\n", relPath, fileHash)
+			}
+		}
 	}
 
 	return hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
-// collectSourceFiles returns sorted relative paths of all relevant source files.
+// collectSourceFiles returns sorted relative paths of all relevant source files: what git would
+// commit (tracked + untracked, not ignored), so a worktree and a clean checkout of the same commit
+// hash the same (ignored local files such as a bin/ symlink must not change the key).
 func collectSourceFiles(dir string) ([]string, error) {
+	if files, ok := gitSourceFiles(dir); ok {
+		return files, nil
+	}
+	return walkSourceFiles(dir)
+}
+
+// gitIgnoredLooseFiles lists gitignored regular files in dir. Ignored directories (node_modules/,
+// bin/, dist/: build outputs and caches), symlinks, OS/editor junk, nested packages and .agents/
+// are left out, so ordinary builds don't change the key.
+func gitIgnoredLooseFiles(dir string) []string {
+	cmd := exec.Command("git", "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory", "--", ".")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+	var files []string
+	for _, rel := range strings.Split(strings.TrimRight(string(out), "\x00"), "\x00") {
+		rel = filepath.ToSlash(rel)
+		if rel == "" || strings.HasSuffix(rel, "/") || strings.HasPrefix(rel, ".agents/") || strings.Contains(rel, "/.agents/") || isJunkFile(rel) {
+			continue
+		}
+		if isPackageRoot(filepath.Join(dir, filepath.Dir(rel))) && filepath.Dir(rel) != "." {
+			continue // belongs to a nested package
+		}
+		if fi, err := os.Lstat(filepath.Join(dir, rel)); err != nil || !fi.Mode().IsRegular() {
+			continue
+		}
+		files = append(files, rel)
+	}
+	sort.Strings(files)
+	return files
+}
+
+func isJunkFile(rel string) bool {
+	base := filepath.Base(rel)
+	switch base {
+	case ".DS_Store", "Thumbs.db", "desktop.ini":
+		return true
+	}
+	return strings.HasSuffix(base, "~") || strings.HasSuffix(base, ".swp") || strings.HasSuffix(base, ".swo")
+}
+
+func gitSourceFiles(dir string) ([]string, bool) {
+	cmd := exec.Command("git", "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", ".")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, false
+	}
+	all := strings.Split(strings.TrimRight(string(out), "\x00"), "\x00")
+	var nested []string
+	for _, rel := range all {
+		if d := filepath.ToSlash(filepath.Dir(rel)); d != "." {
+			for _, m := range packageManifests {
+				if filepath.Base(rel) == m {
+					nested = append(nested, d+"/")
+				}
+			}
+		}
+	}
+	seen := map[string]bool{}
+	var files []string
+	for _, rel := range all {
+		rel = filepath.ToSlash(rel)
+		if rel == "" || seen[rel] || strings.HasPrefix(rel, ".agents/") || strings.Contains(rel, "/.agents/") {
+			continue
+		}
+		skip := false
+		for _, n := range nested {
+			if strings.HasPrefix(rel, n) {
+				skip = true
+				break
+			}
+		}
+		if skip || (isDocFile(rel) && !strings.Contains("/"+rel, "/testdata/")) {
+			continue
+		}
+		if fi, err := os.Stat(filepath.Join(dir, rel)); err != nil || fi.IsDir() {
+			continue // deleted in the working tree
+		}
+		seen[rel] = true
+		files = append(files, rel)
+	}
+	sort.Strings(files)
+	return files, true
+}
+
+func walkSourceFiles(dir string) ([]string, error) {
 	var files []string
 	ignoreDirs := map[string]bool{
 		".git":          true,
@@ -296,6 +394,11 @@ func collectSourceFiles(dir string) ([]string, error) {
 			if ignoreDirs[base] {
 				return filepath.SkipDir
 			}
+			// A nested package (its own manifest) is not part of this one: a root Go module
+			// must not hash every module below it, or any edit anywhere re-verifies everything.
+			if path != dir && isPackageRoot(path) {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 
@@ -310,7 +413,13 @@ func collectSourceFiles(dir string) ([]string, error) {
 		if err != nil {
 			return nil
 		}
-		files = append(files, filepath.ToSlash(rel))
+		rel = filepath.ToSlash(rel)
+		// Docs do not change build or test results (same rule as affected detection), except
+		// fixtures under testdata/.
+		if isDocFile(rel) && !strings.Contains("/"+rel, "/testdata/") {
+			return nil
+		}
+		files = append(files, rel)
 		return nil
 	})
 
@@ -779,4 +888,23 @@ func extractTarGzReader(r io.Reader, targetDir string) error {
 	}
 
 	return nil
+}
+
+var packageManifests = []string{"go.mod", "package.json", "Cargo.toml", "pyproject.toml", "setup.py"}
+
+func isPackageRoot(dir string) bool {
+	for _, m := range packageManifests {
+		if _, err := os.Stat(filepath.Join(dir, m)); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+func isDocFile(rel string) bool {
+	switch strings.ToLower(filepath.Ext(rel)) {
+	case ".md", ".mdx", ".rst":
+		return true
+	}
+	return false
 }

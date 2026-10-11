@@ -44,7 +44,7 @@ func handleCommit(rootDir string) {
 		om := verify.NewOuterLoopManager(rootDir)
 		if job, err := om.StartJob(verify.OuterLoopOptions{CommitSHA: res.CommitSHA, Async: true, IncludeE2E: true}); err == nil {
 			out["outer_loop"] = map[string]any{"job": job.ID, "status": "running",
-				"note": "local CI on this exact commit; 'monoflow push' pushes only when it is green"}
+				"note": "local CI on this exact commit. Next: 'monoflow pr create' (waits for it, pushes, opens the PR), or more edits + commit"}
 		}
 	}
 	data, _ := json.MarshalIndent(out, "", "  ")
@@ -126,7 +126,7 @@ func handlePush(rootDir string) {
 	// 1d. Outer-loop gate: the exact commit must have passed local CI (affected packages +
 	// dependents + the repo's ci_cmd, in a clean checkout) before it is pushed.
 	if !skipVerify {
-		if dirty := getGitChangedFiles(rootDir); len(dirty) > 0 && !onlyNonCode(dirty) {
+		if dirty := uncommittedFiles(rootDir); len(dirty) > 0 && !onlyNonCode(dirty) {
 			data, _ := json.MarshalIndent(map[string]any{"status": "blocked",
 				"verdict": "Uncommitted changes: commit them with 'monoflow commit' (which starts the outer loop) before pushing."}, "", "  ")
 			fmt.Println(string(data))
@@ -155,7 +155,17 @@ func handlePush(rootDir string) {
 		// passed / promoted: push below
 	}
 
-	// 2. Perform push
+	// 2. Publish proofs before the branch: an open PR starts CI on the push, and its import
+	// step must find them (a proof ref does not reference the branch's objects).
+	proofsPublished := 0
+	if job := verify.NewOuterLoopManager(rootDir).LatestForCommit(headSHA); job != nil &&
+		(job.Status == verify.JobPassed || job.Status == verify.JobPromoted) {
+		if n, err := proofs.Publish(rootDir, remote, headSHA, cache.NewManager(rootDir, cache.DefaultConfig(rootDir)), verify.PassedKeys(job.TargetResults)); err == nil {
+			proofsPublished = n
+		}
+	}
+
+	// 3. Perform push
 	start := time.Now()
 	pushArgs := []string{"push", "-u", remote, branch}
 	if forceDirect && branch != "main" && branch != "master" {
@@ -190,10 +200,8 @@ func handlePush(rootDir string) {
 		})
 		if err == nil {
 			res["status"] = "pushed_and_watching"
-			if job := verify.NewOuterLoopManager(rootDir).LatestForCommit(headSHA); job != nil {
-				if n, err := proofs.Publish(rootDir, remote, headSHA, cache.NewManager(rootDir, cache.DefaultConfig(rootDir)), verify.PassedKeys(job.TargetResults)); err == nil && n > 0 {
-					res["proofs_published"] = n
-				}
+			if proofsPublished > 0 {
+				res["proofs_published"] = proofsPublished
 			}
 			res["watcher_id"] = job.ID
 			res["ci_watcher_command"] = fmt.Sprintf("./bin/monoflow events watch %s --branch=%s", headSHA, branch)

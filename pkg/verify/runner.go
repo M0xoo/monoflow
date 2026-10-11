@@ -44,6 +44,8 @@ type TargetResult struct {
 	// CachedFrom is set when the cached result came from another source (e.g. an agent proof).
 	CachedFrom string `json:"cached_from,omitempty"`
 	CommandRun string `json:"command_run,omitempty"`
+	// ErrorCount replaces Errors when DedupeErrors moved them to SuiteResult.Errors.
+	ErrorCount int `json:"error_count,omitempty"`
 }
 
 // SuiteResult holds the aggregated verification results across all affected packages.
@@ -56,7 +58,11 @@ type SuiteResult struct {
 	CachedTargets    int            `json:"cached_targets"`
 	AffectedPackages []string       `json:"affected_packages"`
 	Results          []TargetResult `json:"results"`
-	Hint             string         `json:"hint,omitempty"`
+	// Errors lists each distinct failure once (repo-relative path) with the targets it breaks;
+	// filled by DedupeErrors for compact output.
+	Errors        []SharedError `json:"errors,omitempty"`
+	ErrorsOmitted int           `json:"errors_omitted,omitempty"`
+	Hint          string        `json:"hint,omitempty"`
 }
 
 // Runner executes verification tasks with maximum parallelism, caching, and minimal latency.

@@ -383,13 +383,16 @@ func (om *OuterLoopManager) executeJobInternal(job *OuterJob) error {
 
 	// PROMOTION GATE: Push to remote ONLY when passed and auto_push is enabled
 	if job.AutoPush {
+		// Let remote CI reuse what was just verified for the identical inputs. Published before
+		// the branch so an open PR's CI, triggered by the push, finds them.
+		if job.RemoteBranch != "main" && job.RemoteBranch != "master" && job.RemoteBranch != "HEAD" {
+			_, _ = proofs.Publish(om.RootDir, job.Remote, job.CommitSHA, cache.NewManager(om.RootDir, cache.DefaultConfig(om.RootDir)), PassedKeys(job.TargetResults))
+		}
 		if err := om.promoteToRemote(job); err != nil {
 			job.PromoteError = err.Error()
 		} else {
 			job.Promoted = true
 			job.Status = JobPromoted
-			// Let remote CI reuse what was just verified for the identical inputs.
-			_, _ = proofs.Publish(om.RootDir, job.Remote, job.CommitSHA, cache.NewManager(om.RootDir, cache.DefaultConfig(om.RootDir)), PassedKeys(job.TargetResults))
 			// Remote CI now runs on the pushed commit: watch it like `monoflow push` does.
 			_, _ = events.NewCIWatcher(om.RootDir).StartWatch(events.WatchOptions{CommitSHA: job.CommitSHA, Branch: job.RemoteBranch, Remote: job.Remote, Async: true})
 		}

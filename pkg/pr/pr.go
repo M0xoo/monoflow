@@ -332,13 +332,14 @@ func (m *PRManager) Create(opts CreateOptions) (*PRMetadata, error) {
 		if err != nil {
 			return nil, err
 		}
+		// Proofs first: if the PR already exists, the push starts its CI right away.
+		if outerJob != nil {
+			_, _ = proofs.Publish(m.RootDir, remote, headSHA, cache.NewManager(m.RootDir, cache.DefaultConfig(m.RootDir)), verify.PassedKeys(outerJob.TargetResults))
+		}
 		cmdPush := exec.Command("git", "push", "-u", remote, headBranch+":"+headBranch)
 		cmdPush.Dir = m.RootDir
 		if out, err := cmdPush.CombinedOutput(); err == nil {
 			pushed = true
-			if outerJob != nil {
-				_, _ = proofs.Publish(m.RootDir, remote, headSHA, cache.NewManager(m.RootDir, cache.DefaultConfig(m.RootDir)), verify.PassedKeys(outerJob.TargetResults))
-			}
 		} else {
 			pushErr = strings.TrimSpace(string(out))
 		}

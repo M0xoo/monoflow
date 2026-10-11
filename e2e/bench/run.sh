@@ -2,6 +2,7 @@
 # A/B benchmark: the same tasks done by concurrent opencode agents with MonoFlow (A) and
 # with plain git + the repo's own tools (B). Ground truth = ci/run.sh on every pushed branch.
 # Usage: e2e/bench/run.sh <workdir> <monoflow-binary> <out> [model] [runs]
+# AGENT_TIMEOUT (seconds, default 2400) caps each agent: a rate-limited model makes opencode retry forever.
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); SIM="$HERE/../sim"
 WORK=${1:?}; BIN=${2:?}; OUT=${3:?}; MODEL=${4:-opencode/big-pickle}; RUNS=${5:-2}
@@ -20,6 +21,20 @@ When you are done (or blocked), print a final section exactly like:
 
 YOUR TASK:
 '
+
+ground_truth() { # dir repo out-file: full CI on every pushed branch
+  local dir=$1 repo=$2 f=$3 br d
+  # Let queued pushes (MonoFlow outer loop) finish, bounded.
+  for _ in $(seq 1 60); do
+    [ -z "$(ls "$repo"/.agents/worktrees/*/.agents/outer_loop/jobs/*.json 2>/dev/null | xargs grep -l '"status": "\(running\|queued\)"' 2>/dev/null)" ] && break
+    sleep 5
+  done
+  : > "$f"
+  for br in $(git --git-dir="$dir/remote.git" for-each-ref --format='%(refname:short)' refs/heads | grep -v '^main$'); do
+    d="$dir/gt-$(echo "$br" | tr / _)"; rm -rf "$d"; git clone -q -b "$br" "$dir/remote.git" "$d"
+    if (cd "$d" && bash ci/run.sh > "$d.log" 2>&1); then echo "$br PASS" >> "$f"; else echo "$br FAIL" >> "$f"; fi
+  done
+}
 
 run_condition() { # cond run
   local cond=$1 run=$2 dir="$WORK/$1-$2" out="$OUT/$1-$2"
@@ -40,27 +55,35 @@ run_condition() { # cond run
     else
       prompt="$(cat "$SIM/tasks/_preamble.md" "$HERE/tasks/$a.md")"
     fi
-    ( s=$(date +%s); opencode run --dir "$adir" -m "$MODEL" --auto --format json "$prompt" > "$out/$a.jsonl" 2>/dev/null
+    ( s=$(date +%s); perl -e 'alarm shift; exec @ARGV' "${AGENT_TIMEOUT:-2400}" opencode run --dir "$adir" -m "$MODEL" --auto --format json "$prompt" > "$out/$a.jsonl" 2>/dev/null
       echo $(( $(date +%s) - s )) > "$out/$a.secs" ) &
     sleep 2
   done
   wait
-  # Let queued pushes (MonoFlow outer loop) finish, bounded.
-  for _ in $(seq 1 60); do
-    [ -z "$(ls "$repo"/.agents/worktrees/*/.agents/outer_loop/jobs/*.json 2>/dev/null | xargs -r grep -l '"status": "\(running\|queued\)"' 2>/dev/null)" ] && break
-    sleep 5
-  done
-  # Ground truth on every pushed branch.
-  : > "$out/ci.txt"
-  for br in $(git --git-dir="$dir/remote.git" for-each-ref --format='%(refname:short)' refs/heads | grep -v '^main$'); do
-    d="$dir/gt-$(echo "$br" | tr / _)"; rm -rf "$d"; git clone -q -b "$br" "$dir/remote.git" "$d"
-    if (cd "$d" && bash ci/run.sh >/dev/null 2>&1); then echo "$br PASS" >> "$out/ci.txt"; else echo "$br FAIL" >> "$out/ci.txt"; fi
+  ground_truth "$dir" "$repo" "$out/ci.txt"
+  # A red branch is not done: like real CI, hand the failure back to the same agent session and
+  # let it fix and push again (FIX_ROUNDS, default 2). Metrics then measure cost to green CI.
+  local round
+  for round in $(seq 1 "${FIX_ROUNDS:-2}"); do
+    grep -q FAIL "$out/ci.txt" || break
+    for br in $(awk '$2=="FAIL"{print $1}' "$out/ci.txt"); do
+      local a=${br#agent/} sid
+      sid=$(jq -r 'select(.sessionID != null) | .sessionID' "$out/$a.jsonl" | head -1)
+      [ -n "$sid" ] || continue
+      local msg="Remote CI (bash ci/run.sh) failed on your pushed branch $br:
+$(tail -40 "$dir/gt-$(echo "$br" | tr / _).log")
+Fix it and push again the same way you did before. Do not wait for CI afterwards."
+      ( s=$(date +%s); perl -e 'alarm shift; exec @ARGV' "${AGENT_TIMEOUT:-2400}" opencode run --dir "$([ "$cond" = B ] && echo "$dir/clones/$a" || echo "$repo")" -s "$sid" -m "$MODEL" --auto --format json "$msg" >> "$out/$a.jsonl" 2>/dev/null
+        echo $(( $(cat "$out/$a.secs") + $(date +%s) - s )) > "$out/$a.secs"; echo "$round" > "$out/$a.fixes" ) &
+    done
+    wait
+    ground_truth "$dir" "$repo" "$out/ci.txt"
   done
   # Per-agent metrics.
   for a in "${AGENTS[@]}"; do
-    jq -s --arg a "$a" --arg cond "$cond" --arg run "$run" --argjson secs "$(cat "$out/$a.secs")" '
+    jq -s --arg a "$a" --arg cond "$cond" --arg run "$run" --argjson secs "$(cat "$out/$a.secs")" --argjson fixes "$(cat "$out/$a.fixes" 2>/dev/null || echo 0)" '
       [.[] | select(.type=="step_finish") | .part.tokens] as $t |
-      { cond: $cond, run: $run, agent: $a, secs: $secs,
+      { cond: $cond, run: $run, agent: $a, secs: $secs, fix_rounds: $fixes,
         steps: ($t|length),
         tool_calls: ([.[] | select(.type=="tool_use")] | length),
         input: ($t|map(.input)|add // 0), output: ($t|map(.output)|add // 0),
@@ -73,7 +96,7 @@ for r in $(seq 1 "$RUNS"); do
 done
 jq -s 'group_by(.cond) | map({cond: .[0].cond, agents: length,
   avg_secs: (map(.secs)|add/length|floor), avg_tool_calls: (map(.tool_calls)|add/length*10|floor/10),
-  avg_steps: (map(.steps)|add/length*10|floor/10),
+  avg_steps: (map(.steps)|add/length*10|floor/10), fix_rounds: (map(.fix_rounds)|add),
   avg_fresh_tokens: (map(.input + .output)|add/length|floor), avg_total_context: (map(.input + .output + .cache_read)|add/length|floor)})' "$OUT"/*/metrics.jsonl > "$OUT/summary.json"
 cat "$OUT"/*/ci.txt | awk '{print FILENAME? $0 : $0}' > /dev/null
 for c in A B; do printf '%s pushed=%s red=%s\n' "$c" "$(cat "$OUT"/$c-*/ci.txt | wc -l | tr -d ' ')" "$(cat "$OUT"/$c-*/ci.txt | grep -c FAIL)"; done > "$OUT/ci_summary.txt"

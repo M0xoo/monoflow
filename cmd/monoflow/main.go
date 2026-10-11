@@ -203,7 +203,7 @@ var commandDetails = map[string]string{
                                       (to update your branch from main, run 'monoflow sync' inside it)
   worktree finish <agent-id> [--force] Remove the worktree and its registry entry
   worktree isolate <agent-id>         Materialize per-worktree dependencies`,
-	"pr": `  pr create --title="<t>" [--body="<b>"] [--base=<b>] [--head=<b>] [--draft] [--stack] [--no-push]
+	"pr": `  pr create --title="<t>" [--body="<b>" | --body-file=<path>] [--base=<b>] [--head=<b>] [--draft] [--stack] [--no-push] [--verbose]
                                       Gate-checked PR (blocked unless DoD proof is VERIFIED)
   pr list [--state=<s>] [--limit=<n>] List PRs
   pr view <id> | pr status [id] [--json]   Show a PR / bridged local+remote status
@@ -220,7 +220,7 @@ var commandDetails = map[string]string{
                                       background task: its exit wakes you; 0 pass/skip, 1 fail)
   events watch <sha> [--branch=<b>] [--timeout=<d>]   Foreground CI watcher (normally started for you)`,
 	"outer": `  outer start [--commit=<sha>] [--branch=<b>] [--push] [--revert] [--async]
-  outer status | outer list | outer wait [--timeout=<d>]`,
+  outer status [<job-id>] | outer list | outer wait [<job-id>] [--timeout=<d>] [--verbose]   (default: the job for HEAD)`,
 	"version": `  version list | check                Versions and range compatibility of every internal edge
   version edges                       Every in-repo dependency: mode (source = live code, pinned = release) and range
   version suggest [pkg] [--base=<ref>] Required bump from the exported-API diff (removed/changed = major)

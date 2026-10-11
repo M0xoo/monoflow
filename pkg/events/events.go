@@ -94,10 +94,21 @@ func (em *EventManager) Emit(evt *Event) error {
 	if err := writeAtomic(path, data); err != nil {
 		return err
 	}
-	if (evt.Type == EventCIPassed || evt.Type == EventCIFailed) && evt.Branch != "" && evt.CommitSHA != "" {
+	if supersedable(evt.Type) && evt.Branch != "" && evt.CommitSHA != "" {
 		em.supersedeOlderCI(evt)
 	}
 	return nil
+}
+
+// supersedable results describe one commit of a branch; a newer commit's result replaces them.
+func supersedable(t EventType) bool {
+	return t == EventCIPassed || t == EventCIFailed || t == EventCISkipped || t == EventOuterPassed || t == EventOuterRegression
+}
+
+// sameFamily: remote CI results supersede remote CI results, outer-loop results outer-loop ones.
+func sameFamily(a, b EventType) bool {
+	outer := func(t EventType) bool { return t == EventOuterPassed || t == EventOuterRegression }
+	return supersedable(a) && supersedable(b) && outer(a) == outer(b)
 }
 
 // supersedeOlderCI marks unread CI results for older commits of the same branch as read,
@@ -118,7 +129,7 @@ func (em *EventManager) supersedeOlderCI(newer *Event) {
 		}
 		var old Event
 		if json.Unmarshal(data, &old) != nil || old.Read || old.Branch != newer.Branch ||
-			(old.Type != EventCIPassed && old.Type != EventCIFailed) || old.CommitSHA == newer.CommitSHA {
+			!sameFamily(old.Type, newer.Type) || old.CommitSHA == newer.CommitSHA {
 			continue
 		}
 		anc := exec.Command("git", "merge-base", "--is-ancestor", old.CommitSHA, newer.CommitSHA)
@@ -133,6 +144,18 @@ func (em *EventManager) supersedeOlderCI(newer *Event) {
 		old.Payload["superseded_by"] = newer.ID
 		if out, err := json.MarshalIndent(old, "", "  "); err == nil {
 			_ = os.WriteFile(path, out, 0644)
+		}
+	}
+}
+
+// AckSkipped marks unread CI_SKIPPED results for sha as read: a new watch (e.g. the PR was just
+// opened) means a real result is coming, and the stale "skipped" must not answer for it.
+func (em *EventManager) AckSkipped(sha string) {
+	list, _ := em.List(true)
+	for _, e := range list {
+		if e.Type == EventCISkipped && e.CommitSHA != "" && sha != "" &&
+			(strings.HasPrefix(e.CommitSHA, sha) || strings.HasPrefix(sha, e.CommitSHA)) {
+			_ = em.Ack(e.ID)
 		}
 	}
 }

@@ -2,71 +2,48 @@ package initialize
 
 const AgentRuleTemplate = `# MonoFlow Monorepo Protocol (for coding agents)
 
-This repo is governed by MonoFlow. Use it for every build, check, commit, push and PR: it is
-faster than raw tools (cached, affected-only), returns compact JSON, and its gates guarantee
-remote CI stays green. Run it as ` + "`" + `.agents/bin/monoflow` + "`" + ` (also ` + "`" + `./bin/monoflow` + "`" + ` in worktrees);
-` + "`" + `<cmd> --help` + "`" + ` shows flags and never executes anything.
+Use MonoFlow (` + "`" + `.agents/bin/monoflow` + "`" + `, ` + "`" + `./bin/monoflow` + "`" + ` in worktrees) for builds, checks, commits, pushes
+and PRs: cached, affected-only, compact JSON, and its gates keep remote CI green. ` + "`" + `<cmd> --help` + "`" + ` never executes.
 
 ## Workflow
-1. ` + "`" + `monoflow worktree create <agent-id> --packages=<pkg,...>` + "`" + ` then ` + "`" + `cd .agents/worktrees/<agent-id>` + "`" + `.
-   You get branch ` + "`" + `agent/<agent-id>` + "`" + ` off main with your packages and their dependencies.
-   Never edit in the repo root; other agents share it.
-2. ` + "`" + `monoflow graph query <pkg|path>` + "`" + ` / ` + "`" + `monoflow graph impact <file>` + "`" + ` — who depends on what (no grepping).
-3. Edit. ` + "`" + `monoflow checkpoint save "<idea>"` + "`" + ` before risky attempts, ` + "`" + `monoflow checkpoint revert` + "`" + ` to undo.
-4. ` + "`" + `monoflow verify --affected` + "`" + ` — typecheck + lint + tests of changed packages and their dependents.
-   Fix the reported ` + "`" + `file:line message` + "`" + ` until it passes. (` + "`" + `--test` + "`" + `/` + "`" + `--lint` + "`" + `/` + "`" + `--typecheck` + "`" + ` narrow it.)
-5. ` + "`" + `monoflow commit -m "<msg>"` + "`" + ` — blocked if tests were weakened or secrets added.
-6. ` + "`" + `monoflow sync` + "`" + ` — rebase your branch onto the latest main (reports conflicts, never leaves a half rebase).
-7. ` + "`" + `monoflow pr create --title="..." --body="..."` + "`" + ` — re-verifies (DoD gate), pushes and opens the PR.
-   It is refused while verification fails; ` + "`" + `--draft` + "`" + ` is allowed. Read ` + "`" + `remote_pr` + "`" + ` in the output:
-   if it says ` + "`" + `not_created` + "`" + `, follow its ` + "`" + `agent_directive` + "`" + ` (e.g. open it with your GitHub integration).
-8. Do not poll CI. ` + "`" + `monoflow commit` + "`" + ` starts the **outer loop** (local CI on that exact commit); ` + "`" + `push` + "`" + ` and
-   ` + "`" + `pr create` + "`" + ` only push once it is green. Events (outer loop, remote CI, releases) are **delivered to
-   you** by MonoFlow's harness hooks: they appear in your context after tool calls, and when you end your
-   turn the hook waits for in-flight results and resumes you if something needs action. Without those hooks:
-   run ` + "`" + `monoflow events wait <sha>` + "`" + ` as a background task, or ` + "`" + `monoflow events unread` + "`" + ` when resumed.
-   When CI is red, start with ` + "`" + `monoflow ci health` + "`" + ` (failure history, breaking
-   commit range, flakiness) instead of reading CI APIs. On CI_FAILED: reproduce with ` + "`" + `monoflow verify --affected` + "`" + `, fix, commit, ` + "`" + `monoflow push` + "`" + `.
-9. ` + "`" + `monoflow worktree list` + "`" + ` shows every agent's branch, PR and CI state. ` + "`" + `monoflow worktree finish <agent-id>` + "`" + ` when merged.
+1. ` + "`" + `monoflow worktree create <agent-id> --packages=<pkg,...>` + "`" + `, then ` + "`" + `cd .agents/worktrees/<agent-id>` + "`" + `
+   (branch ` + "`" + `agent/<agent-id>` + "`" + ` off main; never edit the shared repo root).
+2. ` + "`" + `monoflow graph query <pkg|path>` + "`" + ` / ` + "`" + `graph impact <file>` + "`" + `: dependents and dependencies, instead of grepping for them.
+3. Edit. ` + "`" + `monoflow checkpoint save "<idea>"` + "`" + ` before risky attempts, ` + "`" + `checkpoint revert` + "`" + ` to undo.
+4. ` + "`" + `monoflow verify --affected` + "`" + ` (instead of go test, npm test, tsc, pytest, cargo test): typecheck + lint +
+   tests of changed packages and their dependents. Fix the reported ` + "`" + `file:line` + "`" + ` errors until it passes.
+5. ` + "`" + `monoflow commit -m "<msg>"` + "`" + ` (not git commit). It starts the outer loop: local CI on that exact commit.
+6. ` + "`" + `monoflow pr create --title="..." --body="..."` + "`" + ` (not gh pr create) right after: it waits for the outer
+   loop, pushes and opens the PR. If ` + "`" + `remote_pr` + "`" + ` says ` + "`" + `not_created` + "`" + `, follow its ` + "`" + `agent_directive` + "`" + `.
+   Also: ` + "`" + `monoflow sync` + "`" + ` (not git pull/rebase), ` + "`" + `monoflow push` + "`" + ` (not git push; main is protected).
+7. Do not poll CI. Results are delivered to you by hooks after tool calls and when you end your turn.
+   Without hooks: ` + "`" + `monoflow events wait <sha>` + "`" + ` in the background, or ` + "`" + `monoflow events unread` + "`" + ` once.
+   On CI_FAILED: ` + "`" + `monoflow ci health` + "`" + `, reproduce with ` + "`" + `verify --affected` + "`" + `, fix, commit, push.
+8. ` + "`" + `monoflow worktree list` + "`" + ` (all agents' branch/PR/CI); ` + "`" + `monoflow worktree finish <agent-id>` + "`" + ` once merged.
 
 ## When you need more
 | situation | command |
 |---|---|
-| red remote CI, flaky or recurring failures | ` + "`" + `monoflow ci health [--check=<name> --logs]` + "`" + ` |
-| outer-loop status / wait for it | ` + "`" + `monoflow outer list | status <id> | wait <id>` + "`" + ` |
-| a test is flaky (not your change) | ` + "`" + `monoflow quarantine add <test-id>` + "`" + ` |
-| self-review before a PR (risk, undisclosed critical files) | ` + "`" + `monoflow review risk | review audit` + "`" + ` |
-| several PRs touching the same packages | ` + "`" + `monoflow queue spec | queue verify (speculative merge queue)` + "`" + ` |
-| combine another agent's work into yours | ` + "`" + `monoflow worktree sync --to=<you> --from=<other> (AST merge)` + "`" + ` |
-| need more / fewer packages in your worktree | ` + "`" + `monoflow subset add|remove <pkg> / worktree focus` + "`" + ` |
-| build a deliverable artifact of a package | ` + "`" + `monoflow deliver --target=<pkg>` + "`" + ` |
-| test a PR or check it out locally | ` + "`" + `monoflow pr test <id> | pr local <id> --worktree | pr status <id>` + "`" + ` |
-| split a large change for review | ` + "`" + `monoflow task slice; prove the task: task prove` + "`" + ` |
-| scan for secrets / weakened tests | ` + "`" + `monoflow guard check` + "`" + ` |
-| cache size and hit ratio | ` + "`" + `monoflow cache status` + "`" + ` |
-
-## Instead of → use
-| raw | MonoFlow |
-|-----|----------|
-| ` + "`" + `go test/build/vet` + "`" + `, ` + "`" + `npm test` + "`" + `, ` + "`" + `tsc` + "`" + `, ` + "`" + `pytest` + "`" + `, ` + "`" + `cargo test` + "`" + ` | ` + "`" + `monoflow verify --affected` + "`" + ` (raw is allowed when you really need it: re-run it) |
-| ` + "`" + `git commit` + "`" + ` | ` + "`" + `monoflow commit -m` + "`" + ` |
-| ` + "`" + `git push` + "`" + ` | ` + "`" + `monoflow push` + "`" + ` (verifies first; ` + "`" + `main` + "`" + ` is protected) |
-| ` + "`" + `git pull` + "`" + ` / ` + "`" + `git rebase main` + "`" + ` | ` + "`" + `monoflow sync` + "`" + ` |
-| ` + "`" + `git checkout/switch` + "`" + ` | ` + "`" + `monoflow worktree create` + "`" + ` |
-| ` + "`" + `gh pr create` + "`" + ` | ` + "`" + `monoflow pr create` + "`" + ` |
-| polling ` + "`" + `gh run watch` + "`" + ` / ` + "`" + `gh pr checks` + "`" + ` | ` + "`" + `monoflow events unread` + "`" + ` once, then stop |
+| red/flaky CI history | ` + "`" + `monoflow ci health [--check=<name> --logs]` + "`" + ` |
+| outer-loop state | ` + "`" + `monoflow outer list | status | wait` + "`" + ` |
+| flaky test (not yours) | ` + "`" + `monoflow quarantine add <test-id>` + "`" + ` |
+| self-review before a PR | ` + "`" + `monoflow review risk | review audit` + "`" + ` |
+| several PRs on the same packages | ` + "`" + `monoflow queue spec | queue verify` + "`" + ` |
+| merge another agent's work | ` + "`" + `monoflow worktree sync --to=<you> --from=<other>` + "`" + ` |
+| more/fewer packages in the worktree | ` + "`" + `monoflow subset add|remove <pkg>` + "`" + ` / ` + "`" + `worktree focus` + "`" + ` |
+| build a deliverable | ` + "`" + `monoflow deliver --target=<pkg>` + "`" + ` |
+| PR test / checkout / status | ` + "`" + `monoflow pr test <id> | pr local <id> --worktree | pr status <id>` + "`" + ` |
+| split or prove a task | ` + "`" + `monoflow task slice | task prove` + "`" + ` |
+| secrets / weakened tests | ` + "`" + `monoflow guard check` + "`" + ` |
+| cache stats | ` + "`" + `monoflow cache status` + "`" + ` |
 
 ## Versions between packages
-Each in-repo dependency is ` + "`" + `source` + "`" + ` (builds against the live code) or ` + "`" + `pinned` + "`" + ` (builds against an
-internal release, isolated from later changes): ` + "`" + `monoflow version edges` + "`" + `.
-* Changing a package only re-verifies its ` + "`" + `source` + "`" + ` consumers. If ` + "`" + `verify --affected` + "`" + ` fails in one of them,
-  migrate it in the same change, or add the new API next to the old one (deprecate, migrate later).
-* ` + "`" + `monoflow version suggest <pkg>` + "`" + ` gives the bump your change requires (removed/changed export = major).
-* Pinned consumers are notified of releases (DEPENDENCY_RELEASED). ` + "`" + `monoflow version upgrades` + "`" + ` lists them;
-  ` + "`" + `monoflow version upgrade <consumer> <dep>` + "`" + ` moves the pin and runs the consumer's checks.
-* ` + "`" + `monoflow version pin|unpin <consumer> <dep>` + "`" + ` decouples a consumer from / recouples it to the live code.
+Edges are ` + "`" + `source` + "`" + ` (live code) or ` + "`" + `pinned` + "`" + ` (an internal release): ` + "`" + `monoflow version edges` + "`" + `. A change
+re-verifies only ` + "`" + `source` + "`" + ` consumers; if one fails, migrate it in the same change or add the new API next
+to the old. ` + "`" + `version suggest <pkg>` + "`" + ` gives the required bump. Pinned consumers get DEPENDENCY_RELEASED:
+` + "`" + `version upgrades` + "`" + `, ` + "`" + `version upgrade <consumer> <dep>` + "`" + `, ` + "`" + `version pin|unpin <consumer> <dep>` + "`" + `.
 
-Task boundaries: ` + "`" + `.agents/task.json` + "`" + ` (` + "`" + `read_only_paths` + "`" + ` must not be edited); check with ` + "`" + `monoflow task check` + "`" + `.
+Task boundaries: ` + "`" + `.agents/task.json` + "`" + ` (` + "`" + `read_only_paths` + "`" + `); check with ` + "`" + `monoflow task check` + "`" + `.
 `
 
 const AgentSkillTemplate = `---

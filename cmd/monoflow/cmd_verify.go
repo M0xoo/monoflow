@@ -22,6 +22,7 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 	targetPkg := ""
 	verifyAll := false
 	verifyBase := ""
+	verboseOut := false
 
 	// Check flags
 	for _, arg := range os.Args[2:] {
@@ -48,6 +49,8 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 		} else if strings.HasPrefix(arg, "--base=") {
 			verifyBase = strings.TrimPrefix(arg, "--base=")
 			opts.BaseRef = verifyBase
+		} else if arg == "--verbose" {
+			verboseOut = true
 		} else if arg == "--strict" {
 			opts.Strict = true
 		}
@@ -152,7 +155,11 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 		}
 	}
 
-	data, _ := json.MarshalIndent(res, "", "  ")
+	var out any = res
+	if !verboseOut {
+		out = compactSuite(res, rootDir, g)
+	}
+	data, _ := json.MarshalIndent(out, "", "  ")
 	fmt.Println(string(data))
 
 	cb := guard.NewCircuitBreaker(rootDir, 5)
@@ -200,6 +207,36 @@ func handleProofVerification(rootDir, taskID string) {
 }
 
 func getGitChangedFiles(rootDir string) []string {
+	files := uncommittedFiles(rootDir)
+
+	// If working tree is clean, fallback to diff against base branch or HEAD~1 to capture committed branch edits
+	if len(files) == 0 {
+		cmdDiff := exec.Command("git", "diff", "--name-only", "origin/main...HEAD")
+		cmdDiff.Dir = rootDir
+		if diffOut, err := cmdDiff.CombinedOutput(); err == nil && len(strings.TrimSpace(string(diffOut))) > 0 {
+			for _, f := range strings.Split(strings.TrimSpace(string(diffOut)), "\n") {
+				if trimmed := strings.TrimSpace(f); trimmed != "" {
+					files = append(files, trimmed)
+				}
+			}
+		} else {
+			cmdDiffHead := exec.Command("git", "diff", "--name-only", "HEAD~1...HEAD")
+			cmdDiffHead.Dir = rootDir
+			if headOut, err := cmdDiffHead.CombinedOutput(); err == nil && len(strings.TrimSpace(string(headOut))) > 0 {
+				for _, f := range strings.Split(strings.TrimSpace(string(headOut)), "\n") {
+					if trimmed := strings.TrimSpace(f); trimmed != "" {
+						files = append(files, trimmed)
+					}
+				}
+			}
+		}
+	}
+
+	return files
+}
+
+// uncommittedFiles lists working-tree changes only (no fallback to the branch's commits).
+func uncommittedFiles(rootDir string) []string {
 	cmd := exec.Command("git", "status", "--porcelain")
 	cmd.Dir = rootDir
 	out, err := cmd.CombinedOutput()
@@ -229,30 +266,6 @@ func getGitChangedFiles(rootDir string) []string {
 		}
 		files = kept
 	}
-
-	// If working tree is clean, fallback to diff against base branch or HEAD~1 to capture committed branch edits
-	if len(files) == 0 {
-		cmdDiff := exec.Command("git", "diff", "--name-only", "origin/main...HEAD")
-		cmdDiff.Dir = rootDir
-		if diffOut, err := cmdDiff.CombinedOutput(); err == nil && len(strings.TrimSpace(string(diffOut))) > 0 {
-			for _, f := range strings.Split(strings.TrimSpace(string(diffOut)), "\n") {
-				if trimmed := strings.TrimSpace(f); trimmed != "" {
-					files = append(files, trimmed)
-				}
-			}
-		} else {
-			cmdDiffHead := exec.Command("git", "diff", "--name-only", "HEAD~1...HEAD")
-			cmdDiffHead.Dir = rootDir
-			if headOut, err := cmdDiffHead.CombinedOutput(); err == nil && len(strings.TrimSpace(string(headOut))) > 0 {
-				for _, f := range strings.Split(strings.TrimSpace(string(headOut)), "\n") {
-					if trimmed := strings.TrimSpace(f); trimmed != "" {
-						files = append(files, trimmed)
-					}
-				}
-			}
-		}
-	}
-
 	return files
 }
 
@@ -323,4 +336,52 @@ func changedFilesSince(rootDir, base string) []string {
 		add(out)
 	}
 	return files
+}
+
+// compactSuite is verify's default output: counts, each distinct error once (repo-relative,
+// with the targets it breaks), and which targets failed. Cache keys, command lines and passed
+// targets are --verbose only. On an opentelemetry-go rename that broke 22 modules this is
+// ~4 KB instead of 25 KB of the same compiler error repeated per module.
+func compactSuite(res verify.SuiteResult, rootDir string, g *graph.DependencyGraph) map[string]any {
+	pathOf := map[string]string{}
+	for _, p := range g.GetAllPackages() {
+		pathOf[p.Name] = p.Path
+	}
+	verify.DedupeErrors(&res, rootDir, pathOf, 30)
+	out := map[string]any{
+		"status":         res.Status,
+		"duration_ms":    res.DurationMs,
+		"total_targets":  res.TotalTargets,
+		"passed_targets": res.PassedTargets,
+		"failed_targets": res.FailedTargets,
+		"cached_targets": res.CachedTargets,
+	}
+	if len(res.AffectedPackages) <= 10 {
+		out["affected_packages"] = res.AffectedPackages
+	}
+	failed := map[string]int{}
+	var notes []verify.TargetResult
+	for _, r := range res.Results {
+		if r.Status == "failed" {
+			failed[r.Target] = r.ErrorCount
+		} else if len(r.Preexisting) > 0 || len(r.Quarantined) > 0 {
+			notes = append(notes, verify.TargetResult{Target: r.Target, Status: r.Status, Preexisting: r.Preexisting, Quarantined: r.Quarantined})
+		}
+	}
+	if len(failed) > 0 {
+		out["failed"] = failed // target -> error count
+	}
+	if len(notes) > 0 {
+		out["notes"] = notes
+	}
+	if len(res.Errors) > 0 {
+		out["errors"] = res.Errors
+	}
+	if res.ErrorsOmitted > 0 {
+		out["errors_omitted"] = res.ErrorsOmitted
+	}
+	if res.Hint != "" {
+		out["hint"] = res.Hint
+	}
+	return out
 }

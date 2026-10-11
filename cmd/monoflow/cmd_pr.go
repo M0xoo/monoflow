@@ -15,7 +15,7 @@ import (
 func handlePR(rootDir string) {
 	if len(os.Args) < 3 {
 		fmt.Println(`MonoFlow Pull Request Commands:
-  monoflow pr create [--title="..."] [--body="..."] [--base=main] [--draft] [--stack] [--no-push]
+  monoflow pr create [--title="..."] [--body="..." | --body-file=<path>] [--base=main] [--draft] [--stack] [--no-push] [--verbose]
   monoflow pr list [--state=open|closed|merged|all] [--limit=N]
   monoflow pr view <id>
   monoflow pr status [id] [--json]
@@ -35,11 +35,19 @@ func handlePR(rootDir string) {
 			BaseBranch: "main",
 			AutoPush:   true,
 		}
+		verbose := false
 		for _, arg := range os.Args[3:] {
 			if strings.HasPrefix(arg, "--title=") {
 				opts.Title = strings.TrimPrefix(arg, "--title=")
 			} else if strings.HasPrefix(arg, "--body=") {
 				opts.Body = strings.TrimPrefix(arg, "--body=")
+			} else if strings.HasPrefix(arg, "--body-file=") {
+				b, err := os.ReadFile(strings.TrimPrefix(arg, "--body-file="))
+				if err != nil {
+					fmt.Printf("{\"error\": %q}\n", "cannot read --body-file: "+err.Error())
+					os.Exit(2)
+				}
+				opts.Body = string(b)
 			} else if strings.HasPrefix(arg, "--base=") {
 				opts.BaseBranch = strings.TrimPrefix(arg, "--base=")
 			} else if strings.HasPrefix(arg, "--head=") {
@@ -52,6 +60,12 @@ func handlePR(rootDir string) {
 				opts.Stack = true
 			} else if arg == "--no-push" {
 				opts.AutoPush = false
+			} else if arg == "--verbose" {
+				verbose = true
+			} else if strings.HasPrefix(arg, "-") {
+				// A silently ignored flag (e.g. --body-file before it existed) loses the agent's input.
+				fmt.Printf("{\"error\": %q}\n", "unknown flag for pr create: "+arg+" (see 'monoflow pr create --help')")
+				os.Exit(2)
 			}
 		}
 
@@ -72,7 +86,11 @@ func handlePR(rootDir string) {
 			fmt.Printf(`{"status": "error", "error": %q}`+"\n", err.Error())
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(res, "", "  ")
+		var out any = res
+		if !verbose {
+			out = compactPR(res)
+		}
+		data, _ := json.MarshalIndent(out, "", "  ")
 		fmt.Println(string(data))
 
 	case "list":
@@ -132,11 +150,17 @@ func handlePR(rootDir string) {
 			os.Exit(1)
 		}
 
-		if asJSON {
+		switch {
+		case asJSON:
 			data, _ := json.MarshalIndent(res, "", "  ")
 			fmt.Println(string(data))
-		} else {
+		case hasFlag("--verbose") || stdoutIsTerminal():
 			fmt.Println(res.FormatView())
+		default:
+			// Agents read this through a pipe: the 12 KB dossier view cost them context for a
+			// handful of facts. --verbose (or a terminal) shows the full view.
+			data, _ := json.MarshalIndent(compactPRStatus(res), "", "  ")
+			fmt.Println(string(data))
 		}
 
 	case "review":
@@ -256,4 +280,84 @@ func handlePR(rootDir string) {
 		data, _ := json.MarshalIndent(res, "", "  ")
 		fmt.Println(string(data))
 	}
+}
+
+// compactPR is what an agent needs after 'pr create': where the PR is, whether it was proven
+// and pushed, and how to wait for CI. The full dossier (~6 KB) is in the PR body and behind
+// --verbose; printing it cost every agent context for nothing.
+func compactPR(res *pr.PRMetadata) map[string]any {
+	out := map[string]any{
+		"id":                res.ID,
+		"state":             res.State,
+		"head_sha":          res.HeadSHA,
+		"affected_packages": res.AffectedPackages,
+		"pushed":            res.Pushed,
+	}
+	if res.GitHubURL != "" {
+		out["url"] = res.GitHubURL
+	}
+	if res.Proof != nil {
+		out["proof"] = res.Proof.Status
+		var failed []string
+		for _, c := range res.Proof.DoDChecks {
+			if c.Status != "PASSED" {
+				failed = append(failed, c.ID+": "+c.Evidence)
+			}
+		}
+		if len(failed) > 0 {
+			out["checks_not_passed"] = failed
+		}
+	}
+	if res.Risk != nil {
+		out["risk"] = res.Risk.Tier
+	}
+	if res.CIWaitCommand != "" {
+		out["ci_wait_command"] = res.CIWaitCommand
+	}
+	if res.RemotePR != nil {
+		out["remote_pr"] = res.RemotePR
+	}
+	return out
+}
+
+func compactPRStatus(res *pr.PRStatusResult) map[string]any {
+	out := map[string]any{
+		"pr_id":           res.PRID,
+		"state":           res.RemoteState,
+		"proof":           res.ProofStatus,
+		"dod":             fmt.Sprintf("%d/%d passed", res.DoDPassedChecks, res.DoDTotalChecks),
+		"unified_verdict": res.UnifiedVerdict,
+	}
+	if res.GitHubURL != "" {
+		out["url"] = res.GitHubURL
+	}
+	if res.RemoteCIStatus != "" {
+		out["remote_ci"] = res.RemoteCIStatus
+	}
+	if res.ReviewDecision != "" || res.RemoteReviewDecision != "" {
+		out["review"] = strings.TrimSpace(res.ReviewDecision + " " + res.RemoteReviewDecision)
+	}
+	if res.Mergeable != "" {
+		out["mergeable"] = res.Mergeable
+	}
+	if res.SyncState != "" && res.SyncState != "IN_SYNC" {
+		out["sync"] = res.SyncState
+	}
+	if res.ProofReceipt != nil {
+		var failed []string
+		for _, c := range res.ProofReceipt.DoDChecks {
+			if c.Status != "PASSED" {
+				failed = append(failed, c.ID+": "+c.Evidence)
+			}
+		}
+		if len(failed) > 0 {
+			out["checks_not_passed"] = failed
+		}
+	}
+	return out
+}
+
+func stdoutIsTerminal() bool {
+	fi, err := os.Stdout.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
 }
