@@ -72,3 +72,37 @@ func TestKeyIgnoresGitIgnoredFiles(t *testing.T) {
 		t.Fatal("a new untracked source file must change the key")
 	}
 }
+
+// A loose gitignored file a test may read (live check: a test fixture listed in .gitignore) must
+// change the key, or the outer loop's clean checkout reuses a green result that depended on it.
+// OS junk and ignored directories (build outputs) must not.
+func TestKeyCoversIgnoredLooseFiles(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, s string) {
+		p := filepath.Join(root, rel)
+		_ = os.MkdirAll(filepath.Dir(p), 0755)
+		_ = os.WriteFile(p, []byte(s), 0644)
+	}
+	write("go.mod", "module x\n")
+	write("a.go", "package x\n")
+	write(".gitignore", "/bin/\nlocal.txt\n.DS_Store\n")
+	if out, err := exec.Command("git", "-C", root, "init", "-q").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v %s", err, out)
+	}
+	m := NewManager(root, Config{Enabled: true, Dir: t.TempDir()})
+	pkg := &graph.PackageNode{Name: "x", Path: ".", Language: "go"}
+	key := func() string {
+		k, _ := m.ComputePackageKey(pkg, nil, "go test ./...", "test")
+		return k
+	}
+	clean := key()
+	write(".DS_Store", "junk")
+	write("bin/tool", "binary")
+	if key() != clean {
+		t.Fatal("OS junk or an ignored build directory changed the key")
+	}
+	write("local.txt", "hi")
+	if key() == clean {
+		t.Fatal("an ignored loose file must change the key")
+	}
+}

@@ -261,6 +261,13 @@ func (m *Manager) ComputePackageKey(pkg *graph.PackageNode, upstreamKeys map[str
 				}
 			}
 		}
+		// 4. Local-only (gitignored) files a test could read. A clean checkout of the commit
+		// (outer loop, CI) lacks them, so it must not reuse a result that may depend on them.
+		for _, relPath := range gitIgnoredLooseFiles(absPkgPath) {
+			if fileHash, err := hashFile(filepath.Join(absPkgPath, relPath)); err == nil {
+				fmt.Fprintf(hasher, "ignored:%s=%s\n", relPath, fileHash)
+			}
+		}
 	}
 
 	return hex.EncodeToString(hasher.Sum(nil)), nil
@@ -274,6 +281,43 @@ func collectSourceFiles(dir string) ([]string, error) {
 		return files, nil
 	}
 	return walkSourceFiles(dir)
+}
+
+// gitIgnoredLooseFiles lists gitignored regular files in dir. Ignored directories (node_modules/,
+// bin/, dist/: build outputs and caches), symlinks, OS/editor junk, nested packages and .agents/
+// are left out, so ordinary builds don't change the key.
+func gitIgnoredLooseFiles(dir string) []string {
+	cmd := exec.Command("git", "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory", "--", ".")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+	var files []string
+	for _, rel := range strings.Split(strings.TrimRight(string(out), "\x00"), "\x00") {
+		rel = filepath.ToSlash(rel)
+		if rel == "" || strings.HasSuffix(rel, "/") || strings.HasPrefix(rel, ".agents/") || strings.Contains(rel, "/.agents/") || isJunkFile(rel) {
+			continue
+		}
+		if isPackageRoot(filepath.Join(dir, filepath.Dir(rel))) && filepath.Dir(rel) != "." {
+			continue // belongs to a nested package
+		}
+		if fi, err := os.Lstat(filepath.Join(dir, rel)); err != nil || !fi.Mode().IsRegular() {
+			continue
+		}
+		files = append(files, rel)
+	}
+	sort.Strings(files)
+	return files
+}
+
+func isJunkFile(rel string) bool {
+	base := filepath.Base(rel)
+	switch base {
+	case ".DS_Store", "Thumbs.db", "desktop.ini":
+		return true
+	}
+	return strings.HasSuffix(base, "~") || strings.HasSuffix(base, ".swp") || strings.HasSuffix(base, ".swo")
 }
 
 func gitSourceFiles(dir string) ([]string, bool) {

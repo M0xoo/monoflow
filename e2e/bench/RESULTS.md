@@ -110,3 +110,9 @@ blocked until then. A green outer loop wakes nothing (no action needed), as inte
 Found: the test failure was reported as `.:1:` (unparsed), so the agent spent 6 calls reading raw
 logs. Go test assertions (`--- FAIL: TestX` / `x_test.go:11: msg`) are now parsed into
 `file:line` diagnostics with the test name.
+
+Also found: with the cache on, the outer loop first passed in ~100 ms, reusing the inner-loop result,
+because gitignored files were not in the cache key. Loose gitignored files in a package (not ignored
+directories, symlinks or OS junk) are now part of the key, so a clean checkout re-runs instead of
+inheriting a result that may depend on a local-only file. Re-run with the cache on: outer loop
+regressed as it should.
