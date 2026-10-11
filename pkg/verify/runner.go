@@ -573,9 +573,18 @@ func (r *Runner) VerifyPackages(g *graph.DependencyGraph, names []string, opt Ve
 	// Re-running only the failed test files is seconds, so every new test failure gets it once.
 	for i := range results {
 		pkg, ok := g.GetPackage(results[i].Target)
-		if ok && results[i].Status == "failed" && !results[i].Flaky && r.retryFailedTestFiles(&results[i], pkg.Path) {
-			results[i].Status, results[i].Flaky = "passed", true
-			results[i].Errors, results[i].ErrorCount = []DiagnosticError{}, 0
+		if !ok || results[i].Status != "failed" || results[i].Flaky {
+			continue
+		}
+		// Judged per failure: a pre-existing failure in the same files (trpc: a memory test that
+		// fails on main) must not make a flaky one look persistent and block the push.
+		if remaining, ran := r.retryFailedTestFiles(&results[i], pkg.Path); ran {
+			if len(remaining) == 0 {
+				results[i].Status, results[i].Flaky = "passed", true
+				results[i].Errors, results[i].ErrorCount = []DiagnosticError{}, 0
+			} else {
+				results[i].Errors = remaining
+			}
 		}
 	}
 
@@ -786,16 +795,43 @@ func (r *Runner) failedTestFilesCmd(res *TargetResult, pkgPath string) (string, 
 	return repoRootPrefix + m[1] + " " + m[2] + " " + strings.Join(files, " "), true
 }
 
-// retryFailedTestFiles re-runs, once and alone, the failed test files of a vitest/jest check,
-// and reports whether they pass.
-func (r *Runner) retryFailedTestFiles(res *TargetResult, pkgPath string) bool {
+// retryFailedTestFiles re-runs, once and alone, the failed test files of a vitest/jest check
+// and returns the failures that happen again (a failure whose test passes this time is
+// flaky and dropped; one the re-run cannot account for is kept). ran=false: not re-runnable.
+func (r *Runner) retryFailedTestFiles(res *TargetResult, pkgPath string) (remaining []DiagnosticError, ran bool) {
 	c, ok := r.failedTestFilesCmd(res, pkgPath)
 	if !ok {
-		return false
+		return nil, false
 	}
 	cmd := exec.Command("sh", "-c", c)
 	cmd.Dir = r.RootDir
-	return cmd.Run() == nil
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		return nil, true
+	}
+	again := map[string]bool{}
+	for _, e := range ParseDiagnostics(StripANSI(string(out))) {
+		if name := testName(e.Message); name != "" {
+			again[name] = true
+		}
+	}
+	for _, e := range res.Errors {
+		if name := testName(e.Message); name == "" || again[name] {
+			remaining = append(remaining, e)
+		}
+	}
+	return remaining, true
+}
+
+// testName is the "[suite > test]" prefix the parsers put on a test failure ("" if none).
+func testName(msg string) string {
+	if !strings.HasPrefix(msg, "[") {
+		return ""
+	}
+	if i := strings.Index(msg, "]"); i > 0 {
+		return msg[1:i]
+	}
+	return ""
 }
 
 // timingFlake matches failures that load can cause (a deterministic assertion or snapshot

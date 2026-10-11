@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/antigravity/monoflow/pkg/graph"
@@ -331,6 +332,34 @@ func TestVerifyAffectedRunsDependentsOnTestOnlyFailures(t *testing.T) {
 	res := NewRunner(root).VerifyAffected(g, []string{"core/x.go"}, VerifyOptions{Strict: true})
 	if res.Status != "failed" || len(res.Pending) != 0 || res.TotalTargets != 2 || res.FailedTargets != 2 {
 		t.Fatalf("want core and app both run and reported failing, nothing pending: %+v", res)
+	}
+}
+
+// The re-run judges each failure: one that passes this time is dropped as flaky even when
+// another failure in the same files persists (trpc: a ping timing test next to a memory test
+// that fails on main blocked a correct push).
+func TestRetryDropsFlakyFailureNextToPersistentOne(t *testing.T) {
+	root := t.TempDir()
+	_ = exec.Command("git", "-C", root, "init", "-q").Run()
+	for _, f := range []string{"ws/src/link.test.ts", "ws/src/memory.test.ts"} {
+		_ = os.MkdirAll(filepath.Dir(filepath.Join(root, f)), 0755)
+		_ = os.WriteFile(filepath.Join(root, f), []byte("test"), 0644)
+	}
+	fake := `printf ' FAIL  |ws| src/memory.test.ts > memory > frees data\nAssertionError: leaked\n ❯ src/memory.test.ts:58:3\n'
+if [ ! -f "$(git rev-parse --show-toplevel)/.seen" ]; then
+  touch "$(git rev-parse --show-toplevel)/.seen"
+  printf ' FAIL  |ws| src/link.test.ts > timeouts > ping\nAssertionError: expected "vi.fn()" to be called 1 times, but got 2 times\n ❯ src/link.test.ts:965:7\n'
+fi
+exit 1
+`
+	_ = os.WriteFile(filepath.Join(root, "vitest"), []byte(fake), 0755)
+	g := graph.New(root)
+	g.AddPackage(&graph.PackageNode{Name: "ws", Path: "ws", Language: graph.LangTypeScript,
+		TestCmd: `cd "$(git rev-parse --show-toplevel)" && sh vitest run --passWithNoTests ws`})
+	res := NewRunner(root).VerifyPackages(g, []string{"ws"}, VerifyOptions{Strict: true})
+	r := res.Results[0]
+	if r.Status != "failed" || len(r.Errors) != 1 || !strings.Contains(r.Errors[0].Message, "memory > frees data") {
+		t.Fatalf("only the persistent failure should remain: %+v", r.Errors)
 	}
 }
 
