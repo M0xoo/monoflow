@@ -5,7 +5,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"time"
+
+	"github.com/antigravity/monoflow/pkg/events"
 )
 
 // The agent golden path is four calls: start, (edit), verify, ship. Benchmarks showed MonoFlow
@@ -29,6 +33,7 @@ func handleStart(rootDir string) {
 func handleShip(rootDir string) {
 	var msg, title string
 	var prArgs []string
+	wait, deliver := false, false
 	for i := 2; i < len(os.Args); i++ {
 		a := os.Args[i]
 		switch {
@@ -41,6 +46,10 @@ func handleShip(rootDir string) {
 			title = strings.TrimPrefix(a, "--title=")
 		case strings.HasPrefix(a, "--body="), strings.HasPrefix(a, "--body-file="), a == "--verbose":
 			prArgs = append(prArgs, a)
+		case a == "--wait":
+			wait = true
+		case a == "--deliver": // internal: the detached second half of ship
+			deliver = true
 		default:
 			fmt.Printf(`{"error": "unknown flag %q: usage: monoflow ship -m \"<commit message>\" [--title=...] [--body=...]"}`+"\n", a)
 			os.Exit(1)
@@ -50,6 +59,10 @@ func handleShip(rootDir string) {
 	if err != nil {
 		fmt.Printf(`{"error": %q}`+"\n", err.Error())
 		os.Exit(1)
+	}
+	if deliver {
+		shipDeliver(exe, rootDir, title, prArgs)
+		return
 	}
 	out := map[string]any{}
 	if len(uncommittedFiles(rootDir)) > 0 {
@@ -73,6 +86,17 @@ func handleShip(rootDir string) {
 	if title == "" {
 		if b, err := exec.Command("git", "-C", rootDir, "log", "-1", "--format=%s").Output(); err == nil {
 			title = strings.TrimSpace(string(b))
+		}
+	}
+	if !wait {
+		// Push and PR happen once the outer loop (local CI on this commit) is green, in the
+		// background: the agent is free at once, as after a plain git push (ship used to block
+		// ~25 s on otel while local CI ran). Failures arrive as a SHIP_FAILED event.
+		if err := spawnShipDeliver(exe, rootDir, title, prArgs); err == nil {
+			out["status"] = "shipping"
+			out["next"] = "Done: end your turn. Local CI is running on this commit; it pushes and opens the PR when green. A failure is delivered to you (SHIP_FAILED / OUTER_LOOP_REGRESSION)."
+			printJSON(out)
+			return
 		}
 	}
 	res, ok := runSelf(exe, rootDir, append([]string{"pr", "create", "--title=" + title}, prArgs...)...)
@@ -119,4 +143,53 @@ func runSelf(exe, dir string, args ...string) (map[string]any, bool) {
 func printJSON(v any) {
 	data, _ := json.MarshalIndent(v, "", "  ")
 	fmt.Println(string(data))
+}
+
+// spawnShipDeliver starts `monoflow ship --deliver` detached, logging to .agents/ship/.
+func spawnShipDeliver(exe, rootDir, title string, prArgs []string) error {
+	dir := filepath.Join(rootDir, ".agents", "ship")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	log, err := os.OpenFile(filepath.Join(dir, "ship.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return err
+	}
+	defer log.Close()
+	cmd := exec.Command(exe, append([]string{"ship", "--deliver", "--title=" + title}, prArgs...)...)
+	cmd.Dir = rootDir
+	cmd.Stdout, cmd.Stderr = log, log
+	cmd.SysProcAttr = detachedSysProcAttr()
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	return cmd.Process.Release()
+}
+
+// shipDeliver is the background half of ship: pr create (waits for the outer loop, pushes, opens
+// the PR); a failure becomes a SHIP_FAILED event. A marker file tells hooks a ship is in flight.
+func shipDeliver(exe, rootDir, title string, prArgs []string) {
+	marker := filepath.Join(rootDir, ".agents", "ship", fmt.Sprintf("%d.inflight", os.Getpid()))
+	_ = os.WriteFile(marker, nil, 0644)
+	defer os.Remove(marker)
+	res, ok := runSelf(exe, rootDir, append([]string{"pr", "create", "--title=" + title}, prArgs...)...)
+	printJSON(res)
+	if ok {
+		return
+	}
+	sha, _ := exec.Command("git", "-C", rootDir, "rev-parse", "HEAD").Output()
+	reason, _ := res["error"].(string)
+	if reason == "" {
+		reason, _ = res["status"].(string)
+	}
+	_ = events.NewEventManager(rootDir).Emit(&events.Event{
+		ID:             fmt.Sprintf("evt_ship_failed_%d", time.Now().UnixNano()),
+		Type:           events.EventShipFailed,
+		CommitSHA:      strings.TrimSpace(string(sha)),
+		Branch:         currentBranch(rootDir),
+		CreatedAt:      time.Now().UTC(),
+		RequiresAction: true,
+		Summary:        "ship could not push / open the PR: " + reason,
+		SuggestedTask:  "Fix what it reports, 'monoflow verify', then 'monoflow ship -m \"<msg>\"' again (or 'monoflow ship --wait' to see it inline)",
+	})
 }

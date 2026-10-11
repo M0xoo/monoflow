@@ -13,9 +13,10 @@ Run it as ` + "`" + `./bin/monoflow` + "`" + ` (or ` + "`" + `.agents/bin/monofl
    cached) and lists each break as ` + "`" + `errors[]` + "`" + ` with ` + "`" + `file:line` + "`" + ` and the failing test, in any package.
    Fix exactly those and run it again until it passes. Failures main already has do not block.
    Do not also run go test / npm test / tsc / ` + "`" + `verify --all` + "`" + ` or grep for affected tests: ` + "`" + `verify` + "`" + ` covers them.
-4. ` + "`" + `monoflow ship -m "<commit message>"` + "`" + ` (optional ` + "`" + `--title=... --body=...` + "`" + `): commits, runs CI locally on
-   that exact commit, pushes and opens the PR. Then end your turn: CI results are delivered to you
-   (on CI_FAILED: fix, ` + "`" + `verify` + "`" + `, ` + "`" + `ship` + "`" + ` again).
+4. ` + "`" + `monoflow ship -m "<commit message>"` + "`" + ` (optional ` + "`" + `--title=... --body=...` + "`" + `): commits and returns at once;
+   local CI runs on that exact commit and, once green, it pushes and opens the PR by itself. End
+   your turn: results are delivered to you (on SHIP_FAILED / OUTER_LOOP_REGRESSION: fix, ` + "`" + `verify` + "`" + `,
+   ` + "`" + `ship` + "`" + ` again). ` + "`" + `ship --wait` + "`" + ` blocks until pushed instead.
 
 Use raw git/go/npm only for what MonoFlow does not do; never push to main.
 

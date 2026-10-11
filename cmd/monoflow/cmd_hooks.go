@@ -141,8 +141,17 @@ func hookStop(root string) {
 	fmt.Println(string(out))
 }
 
-// inFlight reports outer-loop jobs or CI watches still running for branch.
+// inFlight reports outer-loop jobs, background ships or CI watches still running for branch.
 func inFlight(root, branch string) bool {
+	// A background `monoflow ship` (push + PR once the outer loop is green) can still fail
+	// after the outer loop finished: wait for it too, so its SHIP_FAILED event is delivered.
+	if markers, _ := filepath.Glob(filepath.Join(root, ".agents", "ship", "*.inflight")); len(markers) > 0 {
+		for _, m := range markers {
+			if fi, err := os.Stat(m); err == nil && time.Since(fi.ModTime()) < 30*time.Minute {
+				return true
+			}
+		}
+	}
 	if jobs, err := verify.NewOuterLoopManager(root).ListJobs(); err == nil {
 		for _, j := range jobs {
 			if j.Branch == branch && (j.Status == verify.JobQueued || j.Status == verify.JobRunning) {
