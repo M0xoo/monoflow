@@ -69,68 +69,18 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 	var res verify.SuiteResult
 
 	if targetPkg != "" {
-		pkg, exists := g.GetPackage(targetPkg)
+		pkg, exists := resolvePackageArg(g, rootDir, targetPkg)
 		if !exists {
-			fmt.Printf(`{"status": "failed", "error": "package '%s' not found"}`+"\n", targetPkg)
+			fmt.Printf(`{"status": "failed", "error": "package '%s' not found (use a name from 'monoflow graph list' or a path inside one)"}`+"\n", targetPkg)
 			os.Exit(1)
 		}
-		tRes := runner.VerifyTarget(pkg, opts)
-		durMs := float64(time.Since(start).Microseconds()) / 1000.0
-		passed := 0
-		failed := 0
-		cached := 0
-		if tRes.Status == "passed" {
-			passed = 1
-			if tRes.Cached {
-				cached = 1
-			}
-		} else {
-			failed = 1
-		}
-		res = verify.SuiteResult{
-			Status:           tRes.Status,
-			DurationMs:       durMs,
-			TotalTargets:     1,
-			PassedTargets:    passed,
-			FailedTargets:    failed,
-			CachedTargets:    cached,
-			AffectedPackages: []string{targetPkg},
-			Results:          []verify.TargetResult{tRes},
-		}
+		res = runner.VerifyPackages(g, []string{pkg.Name}, opts)
 	} else if verifyAll {
-		allPkgs := g.GetAllPackages()
-		results := make([]verify.TargetResult, 0, len(allPkgs))
-		allNames := make([]string, 0, len(allPkgs))
-		passed := 0
-		failed := 0
-		cached := 0
-		overallStatus := "passed"
-
-		for _, p := range allPkgs {
-			allNames = append(allNames, p.Name)
-			tRes := runner.VerifyTarget(p, opts)
-			results = append(results, tRes)
-			if tRes.Status == "failed" {
-				failed++
-				overallStatus = "failed"
-			} else {
-				passed++
-				if tRes.Cached {
-					cached++
-				}
-			}
+		var names []string
+		for _, p := range g.GetAllPackages() {
+			names = append(names, p.Name)
 		}
-		durMs := float64(time.Since(start).Microseconds()) / 1000.0
-		res = verify.SuiteResult{
-			Status:           overallStatus,
-			DurationMs:       durMs,
-			TotalTargets:     len(results),
-			PassedTargets:    passed,
-			FailedTargets:    failed,
-			CachedTargets:    cached,
-			AffectedPackages: allNames,
-			Results:          results,
-		}
+		res = runner.VerifyPackages(g, names, opts)
 	} else {
 		changedFiles := getGitChangedFiles(rootDir)
 		if verifyBase != "" {
@@ -157,7 +107,18 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 
 	var out any = res
 	if !verboseOut {
-		out = compactSuite(res, rootDir, g)
+		c := compactSuite(res, rootDir, g)
+		// Say what was covered and what to do next: agents that were not told re-ran
+		// verify --all and raw go test / npm test "to be sure" (benchmark: +6 calls a run).
+		if targetPkg == "" && !verifyAll && res.TotalTargets > 0 {
+			c["scope"] = fmt.Sprintf("%d packages: every changed package and every package depending on them, repo-wide (what CI runs for this change)", res.TotalTargets)
+			if res.Status == "passed" {
+				c["next"] = `nothing else to run: monoflow ship -m "<commit message>"`
+			} else {
+				c["next"] = "fix errors[] (file:line), then monoflow verify again"
+			}
+		}
+		out = c
 	}
 	data, _ := json.MarshalIndent(out, "", "  ")
 	fmt.Println(string(data))
@@ -359,20 +320,35 @@ func compactSuite(res verify.SuiteResult, rootDir string, g *graph.DependencyGra
 	if len(res.AffectedPackages) <= 10 {
 		out["affected_packages"] = res.AffectedPackages
 	}
-	failed := map[string]int{}
-	var notes []verify.TargetResult
+	// Preexisting (main fails the same way) and quarantined failures do not block: counts only.
+	// Listing them in full cost agents 258 KB of context on trpc (610 old type errors in one
+	// example); --verbose has the details.
+	failed, preexisting, quarantined := map[string]int{}, map[string]int{}, map[string]int{}
 	for _, r := range res.Results {
 		if r.Status == "failed" {
 			failed[r.Target] = r.ErrorCount
-		} else if len(r.Preexisting) > 0 || len(r.Quarantined) > 0 {
-			notes = append(notes, verify.TargetResult{Target: r.Target, Status: r.Status, Preexisting: r.Preexisting, Quarantined: r.Quarantined})
+		}
+		if len(r.Preexisting) > 0 {
+			preexisting[r.Target] = len(r.Preexisting)
+		}
+		if len(r.Quarantined) > 0 {
+			quarantined[r.Target] = len(r.Quarantined)
 		}
 	}
 	if len(failed) > 0 {
 		out["failed"] = failed // target -> error count
 	}
-	if len(notes) > 0 {
-		out["notes"] = notes
+	if len(preexisting) > 0 && len(preexisting) <= 10 {
+		out["preexisting"] = preexisting // target -> failures main also has (not blocking)
+	} else if len(preexisting) > 10 {
+		total := 0
+		for _, n := range preexisting {
+			total += n
+		}
+		out["preexisting"] = map[string]int{"targets": len(preexisting), "failures": total} // not blocking; --verbose lists them
+	}
+	if len(quarantined) > 0 {
+		out["quarantined"] = quarantined
 	}
 	if len(res.Errors) > 0 {
 		out["errors"] = res.Errors
@@ -384,4 +360,37 @@ func compactSuite(res verify.SuiteResult, rootDir string, g *graph.DependencyGra
 		out["hint"] = res.Hint
 	}
 	return out
+}
+
+// resolvePackageArg accepts a package name, its path, or any path inside it (an agent asked
+// for --package=codes, a Go package inside the otel root module, and got "not found").
+func resolvePackageArg(g *graph.DependencyGraph, rootDir, arg string) (*graph.PackageNode, bool) {
+	if p, ok := g.GetPackage(arg); ok {
+		return p, true
+	}
+	rel := filepath.ToSlash(filepath.Clean(strings.TrimPrefix(arg, "./")))
+	if filepath.IsAbs(arg) {
+		if r, err := filepath.Rel(rootDir, arg); err == nil {
+			rel = filepath.ToSlash(r)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(rootDir, rel)); err != nil {
+		return nil, false
+	}
+	// The innermost package containing the path wins; the root package (".") contains all.
+	var best *graph.PackageNode
+	bestLen := -1
+	for _, p := range g.GetAllPackages() {
+		pp := filepath.ToSlash(p.Path)
+		n := len(pp)
+		if pp == "." {
+			n = 0
+		} else if rel != pp && !strings.HasPrefix(rel, pp+"/") {
+			continue
+		}
+		if n > bestLen {
+			best, bestLen = p, n
+		}
+	}
+	return best, best != nil
 }

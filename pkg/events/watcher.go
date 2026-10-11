@@ -298,7 +298,7 @@ func (cw *CIWatcher) emitCIResult(job *WatchJob, passed bool, workflow, logs str
 		evt.Type = EventCIFailed
 		evt.RequiresAction = true
 		evt.Summary = fmt.Sprintf("CI (%s) FAILED for %s on %s", workflow, short, job.Branch)
-		evt.SuggestedTask = "Reproduce with 'monoflow verify --affected', fix, commit and push again"
+		evt.SuggestedTask = "Reproduce with 'monoflow verify', fix, then 'monoflow ship -m <msg>'"
 		evt.Payload["failure_logs"] = logs
 		job.FailureLogs = logs
 		status = WatchStatusCompletedFailed

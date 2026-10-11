@@ -303,7 +303,7 @@ const (
 // ClaudePointer is merged into an existing CLAUDE.md (Claude Code reads CLAUDE.md, not AGENTS.md).
 const ClaudePointer = `## MonoFlow
 This monorepo is governed by MonoFlow; follow the MonoFlow section of AGENTS.md.
-Use ` + "`.agents/bin/monoflow verify --affected`" + ` for checks and ` + "`monoflow commit` / `monoflow pr create`" + ` instead of raw git/gh.
+The path is ` + "`monoflow start <task-id>` → edit → `monoflow verify` → `monoflow ship -m \"<msg>\"`" + ` (run as ` + "`./bin/monoflow`" + `).
 `
 
 // mergeSection inserts or replaces the MonoFlow-managed section of a markdown file,

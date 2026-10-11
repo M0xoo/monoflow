@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -46,6 +47,11 @@ type TargetResult struct {
 	CommandRun string `json:"command_run,omitempty"`
 	// ErrorCount replaces Errors when DedupeErrors moved them to SuiteResult.Errors.
 	ErrorCount int `json:"error_count,omitempty"`
+
+	// remaining are the checks skipped after the failing one, and dir where they run: if
+	// that failure turns out to be preexisting they still have to run (see classifyPreexisting).
+	remaining []string
+	dir       string
 }
 
 // SuiteResult holds the aggregated verification results across all affected packages.
@@ -179,12 +185,13 @@ func (r *Runner) VerifyTarget(pkg *graph.PackageNode, opt VerifyOptions) TargetR
 	// 3. Cache Miss: run each check in order, stopping at the first failure.
 	var out []byte
 	var err error
-	for _, c := range cmds {
+	for i, c := range cmds {
 		var o []byte
 		o, err = r.runCheck(c, absPkgPath)
 		out = append(out, o...)
 		if err != nil {
 			res.CommandRun = c
+			res.remaining, res.dir = cmds[i+1:], absPkgPath
 			break
 		}
 	}
@@ -194,6 +201,7 @@ func (r *Runner) VerifyTarget(pkg *graph.PackageNode, opt VerifyOptions) TargetR
 	if err != nil {
 		rawOutput := string(out)
 		diagnostics := ParseDiagnostics(rawOutput)
+		ResolveGoTestFiles(diagnostics, absPkgPath)
 
 		// Filter quarantined flaky tests
 		activeErrors := make([]DiagnosticError, 0)
@@ -298,8 +306,21 @@ func (r *Runner) VerifyAffected(g *graph.DependencyGraph, changedFiles []string,
 	}
 	_ = release.EnsurePinned(r.RootDir, g)
 	affected := g.ComputeAffected(changedFiles)
+	res := r.VerifyPackages(g, affected.AllAffected, opt)
+	res.DurationMs = float64(time.Since(start).Microseconds()) / 1000.0
+	return res
+}
 
-	if len(affected.AllAffected) == 0 {
+// VerifyPackages verifies the named packages in parallel and, unless Strict, classifies
+// failures main already has as preexisting. Every verify mode (--affected, --package, --all)
+// goes through it: --all used to report preexisting failures as new, so an agent that saw
+// --affected green and --all red stopped trusting both.
+func (r *Runner) VerifyPackages(g *graph.DependencyGraph, names []string, opt VerifyOptions) SuiteResult {
+	start := time.Now()
+	if r.graph == nil {
+		r.graph = g
+	}
+	if len(names) == 0 {
 		return SuiteResult{
 			Status:           "passed",
 			DurationMs:       float64(time.Since(start).Microseconds()) / 1000.0,
@@ -312,10 +333,25 @@ func (r *Runner) VerifyAffected(g *graph.DependencyGraph, changedFiles []string,
 		}
 	}
 
-	results := make([]TargetResult, len(affected.AllAffected))
+	// Build what the checks need from upstream packages once, through the repo's task runner,
+	// before the checks run in parallel (only for packages that will actually run).
+	var toRun []*graph.PackageNode
+	for _, name := range names {
+		if pkg, ok := g.GetPackage(name); ok && !r.cachedPass(pkg, opt) {
+			toRun = append(toRun, pkg)
+		}
+	}
+	var prepFailures []TargetResult
+	for _, c := range PrepareCommands(g, toRun) {
+		if out, err := r.runCheck(c, r.RootDir); err != nil {
+			prepFailures = append(prepFailures, failedResult(PrepareTarget, c, string(out)))
+		}
+	}
+
+	results := make([]TargetResult, len(names))
 	var wg sync.WaitGroup
 
-	for i, pkgName := range affected.AllAffected {
+	for i, pkgName := range names {
 		wg.Add(1)
 		go func(idx int, name string) {
 			defer wg.Done()
@@ -332,6 +368,7 @@ func (r *Runner) VerifyAffected(g *graph.DependencyGraph, changedFiles []string,
 	}
 
 	wg.Wait()
+	results = append(results, prepFailures...)
 
 	if !opt.Strict {
 		r.classifyPreexisting(g, results, opt)
@@ -362,9 +399,71 @@ func (r *Runner) VerifyAffected(g *graph.DependencyGraph, changedFiles []string,
 		PassedTargets:    passedCount,
 		FailedTargets:    failedCount,
 		CachedTargets:    cachedCount,
-		AffectedPackages: affected.AllAffected,
+		AffectedPackages: names,
 		Results:          results,
 	}
+}
+
+// PrepareTarget names the result of a failed dependency build (PackageNode.PrepareCmd).
+const PrepareTarget = "(dependency build)"
+
+// PrepareCommands merges the PrepareCmd of the given packages into one runner invocation per
+// distinct command, naming every upstream package they need built.
+func PrepareCommands(g *graph.DependencyGraph, pkgs []*graph.PackageNode) []string {
+	deps := map[string]map[string]bool{}
+	var order []string
+	for _, p := range pkgs {
+		if p.PrepareCmd == "" {
+			continue
+		}
+		if deps[p.PrepareCmd] == nil {
+			deps[p.PrepareCmd] = map[string]bool{}
+			order = append(order, p.PrepareCmd)
+		}
+		for _, d := range g.GetTransitiveUpstream(p.Name) {
+			deps[p.PrepareCmd][d] = true
+		}
+	}
+	var cmds []string
+	for _, c := range order {
+		var names []string
+		for d := range deps[c] {
+			names = append(names, d)
+		}
+		if len(names) == 0 {
+			continue
+		}
+		sort.Strings(names)
+		if strings.Contains(c, " nx run-many") {
+			cmds = append(cmds, c+" --projects="+strings.Join(names, ","))
+		} else {
+			cmds = append(cmds, c+" --filter="+strings.Join(names, " --filter="))
+		}
+	}
+	return cmds
+}
+
+// cachedPass reports whether the package's checks have a cached pass (it will not run).
+func (r *Runner) cachedPass(pkg *graph.PackageNode, opt VerifyOptions) bool {
+	if r.cacheMgr == nil || opt.NoCache {
+		return false
+	}
+	cmds := checkCommands(pkg, opt)
+	if len(cmds) == 0 {
+		return true
+	}
+	key, _ := r.cacheMgr.ComputePackageKey(pkg, r.upstreamKeys(pkg), strings.Join(cmds, " && "), opt.Stage+":"+opt.Mode)
+	rec, hit := r.cacheMgr.PeekVerification(key)
+	return key != "" && hit && rec.Status == "passed"
+}
+
+// failedResult turns a failed command's output into a result with diagnostics.
+func failedResult(target, cmd, out string) TargetResult {
+	errs := ParseDiagnostics(out)
+	if len(errs) == 0 {
+		errs = []DiagnosticError{{File: ".", Line: 1, Code: "execution_failure", Message: CompactFailure(StripANSI(out))}}
+	}
+	return TargetResult{Target: target, Status: "failed", CommandRun: cmd, Errors: errs}
 }
 
 // PassedKeys returns the cache keys of passed (non-imported) results, i.e. what this

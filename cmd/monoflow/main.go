@@ -84,6 +84,10 @@ func main() {
 	case "ci":
 		handleCI(rootDir)
 
+	case "start":
+		handleStart(rootDir)
+	case "ship":
+		handleShip(rootDir)
 	case "commit":
 		handleCommit(rootDir)
 
@@ -134,6 +138,11 @@ func printUsage() {
 func usageText(w io.Writer) {
 	fmt.Fprintln(w, `MonoFlow — The Agent-Native Monorepo & Ultra-Fast CI Engine
 
+Agent path (4 calls):
+  monoflow start <task-id>            Isolated worktree on branch agent/<task-id>; then cd into its path
+  monoflow verify                     Build+lint+test changed packages and every dependent (= CI for this change)
+  monoflow ship -m "<msg>" [--title=] Commit, local CI on that commit, push, open the PR
+
 Usage:
   monoflow init [dir] [--setup-gh-actions]  Install MonoFlow (+ economical affected-only GitHub Actions CI)
   monoflow clone <url> [dest] --packages=<p1,p2> Partial clone of selected packages and their dependencies
@@ -182,6 +191,12 @@ func hasHelpArg(args []string) bool {
 // commandDetails documents subcommands and flags so agents can discover them via --help
 // instead of guessing (guessing previously executed side-effecting commands).
 var commandDetails = map[string]string{
+	"start": `  start <task-id>                     Isolated worktree on branch agent/<task-id> off the latest main (full checkout)
+  start <task-id> --packages=<p1,p2>  Same, projecting only those packages (+ their dependencies)
+Then cd into the printed path and work there.`,
+	"ship": `  ship -m "<commit message>"          Commit uncommitted work, run local CI on that commit, push, open the PR
+  ship -m "<msg>" --title="<PR title>" --body="<text>" | --body-file=<path>
+One call replaces commit + pr create. Afterwards end your turn: CI results are delivered to you.`,
 	"graph": `  graph query <package|path>          Upstream deps, direct & transitive dependents (name or directory path)
   graph impact <file>                 Owning package and dependents affected by editing <file>
   graph affected                      Packages affected by the current uncommitted changes`,

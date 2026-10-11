@@ -50,14 +50,18 @@ func (g *DependencyGraph) discoverNodeWorkspaces(files []string) {
 				deps = append(deps, d)
 			}
 		}
-		script := func(s string) string {
-			if _, ok := p.Scripts[s]; !ok {
-				return ""
+		// The package's own scripts are what its CI runs. Names vary across repos (TanStack:
+		// test:lib / test:types / test:oxlint; others: check-types, test:unit), so take the
+		// first conventional name present, run with the repo's package manager.
+		var used []string // scripts chosen for the checks, for the runner's dependency builds
+		script := func(names ...string) string {
+			for _, s := range names {
+				if _, ok := p.Scripts[s]; ok {
+					used = append(used, s)
+					return root.run + " " + s
+				}
 			}
-			if s == "test" {
-				return "npm test"
-			}
-			return "npm run " + s
+			return ""
 		}
 		lang := LangJavaScript
 		if isTypeScriptPackage(filepath.Join(g.RootDir, dir), p, rootTS) {
@@ -69,10 +73,11 @@ func (g *DependencyGraph) discoverNodeWorkspaces(files []string) {
 			Language:     lang,
 			Version:      orDefault(p.Version, "1.0.0"),
 			Dependencies: deps,
-			TestCmd:      script("test"),
-			LintCmd:      script("lint"),
-			TypecheckCmd: script("typecheck"),
+			TestCmd:      script(testScripts...),
+			LintCmd:      script(lintScripts...),
+			TypecheckCmd: script(typecheckScripts...),
 		}
+		node.PrepareCmd = root.prepare(name, used)
 		// Many monorepos run vitest/jest/eslint/tsc once from the root; scope those
 		// root tools to this package instead of leaving it unverified.
 		if node.TestCmd == "" {
@@ -177,27 +182,103 @@ func orDefault(s, def string) string {
 	return s
 }
 
+// Conventional script names per check, most specific first.
+var (
+	testScripts      = []string{"test", "test:unit", "test:lib", "tests"}
+	lintScripts      = []string{"lint", "test:lint", "test:eslint", "test:oxlint", "eslint"}
+	typecheckScripts = []string{"typecheck", "type-check", "check-types", "types", "test:types", "tsc"}
+)
+
 // rootToolchain describes workspace-level JS tools that can be scoped to one package.
 type rootToolchain struct {
-	exec string // package-manager exec prefix ("pnpm exec", "yarn", "npx --no-install")
-	test string // "vitest" | "jest" | ""
-	lint string // "eslint" | ""
-	tsc  bool
+	nx        bool                // nx.json: package scripts are Nx targets
+	nxDeps    map[string][]string // Nx targetDefaults dependsOn (string entries)
+	turboDeps map[string][]string // turbo.json task ("typecheck", "pkg#build") -> dependsOn
+	run       string              // package-manager script runner ("pnpm run", "yarn run", "bun run", "npm run")
+	exec      string              // package-manager exec prefix ("pnpm exec", "yarn", "npx --no-install")
+	test      string              // "vitest" | "jest" | ""
+	lint      string              // "eslint" | ""
+	tsc       bool
 }
 
 func rootRunners(root string) rootToolchain {
-	tc := rootToolchain{exec: "npx --no-install"}
+	tc := rootToolchain{run: "npm run", exec: "npx --no-install"}
 	switch {
 	case fileExistsAt(filepath.Join(root, "pnpm-lock.yaml")):
-		tc.exec = "pnpm exec"
+		tc.run, tc.exec = "pnpm run", "pnpm exec"
 	case fileExistsAt(filepath.Join(root, "yarn.lock")):
-		tc.exec = "yarn"
+		tc.run, tc.exec = "yarn run", "yarn"
 	case fileExistsAt(filepath.Join(root, "bun.lockb")) || fileExistsAt(filepath.Join(root, "bun.lock")):
-		tc.exec = "bunx"
+		tc.run, tc.exec = "bun run", "bunx"
 	}
 	var p npmPackageJSON
 	if data, err := os.ReadFile(filepath.Join(root, "package.json")); err == nil {
 		_ = json.Unmarshal(data, &p)
+	}
+	type taskDef struct {
+		DependsOn []json.RawMessage `json:"dependsOn"`
+	}
+	depNames := func(defs map[string]taskDef) map[string][]string {
+		out := map[string][]string{}
+		for k, d := range defs {
+			for _, raw := range d.DependsOn {
+				var name string
+				if json.Unmarshal(raw, &name) == nil { // object entries ({target, projects}) are skipped
+					out[k] = append(out[k], name)
+				}
+			}
+		}
+		return out
+	}
+	if data, err := os.ReadFile(filepath.Join(root, "nx.json")); err == nil {
+		var n struct {
+			TargetDefaults map[string]taskDef `json:"targetDefaults"`
+		}
+		_ = json.Unmarshal(data, &n)
+		tc.nx, tc.nxDeps = true, depNames(n.TargetDefaults)
+	}
+	if data, err := os.ReadFile(filepath.Join(root, "turbo.json")); err == nil {
+		var t struct {
+			Tasks    map[string]taskDef `json:"tasks"`
+			Pipeline map[string]taskDef `json:"pipeline"` // turbo < 2
+		}
+		if json.Unmarshal(data, &t) == nil {
+			tc.turboDeps = depNames(t.Tasks)
+			for k, v := range depNames(t.Pipeline) {
+				tc.turboDeps[k] = v
+			}
+		}
+	}
+	// A root tool can be scoped to a package only if the root really runs it repo-wide: a
+	// config file at the root, or a root script invoking it directly. Merely depending on it
+	// is not enough (TanStack Query lists vitest/eslint at the root but configures them per
+	// package; scoping them from the root failed on a clean checkout).
+	direct := func(tool string) bool {
+		for _, v := range p.Scripts {
+			for _, part := range strings.Split(v, "&&") {
+				if f := strings.Fields(part); len(f) > 0 && f[0] == tool {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	hasConfig := func(globs ...string) bool {
+		for _, gl := range globs {
+			if m, _ := filepath.Glob(filepath.Join(root, gl)); len(m) > 0 {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case direct("vitest") || hasConfig("vitest.config.*", "vitest.workspace.*"):
+		tc.test = "vitest"
+	case direct("jest") || hasConfig("jest.config.*"):
+		tc.test = "jest"
+	}
+	if direct("eslint") || hasConfig("eslint.config.*", ".eslintrc*") {
+		tc.lint = "eslint"
 	}
 	all := ""
 	for _, v := range p.Scripts {
@@ -208,17 +289,39 @@ func rootRunners(root string) rootToolchain {
 			all += " " + d
 		}
 	}
-	switch {
-	case strings.Contains(all, "vitest"):
-		tc.test = "vitest"
-	case strings.Contains(all, "jest"):
-		tc.test = "jest"
-	}
-	if strings.Contains(all, "eslint") {
-		tc.lint = "eslint"
-	}
 	tc.tsc = strings.Contains(all, "tsc") || strings.Contains(all, "typescript")
 	return tc
+}
+
+// prepare returns the task-runner command that builds what the given scripts depend on in
+// upstream packages (Nx targetDefaults / turbo.json "dependsOn": ["^build"]), or "" when the
+// repo has no runner or the scripts need nothing built. Run directly, TanStack Query's type
+// checks and trpc's example typechecks passed or failed depending on stale build output.
+func (tc rootToolchain) prepare(pkg string, scripts []string) string {
+	var targets []string
+	seen := map[string]bool{}
+	for _, s := range scripts {
+		deps := tc.turboDeps[pkg+"#"+s]
+		if deps == nil {
+			deps = tc.turboDeps[s]
+		}
+		if tc.nx {
+			deps = tc.nxDeps[s]
+		}
+		for _, d := range deps {
+			if t, ok := strings.CutPrefix(d, "^"); ok && !seen[t] {
+				seen[t] = true
+				targets = append(targets, t)
+			}
+		}
+	}
+	if len(targets) == 0 {
+		return ""
+	}
+	if tc.nx {
+		return "NX_DAEMON=false NX_NO_CLOUD=true " + tc.exec + " nx run-many -t " + strings.Join(targets, ",")
+	}
+	return tc.exec + " turbo run " + strings.Join(targets, " ") + " --output-logs=errors-only --log-prefix=none"
 }
 
 // scoped runs a root-level tool from the workspace root, limited to the package dir.
@@ -228,7 +331,7 @@ func (tc rootToolchain) scoped(tool, dir string) string {
 	}
 	args := dir
 	if tool == "vitest" {
-		args = "run " + dir
+		args = "run --passWithNoTests " + dir
 	} else if tool == "jest" {
 		args = "--passWithNoTests " + dir
 	}

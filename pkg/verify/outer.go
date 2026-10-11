@@ -536,7 +536,7 @@ func suggestRegressionTask(job *OuterJob, failedTargets []string) string {
 	if first, _, _ := strings.Cut(job.ErrorSummary, "\n"); first != "" {
 		sb.WriteString(fmt.Sprintf(" (first failure: %s)", first))
 	}
-	sb.WriteString(", then run `monoflow verify --affected` and `monoflow outer start`.")
+	sb.WriteString(", then `monoflow verify` and `monoflow ship -m \"<msg>\"` (commits and re-runs this check).")
 	return sb.String()
 }
 
@@ -766,11 +766,15 @@ func (om *OuterLoopManager) checkoutCommit(job *OuterJob) (string, func(), error
 			}
 		}
 	}
-	for _, d := range []string{"node_modules", ".venv", "target", ".pnpm-store"} {
+	for _, d := range []string{".venv", "target", ".pnpm-store"} {
 		if _, err := os.Stat(filepath.Join(om.RootDir, d)); err == nil {
 			_ = os.Symlink(filepath.Join(om.RootDir, d), filepath.Join(dir, d))
 		}
 	}
+	// JS workspaces need every package's node_modules, with workspace packages resolving to
+	// this checkout (not the root's code): linking only the root node_modules left pnpm
+	// packages unable to resolve their dependencies.
+	graph.OverlayNodeModules(om.RootDir, dir)
 	return dir, cleanup, nil
 }
 
@@ -848,7 +852,9 @@ func (om *OuterLoopManager) emitPassed(job *OuterJob) {
 // spawnOuterProcess runs `monoflow outer exec --job=<id>` detached from the CLI process.
 func spawnOuterProcess(root, jobID string) error {
 	exe, err := os.Executable()
-	if err != nil || !strings.HasPrefix(filepath.Base(exe), "monoflow") {
+	// Only a go test binary (pkg.test) can't run `outer exec`; any other name is a monoflow
+	// build (renamed copies included), and refusing it left the job queued forever.
+	if err != nil || strings.HasSuffix(filepath.Base(exe), ".test") {
 		return fmt.Errorf("not running as monoflow")
 	}
 	logDir := filepath.Join(root, ".agents", "outer_loop", "logs")

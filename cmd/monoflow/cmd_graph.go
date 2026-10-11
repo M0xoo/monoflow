@@ -57,9 +57,9 @@ func handleGraph(rootDir string) {
 			os.Exit(1)
 		}
 		pkgName := os.Args[3]
-		pkg, exists := g.GetPackage(pkgName)
+		pkg, exists := resolvePackageArg(g, rootDir, pkgName)
 		if !exists {
-			fmt.Printf(`{"error": "package '%s' not found"}`+"\n", pkgName)
+			fmt.Printf(`{"error": "package '%s' not found (use a name from 'monoflow graph' or a path inside a package)"}`+"\n", pkgName)
 			os.Exit(1)
 		}
 		data, _ := json.MarshalIndent(map[string]any{

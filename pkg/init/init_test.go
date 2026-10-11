@@ -62,7 +62,7 @@ func TestMergeSectionKeepsProjectInstructions(t *testing.T) {
 	if !strings.HasPrefix(s, "# Project rules\n\nUse tabs.\n") {
 		t.Fatalf("existing instructions must be preserved, got:\n%s", s[:80])
 	}
-	if strings.Count(s, sectionStart) != 1 || !strings.Contains(s, "monoflow verify --affected") {
+	if strings.Count(s, sectionStart) != 1 || !strings.Contains(s, "monoflow verify") {
 		t.Fatalf("expected exactly one MonoFlow section")
 	}
 	missing := filepath.Join(t.TempDir(), "CLAUDE.md")

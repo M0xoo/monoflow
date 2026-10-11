@@ -1,68 +1,56 @@
 package initialize
 
-const AgentRuleTemplate = `# MonoFlow Monorepo Protocol (for coding agents)
+const AgentRuleTemplate = `# MonoFlow (for coding agents)
 
-Use MonoFlow (` + "`" + `.agents/bin/monoflow` + "`" + `, ` + "`" + `./bin/monoflow` + "`" + ` in worktrees) for builds, checks, commits, pushes
-and PRs: cached, affected-only, compact JSON, and its gates keep remote CI green. ` + "`" + `<cmd> --help` + "`" + ` never executes.
+Run it as ` + "`" + `./bin/monoflow` + "`" + ` (or ` + "`" + `.agents/bin/monoflow` + "`" + `). Four calls take a change from idea to PR:
 
-## Workflow
-1. ` + "`" + `monoflow worktree create <agent-id> --packages=<pkg,...>` + "`" + `, then ` + "`" + `cd .agents/worktrees/<agent-id>` + "`" + `
-   (branch ` + "`" + `agent/<agent-id>` + "`" + ` off main; never edit the shared repo root).
-2. ` + "`" + `monoflow graph query <pkg|path>` + "`" + ` / ` + "`" + `graph impact <file>` + "`" + `: dependents and dependencies, instead of grepping for them.
-3. Edit. ` + "`" + `monoflow checkpoint save "<idea>"` + "`" + ` before risky attempts, ` + "`" + `checkpoint revert` + "`" + ` to undo.
-4. ` + "`" + `monoflow verify --affected` + "`" + ` (instead of go test, npm test, tsc, pytest, cargo test): typecheck + lint +
-   tests of changed packages and their dependents. Fix the reported ` + "`" + `file:line` + "`" + ` errors until it passes.
-5. ` + "`" + `monoflow commit -m "<msg>"` + "`" + ` (not git commit). It starts the outer loop: local CI on that exact commit.
-6. ` + "`" + `monoflow pr create --title="..." --body="..."` + "`" + ` (not gh pr create) right after: it waits for the outer
-   loop, pushes and opens the PR. If ` + "`" + `remote_pr` + "`" + ` says ` + "`" + `not_created` + "`" + `, follow its ` + "`" + `agent_directive` + "`" + `.
-   Also: ` + "`" + `monoflow sync` + "`" + ` (not git pull/rebase), ` + "`" + `monoflow push` + "`" + ` (not git push; main is protected).
-7. Do not poll CI. Results are delivered to you by hooks after tool calls and when you end your turn.
-   Without hooks: ` + "`" + `monoflow events wait <sha>` + "`" + ` in the background, or ` + "`" + `monoflow events unread` + "`" + ` once.
-   On CI_FAILED: ` + "`" + `monoflow ci health` + "`" + `, reproduce with ` + "`" + `verify --affected` + "`" + `, fix, commit, push.
-8. ` + "`" + `monoflow worktree list` + "`" + ` (all agents' branch/PR/CI); ` + "`" + `monoflow worktree finish <agent-id>` + "`" + ` once merged.
+1. ` + "`" + `monoflow start <task-id>` + "`" + `, then ` + "`" + `cd` + "`" + ` into the printed ` + "`" + `path` + "`" + `: your own worktree and branch
+   ` + "`" + `agent/<task-id>` + "`" + ` off the latest main (other agents may be working in the repo root).
+2. Find what to change: ` + "`" + `monoflow graph impact <file>` + "`" + ` lists every package, repo-wide, that depends
+   on that file (the callers grep would have to find module by module).
+3. Edit, then ` + "`" + `monoflow verify` + "`" + `. It builds, lints and tests every changed package and every package
+   depending on them: what CI runs for this change, cached. Failures that main already has are
+   reported but do not block. Fix the ` + "`" + `errors[]` + "`" + ` (` + "`" + `file:line` + "`" + `) and run it again until it passes.
+   Do not also run go test / npm test / tsc / ` + "`" + `verify --all` + "`" + `: ` + "`" + `verify` + "`" + ` already covered them.
+4. ` + "`" + `monoflow ship -m "<commit message>"` + "`" + ` (optional ` + "`" + `--title=... --body=...` + "`" + `): commits, runs CI locally on
+   that exact commit, pushes and opens the PR. Then end your turn: CI results are delivered to you
+   (on CI_FAILED: fix, ` + "`" + `verify` + "`" + `, ` + "`" + `ship` + "`" + ` again).
+
+Use raw git/go/npm only for what MonoFlow does not do; never push to main.
 
 ## When you need more
 | situation | command |
 |---|---|
+| dependencies / dependents of a package | ` + "`" + `monoflow graph query <package|path>` + "`" + ` |
+| try something risky | ` + "`" + `monoflow checkpoint save "<idea>"` + "`" + ` / ` + "`" + `checkpoint revert` + "`" + ` |
+| one package, or everything | ` + "`" + `monoflow verify --package=<name|path>` + "`" + ` / ` + "`" + `verify --all` + "`" + ` |
+| commit without a PR yet / push / pull | ` + "`" + `monoflow commit -m` + "`" + ` / ` + "`" + `push` + "`" + ` / ` + "`" + `sync` + "`" + ` |
+| CI result without hooks | ` + "`" + `monoflow events unread` + "`" + ` (once; never poll) |
 | red/flaky CI history | ` + "`" + `monoflow ci health [--check=<name> --logs]` + "`" + ` |
-| outer-loop state | ` + "`" + `monoflow outer list | status | wait` + "`" + ` |
 | flaky test (not yours) | ` + "`" + `monoflow quarantine add <test-id>` + "`" + ` |
-| self-review before a PR | ` + "`" + `monoflow review risk | review audit` + "`" + ` |
-| several PRs on the same packages | ` + "`" + `monoflow queue spec | queue verify` + "`" + ` |
-| merge another agent's work | ` + "`" + `monoflow worktree sync --to=<you> --from=<other>` + "`" + ` |
-| more/fewer packages in the worktree | ` + "`" + `monoflow subset add|remove <pkg>` + "`" + ` / ` + "`" + `worktree focus` + "`" + ` |
-| build a deliverable | ` + "`" + `monoflow deliver --target=<pkg>` + "`" + ` |
-| PR test / checkout / status | ` + "`" + `monoflow pr test <id> | pr local <id> --worktree | pr status <id>` + "`" + ` |
-| split or prove a task | ` + "`" + `monoflow task slice | task prove` + "`" + ` |
-| secrets / weakened tests | ` + "`" + `monoflow guard check` + "`" + ` |
-| cache stats | ` + "`" + `monoflow cache status` + "`" + ` |
-
-## Versions between packages
-Edges are ` + "`" + `source` + "`" + ` (live code) or ` + "`" + `pinned` + "`" + ` (an internal release): ` + "`" + `monoflow version edges` + "`" + `. A change
-re-verifies only ` + "`" + `source` + "`" + ` consumers; if one fails, migrate it in the same change or add the new API next
-to the old. ` + "`" + `version suggest <pkg>` + "`" + ` gives the required bump. Pinned consumers get DEPENDENCY_RELEASED:
-` + "`" + `version upgrades` + "`" + `, ` + "`" + `version upgrade <consumer> <dep>` + "`" + `, ` + "`" + `version pin|unpin <consumer> <dep>` + "`" + `.
-
-Task boundaries: ` + "`" + `.agents/task.json` + "`" + ` (` + "`" + `read_only_paths` + "`" + `); check with ` + "`" + `monoflow task check` + "`" + `.
+| local CI state | ` + "`" + `monoflow outer list | status | wait` + "`" + ` |
+| other agents, merged work | ` + "`" + `monoflow worktree list` + "`" + ` / ` + "`" + `worktree finish <task-id>` + "`" + ` / ` + "`" + `worktree sync --to=<you> --from=<other>` + "`" + ` |
+| fewer packages in a big repo | ` + "`" + `monoflow start <id> --packages=<p1,p2>` + "`" + ` / ` + "`" + `subset add|remove <pkg>` + "`" + ` |
+| PR status / review | ` + "`" + `monoflow pr status <id>` + "`" + ` / ` + "`" + `review risk` + "`" + ` |
+| package versions between packages | ` + "`" + `monoflow version edges | suggest <pkg> | upgrades` + "`" + ` |
+| task boundaries, secrets, weakened tests | ` + "`" + `monoflow task check` + "`" + ` / ` + "`" + `guard check` + "`" + ` |
+| anything else | ` + "`" + `monoflow help` + "`" + `, ` + "`" + `monoflow <cmd> --help` + "`" + ` (help never executes) |
 `
 
 const AgentSkillTemplate = `---
 name: monoflow
 description: >-
-  Use for any edit, build, test, commit, push or PR in this monorepo. MonoFlow gives isolated
-  per-agent worktrees, affected-only cached verification with compact JSON, and gates that
-  keep remote CI green.
+  Use for any edit, build, test, commit, push or PR in this monorepo: start, verify, ship.
 ---
 
 # MonoFlow
 
-Run as ` + "`" + `.agents/bin/monoflow` + "`" + `. Full protocol: ` + "`" + `AGENTS.md` + "`" + `. The loop:
+Run as ` + "`" + `./bin/monoflow` + "`" + `. Full guide: ` + "`" + `AGENTS.md` + "`" + `.
 
-1. ` + "`" + `monoflow worktree create <agent-id> --packages=<pkg,...>` + "`" + ` → ` + "`" + `cd .agents/worktrees/<agent-id>` + "`" + `
-2. ` + "`" + `monoflow graph impact <file>` + "`" + ` before changing an interface
-3. edit → ` + "`" + `monoflow verify --affected` + "`" + ` → fix ` + "`" + `errors[].file:line` + "`" + ` → repeat (` + "`" + `monoflow checkpoint save/revert` + "`" + ` for experiments)
-4. ` + "`" + `monoflow commit -m "<msg>"` + "`" + ` → ` + "`" + `monoflow sync` + "`" + ` → ` + "`" + `monoflow pr create --title="..."` + "`" + ` (pushes + opens the PR)
-5. ` + "`" + `monoflow events unread` + "`" + ` once, end your turn; act on CI_FAILED when it arrives
+1. ` + "`" + `monoflow start <task-id>` + "`" + ` → cd into the printed path
+2. ` + "`" + `monoflow graph impact <file>` + "`" + ` → every dependent package, repo-wide
+3. edit → ` + "`" + `monoflow verify` + "`" + ` → fix ` + "`" + `errors[].file:line` + "`" + ` → repeat (covers what CI runs; nothing else to run)
+4. ` + "`" + `monoflow ship -m "<msg>"` + "`" + ` → commit, local CI, push, PR; end your turn
 `
 
 const TaskTemplate = `{

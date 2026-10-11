@@ -1,0 +1,5 @@
+Change the default `networkMode` of queries and mutations in @tanstack/query-core from 'online' to
+'always', so that queries and mutations run regardless of the browser's online status unless a
+networkMode is set explicitly. Update the documentation comments of the option accordingly. Update
+everything in the repository that depends on this behaviour so that all packages' tests and type
+checks still pass.

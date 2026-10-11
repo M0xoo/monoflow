@@ -14,9 +14,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/antigravity/monoflow/pkg/graph"
 	initialize "github.com/antigravity/monoflow/pkg/init"
 	"github.com/antigravity/monoflow/pkg/merge"
-	"github.com/antigravity/monoflow/pkg/graph"
 	"github.com/antigravity/monoflow/pkg/runtimestate"
 	"github.com/antigravity/monoflow/pkg/subset"
 )
@@ -278,7 +278,7 @@ func (m *Manager) CreateWithOpts(agentID string, opts CreateOptions) (*WorktreeI
 			}
 		}
 	} else {
-		overlayNodeModules(m.RootDir, wtPath)
+		graph.OverlayNodeModules(m.RootDir, wtPath)
 	}
 
 	headSHA, _ := m.runGit("-C", wtPath, "rev-parse", "HEAD")
@@ -1134,64 +1134,4 @@ func mainRepoRoot(dir string) string {
 		}
 	}
 	return main
-}
-
-// overlayNodeModules gives the worktree node_modules directories (root and per package)
-// whose external entries link to the root's installed dependencies — no reinstall — while
-// workspace-package entries link to the worktree's own package directories. Linking the
-// root node_modules wholesale made require("@scope/pkg") load the root checkout's code, so
-// agents verified the unedited package.
-func overlayNodeModules(root, wtPath string) {
-	if _, err := os.Stat(filepath.Join(root, "node_modules")); err != nil {
-		return // dependencies not installed at the root
-	}
-	g, err := graph.LoadOrDiscover(wtPath)
-	if err != nil {
-		return
-	}
-	workspace := map[string]string{}
-	dirs := []string{"."}
-	for _, p := range g.GetAllPackages() {
-		if p.Language == graph.LangJavaScript || p.Language == graph.LangTypeScript {
-			workspace[p.Name] = p.Path
-			dirs = append(dirs, p.Path)
-		}
-	}
-	link := func(dst, name, rootEntry string) {
-		target := rootEntry
-		if path, ok := workspace[name]; ok {
-			if _, err := os.Stat(filepath.Join(wtPath, path)); err == nil {
-				target = filepath.Join(wtPath, path)
-			}
-		}
-		_ = os.MkdirAll(filepath.Dir(dst), 0755)
-		_ = os.Remove(dst)
-		_ = os.Symlink(target, dst)
-	}
-	for _, d := range dirs {
-		src := filepath.Join(root, d, "node_modules")
-		dst := filepath.Join(wtPath, d, "node_modules")
-		entries, err := os.ReadDir(src)
-		if err != nil {
-			continue
-		}
-		if _, err := os.Stat(filepath.Join(wtPath, d)); err != nil {
-			continue // package not projected into this worktree
-		}
-		if fi, err := os.Lstat(dst); err == nil && fi.Mode()&os.ModeSymlink != 0 {
-			_ = os.Remove(dst)
-		}
-		_ = os.MkdirAll(dst, 0755)
-		for _, e := range entries {
-			if strings.HasPrefix(e.Name(), "@") && e.IsDir() {
-				scoped, _ := os.ReadDir(filepath.Join(src, e.Name()))
-				for _, s := range scoped {
-					name := e.Name() + "/" + s.Name()
-					link(filepath.Join(dst, e.Name(), s.Name()), name, filepath.Join(src, name))
-				}
-				continue
-			}
-			link(filepath.Join(dst, e.Name()), e.Name(), filepath.Join(src, e.Name()))
-		}
-	}
 }

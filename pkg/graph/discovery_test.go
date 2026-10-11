@@ -144,7 +144,64 @@ func TestDiscoverPnpmWorkspaceWithRootTools(t *testing.T) {
 	if types.TestCmd == "" || types.LintCmd == "" {
 		t.Errorf("root vitest/eslint should be scoped to the package, got test=%q lint=%q", types.TestCmd, types.LintCmd)
 	}
-	if cli, _ := g.GetPackage("@cs/cli"); cli == nil || cli.TestCmd != "npm test" || !reflect.DeepEqual(cli.Dependencies, []string{"@cs/types"}) {
+	if cli, _ := g.GetPackage("@cs/cli"); cli == nil || cli.TestCmd != "pnpm run test" || !reflect.DeepEqual(cli.Dependencies, []string{"@cs/types"}) {
 		t.Errorf("@cs/cli = %+v", cli)
+	}
+}
+
+// TanStack Query (Nx + pnpm) names its package scripts test:lib / test:types / test:oxlint; the
+// root-level fallbacks (vitest/eslint from the root) fail there on a clean checkout, so the
+// package's own scripts must win.
+func TestDiscoverConventionalScriptNameVariants(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"package.json":                     `{"name":"root","private":true,"scripts":{"test":"nx run-many"},"devDependencies":{"vitest":"4","eslint":"9","typescript":"5"}}`,
+		"pnpm-workspace.yaml":              "packages:\n  - \"packages/*\"\n",
+		"pnpm-lock.yaml":                   "",
+		"tsconfig.json":                    "{}",
+		"packages/query-core/package.json": `{"name":"@tanstack/query-core","scripts":{"test:lib":"vitest","test:types":"tsc","test:oxlint":"oxlint ./src"}}`,
+		"packages/ex/package.json":         `{"name":"ex","scripts":{"dev":"vite","build":"vite build"}}`,
+	})
+	g := discover(t, root)
+	p, _ := g.GetPackage("@tanstack/query-core")
+	if p == nil || p.TestCmd != "pnpm run test:lib" || p.TypecheckCmd != "pnpm run test:types" || p.LintCmd != "pnpm run test:oxlint" {
+		t.Fatalf("package scripts not used: %+v", p)
+	}
+	// An example app with only dev/build scripts: the root lists vitest/eslint as deps but has no
+	// root config, so there is nothing valid to scope to it.
+	if ex, _ := g.GetPackage("ex"); ex == nil || ex.TestCmd != "" || ex.LintCmd != "" {
+		t.Fatalf("root tools without a root config must not be scoped: %+v", ex)
+	}
+}
+
+// Under Nx or Turborepo, checks run the package scripts directly; what they depend on in
+// upstream packages (dependsOn ^build / ^compile) is built first, once, through the runner.
+func TestDiscoverPrepareStepFromNxOrTurbo(t *testing.T) {
+	nx := writeTree(t, map[string]string{
+		"package.json":               `{"name":"root","private":true}`,
+		"nx.json":                    `{"targetDefaults":{"test:lib":{"dependsOn":["^compile"]},"test:types":{"dependsOn":["^compile",{"target":"x","projects":["a"]}]}}}`,
+		"pnpm-workspace.yaml":        "packages:\n  - \"packages/*\"\n",
+		"pnpm-lock.yaml":             "",
+		"packages/core/package.json": `{"name":"@q/core","scripts":{"test:lib":"vitest","test:types":"tsc"}}`,
+	})
+	g := discover(t, nx)
+	p, _ := g.GetPackage("@q/core")
+	if p == nil || p.TestCmd != "pnpm run test:lib" || p.PrepareCmd != "NX_DAEMON=false NX_NO_CLOUD=true pnpm exec nx run-many -t compile" {
+		t.Fatalf("nx: %+v", p)
+	}
+	turbo := writeTree(t, map[string]string{
+		"package.json":                 `{"name":"root","private":true}`,
+		"turbo.json":                   `{"tasks":{"typecheck":{"dependsOn":["^build"]},"lint":{"dependsOn":["^build"]},"build":{"dependsOn":["^build"]}}}`,
+		"pnpm-workspace.yaml":          "packages:\n  - \"packages/*\"\n",
+		"pnpm-lock.yaml":               "",
+		"packages/server/package.json": `{"name":"@t/server","scripts":{"typecheck":"tsc","lint":"eslint src"}}`,
+		"packages/plain/package.json":  `{"name":"@t/plain","scripts":{"test":"vitest"}}`,
+	})
+	g = discover(t, turbo)
+	p, _ = g.GetPackage("@t/server")
+	if p == nil || p.TypecheckCmd != "pnpm run typecheck" || p.PrepareCmd != "pnpm exec turbo run build --output-logs=errors-only --log-prefix=none" {
+		t.Fatalf("turbo: %+v", p)
+	}
+	if q, _ := g.GetPackage("@t/plain"); q == nil || q.PrepareCmd != "" { // "test" has no dependsOn
+		t.Fatalf("no prepare expected: %+v", q)
 	}
 }
