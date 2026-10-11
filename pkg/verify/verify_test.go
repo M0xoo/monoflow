@@ -211,7 +211,7 @@ func TestFailedTargetRetriedOnceAndMarkedFlaky(t *testing.T) {
 	_ = os.MkdirAll(filepath.Join(root, "broken"), 0755)
 	g := graph.New(root)
 	g.AddPackage(&graph.PackageNode{Name: "flaky", Path: "flaky", Language: graph.LangGeneric,
-		TestCmd: `if [ -f seen ]; then exit 0; fi; touch seen; echo "x_test.go:1: timed out"; exit 1`})
+		TestCmd: `if [ -f seen ]; then exit 0; fi; touch seen; echo "x_test.go:1: Test timed out in 5000ms"; exit 1`})
 	g.AddPackage(&graph.PackageNode{Name: "broken", Path: "broken", Language: graph.LangGeneric,
 		TestCmd: `echo "y_test.go:2: want 1"; exit 1`})
 	res := NewRunner(root).VerifyPackages(g, []string{"flaky", "broken"}, VerifyOptions{Strict: true})

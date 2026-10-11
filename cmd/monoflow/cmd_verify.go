@@ -37,6 +37,8 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 			verifyAll = true
 		} else if arg == "--no-cache" || arg == "--force" {
 			opts.NoCache = true
+		} else if arg == "--update-snapshots" || arg == "-u" {
+			opts.UpdateSnapshots = true
 		} else if arg == "--test" {
 			opts.Mode = "test"
 		} else if arg == "--typecheck" {
@@ -151,6 +153,7 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 		out = c
 	}
 	if !verboseOut && !jsonMode() {
+		rootDirForText = rootDir
 		fmt.Print(verifyText(res, out.(map[string]any)))
 	} else {
 		printOut(out)

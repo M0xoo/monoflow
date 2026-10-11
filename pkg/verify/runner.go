@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
@@ -36,6 +37,9 @@ type VerifyOptions struct {
 	// on the changed files only, like verify does: an agent saw verify report no preexisting
 	// failure and --all report old gofmt debt, and spent five runs reconciling them.
 	AllPackages bool
+	// UpdateSnapshots runs JS/TS test commands with -u (vitest/jest rewrite mismatched
+	// snapshots): agents otherwise rewrote inline snapshots by hand, many calls each (trpc).
+	UpdateSnapshots bool
 }
 
 // TargetResult holds the result of verifying a single package.
@@ -300,7 +304,15 @@ func (r *Runner) commandsFor(pkg *graph.PackageNode, opt VerifyOptions) (cmds []
 			return c, skip
 		}
 	}
-	return checkCommands(pkg, opt), false
+	cmds = checkCommands(pkg, opt)
+	if opt.UpdateSnapshots && (pkg.Language == graph.LangJavaScript || pkg.Language == graph.LangTypeScript) {
+		for i, c := range cmds {
+			if c == pkg.TestCmd {
+				cmds[i] = c + " -u"
+			}
+		}
+	}
+	return cmds, false
 }
 
 // checkCommands returns the commands for the requested checks, in run order.
@@ -426,8 +438,10 @@ func (r *Runner) VerifyPackages(g *graph.DependencyGraph, names []string, opt Ve
 
 	// Checks must not change the tree the agent commits: files they create (Playwright's
 	// test-results/, coverage) are removed afterwards. trpc: ship committed two of them.
-	before := untrackedFiles(r.RootDir)
-	defer removeNewUntracked(r.RootDir, before)
+	if !opt.UpdateSnapshots { // new snapshot files are the point of -u
+		before := untrackedFiles(r.RootDir)
+		defer removeNewUntracked(r.RootDir, before)
+	}
 
 	// Build what the checks need from upstream packages once, through the repo's task runner,
 	// before the checks run in parallel (only for packages that will actually run).
@@ -481,7 +495,7 @@ func (r *Runner) VerifyPackages(g *graph.DependencyGraph, names []string, opt Ve
 	// while 48 packages ran, blocking a correct change.)
 	var failedIdx []int
 	for i, res := range results {
-		if res.Status == "failed" && len(res.Errors) > 0 && res.Errors[0].Code != "package_not_projected" && res.Target != PrepareTarget {
+		if res.Status == "failed" && len(res.Errors) > 0 && res.Errors[0].Code != "package_not_projected" && res.Target != PrepareTarget && timingFailure(res.Errors) {
 			failedIdx = append(failedIdx, i)
 		}
 	}
@@ -662,4 +676,17 @@ func removeNewUntracked(dir string, before map[string]bool) {
 			}
 		}
 	}
+}
+
+// timingFlake matches failures that load can cause (a deterministic assertion or snapshot
+// mismatch is never retried: re-running trpc's failing packages cost ~60 s per verify).
+var timingFlake = regexp.MustCompile(`(?i)timed? ?out|timeout|ETIMEDOUT|ECONNRESET|ECONNREFUSED|EADDRINUSE|socket hang up|deadline exceeded|reconnect`)
+
+func timingFailure(errs []DiagnosticError) bool {
+	for _, e := range errs {
+		if timingFlake.MatchString(e.Message) {
+			return true
+		}
+	}
+	return false
 }

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -63,6 +64,7 @@ func verifyText(res verify.SuiteResult, c map[string]any) string {
 		b.WriteString("failed: " + strings.Join(names, ", ") + "\n")
 	}
 	errs, _ := c["errors"].([]verify.SharedError) // deduplicated by compactSuite
+	shown, snapshots := 0, 0
 	for _, e := range errs {
 		loc := e.File
 		if e.Line > 0 {
@@ -76,6 +78,19 @@ func verifyText(res verify.SuiteResult, c map[string]any) string {
 		if e.Breaks > 2 {
 			fmt.Fprintf(&b, "  (same error in %d packages)\n", e.Breaks)
 		}
+		// The failing line in context: agents otherwise spend a call reading the file around it.
+		if shown < 8 && e.Line > 0 {
+			if ctx := sourceContext(rootDirForText, e.File, e.Line, 1); ctx != "" {
+				b.WriteString(ctx)
+				shown++
+			}
+		}
+		if strings.Contains(e.Message, "Snapshot") && strings.Contains(e.Message, "mismatched") {
+			snapshots++
+		}
+	}
+	if snapshots > 0 {
+		fmt.Fprintf(&b, "snapshots: %d mismatched; if the new values are what you intend, 'monoflow verify --update-snapshots' rewrites them\n", snapshots)
 	}
 	if n, ok := c["errors_omitted"].(int); ok && n > 0 {
 		fmt.Fprintf(&b, "... %d more errors (fix these first, or --verbose)\n", n)
@@ -300,4 +315,33 @@ func printRaw(s string) {
 		return
 	}
 	printOut(node)
+}
+
+// rootDirForText lets verifyText read source lines (set by handleVerify).
+var rootDirForText string
+
+// sourceContext returns lines [line-radius, line+radius] of root/file, numbered, the failing
+// line marked with '>'; "" when the file cannot be read.
+func sourceContext(root, file string, line, radius int) string {
+	data, err := os.ReadFile(filepath.Join(root, file))
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(string(data), "\n")
+	if line > len(lines) {
+		return ""
+	}
+	var b strings.Builder
+	for n := max(1, line-radius); n <= min(len(lines), line+radius); n++ {
+		mark := " "
+		if n == line {
+			mark = ">"
+		}
+		text := strings.TrimRight(lines[n-1], " \t")
+		if len(text) > 160 {
+			text = text[:160] + "…"
+		}
+		fmt.Fprintf(&b, "  %s%5d| %s\n", mark, n, text)
+	}
+	return b.String()
 }

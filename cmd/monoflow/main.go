@@ -224,6 +224,7 @@ One call replaces commit + pr create. Afterwards end your turn: CI results are d
   verify --package=<p> | --all        Verify one package / every package
   verify --test | --lint | --typecheck | --all-checks   Restrict or widen the check kinds
   verify --no-cache | --force         Ignore cached results
+  verify --update-snapshots | -u      Rewrite mismatched vitest/jest snapshots (when the new values are intended)
   verify --base=<ref>                 Changes since the merge-base with <ref> (CI: the PR base)
   verify --strict                     Also block on failures that pre-exist on the base branch
   verify --proof=<task-id>            Verify a Proof-of-Work receipt`,
