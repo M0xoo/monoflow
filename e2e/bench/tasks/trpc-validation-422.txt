@@ -1,0 +1,5 @@
+When a procedure's input fails validation, tRPC currently responds with the BAD_REQUEST error code
+(HTTP 400). Change it to respond with UNPROCESSABLE_CONTENT (HTTP 422) instead, which better describes
+a well-formed request whose content is invalid. Other BAD_REQUEST cases (malformed requests, bad
+content types, etc.) must stay BAD_REQUEST. Update everything in the repository that depends on this
+behaviour so that all packages' tests and type checks still pass.
