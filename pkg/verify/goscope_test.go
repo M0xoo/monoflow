@@ -52,4 +52,13 @@ func TestGoScopedCommandsRunOnlyImportingPackages(t *testing.T) {
 	if _, _, ok := goScopedCommands(root, app, []string{"lib/go.mod"}); ok {
 		t.Fatalf("a go.mod change must not be narrowed")
 	}
+
+	// graph query lib/codes: who imports it, package by package, across modules.
+	g := graph.New(root)
+	g.AddPackage(lib)
+	g.AddPackage(app)
+	imp, by, ok := GoImporters(root, g, "lib/codes")
+	if !ok || imp != "example.com/lib/codes" || strings.Join(by["app"], ",") != "app/tested,app/uses" {
+		t.Fatalf("importers: %s %v", imp, by)
+	}
 }

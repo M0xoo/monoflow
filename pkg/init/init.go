@@ -324,12 +324,16 @@ func mergeSection(path, content string, create bool) error {
 			if end < len(s) && s[end] == '\n' {
 				end++
 			}
-			return os.WriteFile(path, []byte(s[:i]+block+s[end:]), 0644)
+			s = strings.TrimLeft(s[:i]+s[end:], "\n")
 		}
-	}
-	// Legacy installs wrote the bare template as the whole file: replace it.
-	if strings.HasPrefix(strings.TrimSpace(s), "# MonoFlow") {
+	} else if strings.HasPrefix(strings.TrimSpace(s), "# MonoFlow") {
+		// Legacy installs wrote the bare template as the whole file: replace it.
 		return os.WriteFile(path, []byte(block), 0644)
 	}
-	return os.WriteFile(path, []byte(strings.TrimRight(s, "\n")+"\n\n"+block), 0644)
+	if strings.TrimSpace(s) == "" {
+		return os.WriteFile(path, []byte(block), 0644)
+	}
+	// The MonoFlow section goes first: appended after a long project guide (opentelemetry-go:
+	// 7 KB), agents read the whole file to reach it, and carried it in context all run.
+	return os.WriteFile(path, []byte(block+"\n"+s), 0644)
 }

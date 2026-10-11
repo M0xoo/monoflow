@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/antigravity/monoflow/pkg/graph"
 )
@@ -145,4 +146,57 @@ func goPackagesImporting(dir string, imports []string) ([]string, error) {
 	}
 	sort.Strings(res)
 	return res, nil
+}
+
+// GoImporters lists, for the Go package in dir (relative to root), every package in any Go
+// module of the graph whose code or tests import it directly (repo-relative directories,
+// grouped by module directory). This is
+// the "who uses this package" answer agents otherwise approximate with repo-wide grep.
+func GoImporters(root string, g *graph.DependencyGraph, dir string) (importPath string, byModule map[string][]string, ok bool) {
+	modDir, modPath := goModuleOf(root, dir)
+	if modDir == "" {
+		return "", nil, false
+	}
+	rel, _ := filepath.Rel(filepath.Join(root, modDir), filepath.Join(root, dir))
+	importPath = modPath
+	if rel = filepath.ToSlash(rel); rel != "." {
+		importPath = modPath + "/" + rel
+	}
+	byModule = map[string][]string{}
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for _, p := range g.GetAllPackages() {
+		if p.Language != graph.LangGo {
+			continue
+		}
+		wg.Add(1)
+		go func(p *graph.PackageNode) {
+			defer wg.Done()
+			_, pMod := goModuleOf(root, p.Path)
+			cmd := exec.Command("go", "list", "-e", "-f", `{{.ImportPath}}{{range .Imports}} {{.}}{{end}}{{range .TestImports}} {{.}}{{end}}{{range .XTestImports}} {{.}}{{end}}`, "./...")
+			cmd.Dir = filepath.Join(root, p.Path)
+			out, err := cmd.Output()
+			if err != nil {
+				return
+			}
+			for _, line := range strings.Split(string(out), "\n") {
+				f := strings.Fields(line)
+				for _, imp := range f[min(1, len(f)):] {
+					if imp == importPath {
+						// repo-relative directory: shorter than the import path, and openable
+						d := filepath.ToSlash(filepath.Join(p.Path, strings.TrimPrefix(strings.TrimPrefix(f[0], pMod), "/")))
+						mu.Lock()
+						byModule[p.Path] = append(byModule[p.Path], d)
+						mu.Unlock()
+						break
+					}
+				}
+			}
+		}(p)
+	}
+	wg.Wait()
+	for m := range byModule {
+		sort.Strings(byModule[m])
+	}
+	return importPath, byModule, true
 }

@@ -4,8 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/antigravity/monoflow/pkg/graph"
+	"github.com/antigravity/monoflow/pkg/verify"
 )
 
 func handleGraph(rootDir string) {
@@ -62,16 +65,38 @@ func handleGraph(rootDir string) {
 			fmt.Printf(`{"error": "package '%s' not found (use a name from 'monoflow graph' or a path inside a package)"}`+"\n", pkgName)
 			os.Exit(1)
 		}
-		data, _ := json.MarshalIndent(map[string]any{
-			"package":               pkg.Name,
-			"path":                  pkg.Path,
-			"language":              pkg.Language,
-			"upstream_dependencies": g.GetUpstream(pkg.Name),
-			"pinned_dependencies":   pkg.PinnedDependencies,
-			"downstream_dependents": g.GetDownstream(pkg.Name),
-			"transitive_dependents": g.GetTransitiveDownstream(pkg.Name),
-			"pinned_dependents":     pinnedDependents(g, pkg.Name),
-		}, "", "  ")
+		out := map[string]any{
+			"package":           pkg.Name,
+			"path":              pkg.Path,
+			"depends_on":        g.GetUpstream(pkg.Name),
+			"dependents":        len(g.GetTransitiveDownstream(pkg.Name)),
+			"direct_dependents": g.GetDownstream(pkg.Name),
+		}
+		if len(pkg.PinnedDependencies) > 0 {
+			out["pinned_dependencies"] = pkg.PinnedDependencies
+		}
+		if pinned := pinnedDependents(g, pkg.Name); len(pinned) > 0 {
+			out["pinned_dependents"] = pinned
+		}
+		// For a Go package directory: who imports it, package by package, across all modules
+		// (what agents otherwise grep the whole repo for).
+		if pkg.Language == graph.LangGo {
+			dir := strings.TrimPrefix(filepath.ToSlash(filepath.Clean(pkgName)), "./")
+			if fi, err := os.Stat(filepath.Join(rootDir, dir)); err != nil || !fi.IsDir() {
+				dir = pkg.Path
+			}
+			if imp, byModule, ok := verify.GoImporters(rootDir, g, dir); ok {
+				n := 0
+				for _, v := range byModule {
+					n += len(v)
+				}
+				out["go_package"] = imp
+				out["imported_by"] = byModule // module dir -> packages importing it (code or tests)
+				out["imported_by_count"] = n
+				delete(out, "direct_dependents")
+			}
+		}
+		data, _ := json.MarshalIndent(out, "", "  ")
 		fmt.Println(string(data))
 
 	case "impact":
