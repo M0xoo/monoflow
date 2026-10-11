@@ -72,10 +72,8 @@ func maybeVerifyInBackground(root string) {
 		return
 	}
 	dir := specDir(root)
-	for _, ext := range []string{".out", ".pid"} {
-		if _, err := os.Stat(filepath.Join(dir, key+ext)); err == nil {
-			return // done or running for this state
-		}
+	if _, err := os.Stat(filepath.Join(dir, key+".out")); err == nil || specRunAlive(dir, key) {
+		return // done or running for this state
 	}
 	_ = os.MkdirAll(dir, 0755)
 	stopOtherSpecRuns(root, "") // a run for an older state is obsolete
@@ -105,13 +103,8 @@ func speculatedResult(root string, timeout time.Duration) (string, bool) {
 		return "", false
 	}
 	dir := specDir(root)
-	pid := filepath.Join(dir, key+".pid")
 	deadline := time.Now().Add(timeout)
-	for {
-		_, running := os.Stat(pid)
-		if running != nil {
-			break
-		}
+	for specRunAlive(dir, key) {
 		if time.Now().After(deadline) {
 			return "", false
 		}
@@ -122,6 +115,22 @@ func speculatedResult(root string, timeout time.Duration) (string, bool) {
 		return "", false
 	}
 	return string(data), true
+}
+
+// specRunAlive reports whether a background run for key is in progress. A pid file left by a
+// run that was killed is removed: waiting on it would block verify for nothing.
+func specRunAlive(dir, key string) bool {
+	pidFile := filepath.Join(dir, key+".pid")
+	data, err := os.ReadFile(pidFile)
+	if err != nil {
+		return false
+	}
+	if pid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && processAlive(pid) {
+		return true
+	}
+	_ = os.Remove(pidFile)
+	_ = os.Remove(filepath.Join(dir, key+".tmp"))
+	return false
 }
 
 // finishRecord, in a background run, files its output (written to <key>.tmp) under the state

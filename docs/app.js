@@ -2,6 +2,8 @@
  * MonoFlow site: theme toggle, copy buttons, output tabs, command filter.
  */
 
+document.documentElement.classList.add('js');
+
 document.addEventListener('DOMContentLoaded', () => {
   initTheme();
   initCopy();
@@ -37,7 +39,8 @@ function initCopy() {
         btn.textContent = 'Copied';
         setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
       } catch (err) {
-        console.error('Copy failed:', err);
+        btn.textContent = 'Select and copy';
+        setTimeout(() => { btn.textContent = 'Copy'; }, 2500);
       }
     });
   });
@@ -79,5 +82,7 @@ function initFilter() {
       if (match) groupHasMatch = true;
     });
     finishGroup();
+    const empty = document.getElementById('cmd-empty');
+    if (empty) empty.hidden = q === '' || [...table.querySelectorAll('tbody tr:not(.grp)')].some(r => !r.hidden);
   });
 }

@@ -170,7 +170,7 @@ Usage:
   monoflow graph [query|impact]       Query upstream/downstream dependencies & impact
   monoflow checkpoint [save|revert]   Snapshot / restore the working tree (~50-100ms, outside git history)
   monoflow worktree [create|sync|gc]  Per-agent worktrees on agent/<id> branches, sparse package projection
-  monoflow verify [--affected|--proof] Typecheck+lint+test changed packages and dependents (cached, compact JSON)
+  monoflow verify [--affected|--proof] Typecheck+lint+test changed packages and dependents (cached; text, --json for scripts)
   monoflow outer [start|status|wait]  Async outer loop: transitive matrix & remote promotion barrier
   monoflow push [remote] [branch]     Fire-and-forget push with background autonomous CI watcher
   monoflow sync [remote] [branch]     Fast remote sync (ff-only or rebase) keeping sparse subset
@@ -189,7 +189,7 @@ Usage:
   monoflow pr [create|list|view|status|review|test|local|merge] Full agent-native PR suite with affected packages
   monoflow quarantine [list|add]      Manage flaky test quarantine
   monoflow version [list|bump|apply|check] SemVer package versioning, changesets & cascade
-  monoflow hook [pretooluse|check]    Agent harness hook: redirect raw build/test/git commands to MonoFlow
+  monoflow hook [pretooluse|check|deliver|stop] Agent harness hooks: redirect raw commands, deliver events, background verify
   monoflow help [command]             Show this help (also --help, -h)`)
 }
 
@@ -230,7 +230,9 @@ One call replaces commit + pr create. Afterwards end your turn: CI results are d
   verify --update-snapshots | -u      Rewrite mismatched vitest/jest snapshots (when the new values are intended)
   verify --base=<ref>                 Changes since the merge-base with <ref> (CI: the PR base)
   verify --strict                     Also block on failures that pre-exist on the base branch
-  verify --proof=<task-id>            Verify a Proof-of-Work receipt`,
+  verify --proof=<task-id>            Verify a Proof-of-Work receipt
+In a worktree from 'start', verify already runs in the background once your edits settle;
+'monoflow verify' then prints that result (or waits for it) when the files are unchanged.`,
 	"worktree": `  worktree create <agent-id> --packages=<p1,p2> [--deps=<strategy>] [--isolated-deps]
                                       Isolated worktree on branch agent/<agent-id>
   worktree list                       List registered worktrees

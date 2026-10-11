@@ -61,7 +61,8 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 	opts.KeepUntracked = recording
 	// Plain verify: the background run started at the agent's last edit may already have the
 	// answer for exactly this state of the tree (see speculate.go).
-	if !recording && len(os.Args) == 2 && !jsonMode() {
+	plain := len(os.Args) == 2 || (len(os.Args) == 3 && os.Args[2] == "--affected")
+	if !recording && plain && !jsonMode() {
 		if out, ok := speculatedResult(rootDir, 15*time.Minute); ok {
 			fmt.Print(out)
 			if !strings.HasPrefix(out, "PASS") {

@@ -173,3 +173,32 @@ What got it there (each from a transcript, in order):
 - `ship` returns at once (push + PR once local CI is green, SHIP_FAILED otherwise); on main it
   moves the work to its own branch and worktree itself
 - compact help (0.6 KB) and agent guide (1.4 KB, first in AGENTS.md)
+
+## trpc (pnpm + Turborepo, 11 packages), Claude Haiku (`tasks/trpc-validation-422.txt`)
+Input validation errors become 422 instead of 400: one line in `packages/server`, then tests,
+inline snapshots and docs across server, client, openapi and adapters. Same setup as the Haiku
+otel runs (one run at a time, fresh copy each). The plain arm has the repo's own Turborepo.
+
+| | runs | time (s) | tool calls | tokens |
+|---|---|---|---|---|
+| plain git + Turbo (B-1, B-2) | 2 | 345 / 237 | 32 / 36 | 79k / 87k |
+| MonoFlow (A-1..A-4) | 4 | 539 / 586 / 470 / 377 | 24 / 41 / 28 / 34 | 76k / 106k / 83k / 91k |
+| MonoFlow (A-5, A-6) | 2 | 610* / 398 | 23 / 27 | 87k / 77k |
+
+\* A-5's time is contaminated (heavy runs of mine on the same machine during it).
+
+Reading: **MonoFlow loses here.** It is slower and does not save tokens: plain git plus Turbo
+already has a good affected-task runner, and MonoFlow's verify ran ~160 s cold on trpc (vitest +
+the openapi CLI tests). All runs that pushed were green; A-6 never pushed: see below.
+
+Bugs found by these runs (fixed):
+- Worktree tests failed under Vite's `fs.allow` (node_modules symlinked into the main checkout) and
+  the baseline hid it as "preexisting": worktrees and CI checkouts now get a real offline
+  `pnpm install`.
+- Playwright `test-results/` was committed by ship: checks now remove files they create.
+- `ship` committed `.agents/deps-installing`, so every local-CI checkout of that commit waited
+  10 minutes for an install that was not running (the 931 s outer loop; A-6 never pushed). The
+  marker now holds the installer's pid and is never committed.
+
+Not yet measured: the build with speculative verify (verify runs in the background once the
+agent's edits settle) and the TanStack Query (Nx) comparison.

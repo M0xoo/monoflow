@@ -40,7 +40,7 @@ func handleHook() {
 			os.Exit(2)
 		}
 	default:
-		fmt.Println(`{"error": "usage: monoflow hook pretooluse | check"}`)
+		printRaw(`{"error": "usage: monoflow hook pretooluse | check | deliver | stop"}`)
 		os.Exit(1)
 	}
 }
@@ -215,6 +215,11 @@ func shipProcessAlive(marker string) bool {
 	if err != nil {
 		return false
 	}
+	return processAlive(pid)
+}
+
+// processAlive reports whether pid is a running process.
+func processAlive(pid int) bool {
 	p, err := os.FindProcess(pid)
 	return err == nil && p.Signal(syscall.Signal(0)) == nil
 }

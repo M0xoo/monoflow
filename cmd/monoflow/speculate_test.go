@@ -73,6 +73,14 @@ func TestSpeculativeVerify(t *testing.T) {
 		t.Fatalf("verify should print the stored result\nstored: %s\ngot: %s", stored, got)
 	}
 
+	// A pid file left by a killed run must not make verify wait.
+	_ = os.Remove(outFile)
+	_ = os.WriteFile(filepath.Join(repo, ".agents", "verify", key+".pid"), []byte("999999"), 0644)
+	start := time.Now()
+	if got := run(bin, "verify", "--affected"); !strings.HasPrefix(got, "FAIL") || time.Since(start) > 60*time.Second {
+		t.Fatalf("verify with a stale pid file should run normally, got %s after %v", got, time.Since(start))
+	}
+
 	// A different state: the stored result does not apply.
 	write("a/a.go", "package a\n\nfunc One() int { return 1 }\n")
 	if got := run(bin, "verify"); !strings.HasPrefix(got, "PASS") {
