@@ -112,3 +112,16 @@ func TestPreexistingLintFailureDoesNotHideNewTestFailure(t *testing.T) {
 		t.Fatalf("only preexisting lint debt: should pass: %+v", res.Results[0])
 	}
 }
+
+// A package with one old (flaky) failure and new ones blocks on the new ones only.
+func TestSplitByBaselineKeepsOnlyNewFailures(t *testing.T) {
+	base := " FAIL  |@trpc/tests| server/memory.test.ts > frees data\nAssertionError: expected [] to be undefined\n ❯ server/memory.test.ts:58:3\n"
+	errs := []DiagnosticError{
+		{File: "server/memory.test.ts", Line: 58, Code: "test-failure", Message: "[frees data] AssertionError: expected [] to be undefined"},
+		{File: "server/errors.test.ts", Line: 96, Code: "test-failure", Message: "[input error] Error: Snapshot mismatched"},
+	}
+	fresh, old := splitByBaseline(errs, base, "")
+	if len(fresh) != 1 || fresh[0].Line != 96 || len(old) != 1 || old[0].Line != 58 {
+		t.Fatalf("fresh=%+v old=%+v", fresh, old)
+	}
+}

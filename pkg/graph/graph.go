@@ -38,6 +38,11 @@ type PackageNode struct {
 	LintCmd            string   `json:"lint_cmd,omitempty"`
 	TypecheckCmd       string   `json:"typecheck_cmd,omitempty"`
 	Visibility         string   `json:"visibility,omitempty"` // "public" or "internal"
+	// PrepareCmd builds what this package's checks need from its dependencies (Nx/Turborepo
+	// "dependsOn: ^build"), through the repo's task runner. The runner appends the upstream
+	// packages and runs it once for all packages about to be checked, before the checks run
+	// in parallel: per-check runners rebuilt the same outputs concurrently and raced.
+	PrepareCmd string `json:"prepare_cmd,omitempty"`
 }
 
 // Config represents .agents/monoflow.config.json
@@ -402,6 +407,16 @@ func (g *DependencyGraph) SparseCheckoutPaths(targetName string) ([]string, erro
 
 	sort.Strings(paths)
 	return paths, nil
+}
+
+// GetTransitiveUpstream returns every package name the given package depends on, directly or not.
+func (g *DependencyGraph) GetTransitiveUpstream(name string) []string {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	visited := make(map[string]bool)
+	g.traverseUpstream(name, visited)
+	delete(visited, name)
+	return toSortedList(visited)
 }
 
 func (g *DependencyGraph) traverseUpstream(current string, visited map[string]bool) {

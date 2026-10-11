@@ -766,11 +766,15 @@ func (om *OuterLoopManager) checkoutCommit(job *OuterJob) (string, func(), error
 			}
 		}
 	}
-	for _, d := range []string{"node_modules", ".venv", "target", ".pnpm-store"} {
+	for _, d := range []string{".venv", "target", ".pnpm-store"} {
 		if _, err := os.Stat(filepath.Join(om.RootDir, d)); err == nil {
 			_ = os.Symlink(filepath.Join(om.RootDir, d), filepath.Join(dir, d))
 		}
 	}
+	// JS workspaces need every package's node_modules, with workspace packages resolving to
+	// this checkout (not the root's code): linking only the root node_modules left pnpm
+	// packages unable to resolve their dependencies.
+	graph.OverlayNodeModules(om.RootDir, dir)
 	return dir, cleanup, nil
 }
 

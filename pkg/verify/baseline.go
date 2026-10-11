@@ -32,9 +32,22 @@ func (r *Runner) classifyPreexisting(g *graph.DependencyGraph, results []TargetR
 	if baseDir == "" {
 		return
 	}
+	// The baseline needs the same dependency builds as the checks being compared (memoised).
+	var failedPkgs []*graph.PackageNode
+	for _, i := range failed {
+		if pkg, ok := g.GetPackage(results[i].Target); ok {
+			failedPkgs = append(failedPkgs, pkg)
+		}
+	}
+	for _, c := range PrepareCommands(g, failedPkgs) {
+		runBaselineCheck(baseDir, baseDir, c)
+	}
 	var wg sync.WaitGroup
 	for _, i := range failed {
 		pkg, ok := g.GetPackage(results[i].Target)
+		if results[i].Target == PrepareTarget {
+			pkg, ok = &graph.PackageNode{Path: "."}, true // a failed dependency build: compare at the root
+		}
 		if !ok {
 			continue
 		}
@@ -49,7 +62,10 @@ func (r *Runner) classifyPreexisting(g *graph.DependencyGraph, results []TargetR
 			if !baseFailed {
 				return
 			}
-			if !errorsInBaseline(res.Errors, baseOut) {
+			base := unroot(unroot(baseOut, baseDir), r.RootDir) // its dependencies link into the root
+			if !errorsInBaseline(res.Errors, base, r.RootDir) {
+				// Some failures are old, some new: block on the new ones only, note the rest.
+				res.Errors, res.Preexisting = splitByBaseline(res.Errors, base, r.RootDir)
 				return
 			}
 			res.Status = "passed"
@@ -78,11 +94,18 @@ func (r *Runner) runRemaining(res *TargetResult, baseDir, basePkgDir string) {
 		if len(errs) == 0 {
 			errs = []DiagnosticError{{File: ".", Line: 1, Code: "execution_failure", Message: CompactFailure(StripANSI(string(out)))}}
 		}
-		if baseOut, baseFailed := runBaselineCheck(baseDir, basePkgDir, c); baseFailed && errorsInBaseline(errs, baseOut) {
+		baseOut, baseFailed := runBaselineCheck(baseDir, basePkgDir, c)
+		base := unroot(unroot(baseOut, baseDir), r.RootDir) // its dependencies link into the root
+		if baseFailed && errorsInBaseline(errs, base, r.RootDir) {
 			res.Preexisting = append(res.Preexisting, errs...)
 			continue
 		}
+		var old []DiagnosticError
+		if baseFailed {
+			errs, old = splitByBaseline(errs, base, r.RootDir)
+		}
 		res.Status, res.Errors, res.CommandRun = "failed", errs, c
+		res.Preexisting = append(res.Preexisting, old...)
 		return
 	}
 }
@@ -117,6 +140,16 @@ func (r *Runner) baselineDir(baseRef string) string {
 	}
 	dir := filepath.Join(r.cacheMgr.LocalDir, "baselines", mb)
 	if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+		if _, err := os.Lstat(filepath.Join(dir, "node_modules")); err != nil {
+			// Made before dependencies were linked: link them and drop results memoised without them.
+			graph.OverlayNodeModules(r.RootDir, dir)
+			if _, err := os.Lstat(filepath.Join(dir, "node_modules")); err == nil {
+				memos, _ := filepath.Glob(filepath.Join(dir, ".monoflow-baseline-*"))
+				for _, m := range memos {
+					_ = os.Remove(m)
+				}
+			}
+		}
 		return dir
 	}
 	_ = os.MkdirAll(filepath.Dir(dir), 0755)
@@ -125,6 +158,9 @@ func (r *Runner) baselineDir(baseRef string) string {
 		_ = out
 		return ""
 	}
+	// Without dependencies every JS check fails differently on the baseline, so old failures
+	// all looked new (trpc: 40 of 48 packages "failed" on a one-line change).
+	graph.OverlayNodeModules(r.RootDir, dir)
 	return dir
 }
 
@@ -143,7 +179,9 @@ func worktreeDirty(dir string) bool {
 // command+package in the baseline (the baseline commit never changes).
 func runBaselineCheck(baseDir, dir, cmdStr string) (string, bool) {
 	sum := sha256.Sum256([]byte(dir + "\x00" + cmdStr))
-	memo := filepath.Join(baseDir, ".monoflow-baseline-"+hex.EncodeToString(sum[:8])+".json")
+	// v2: full output (v1 kept only the last 1500 chars, so packages with many preexisting
+	// errors, e.g. 610 type errors in a trpc example, never matched and blocked as "new").
+	memo := filepath.Join(baseDir, ".monoflow-baseline-v2-"+hex.EncodeToString(sum[:8])+".json")
 	var rec struct {
 		Output string `json:"output"`
 		Failed bool   `json:"failed"`
@@ -154,14 +192,19 @@ func runBaselineCheck(baseDir, dir, cmdStr string) (string, bool) {
 	cmd := exec.Command("sh", "-c", cmdStr)
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
-	rec.Output, rec.Failed = CompactFailure(StripANSI(string(out))), err != nil
+	rec.Output, rec.Failed = StripANSI(string(out)), err != nil
+	if len(rec.Output) > 4<<20 {
+		rec.Output = rec.Output[len(rec.Output)-4<<20:]
+	}
 	if data, err := json.Marshal(rec); err == nil {
 		_ = os.WriteFile(memo, data, 0644)
 	}
 	return rec.Output, rec.Failed
 }
 
-var volatile = regexp.MustCompile(`\(\d+(\.\d+)?m?s\)|\d+(\.\d+)?m?s\b|0x[0-9a-f]+|/[^\s:]*/(baselines/[0-9a-f]+|worktrees/[^/\s]+)/`)
+// volatile matches run-specific text: durations, clock times, timestamps and ids (10+ digits,
+// e.g. tsx's "index.mjs?1791714506271"), addresses and checkout paths.
+var volatile = regexp.MustCompile(`\(\d+(\.\d+)?m?s\)|\d+(\.\d+)?m?s\b|\b\d{1,2}:\d{2}:\d{2}\b|\d{10,}|0x[0-9a-f]+|/[^\s:]*/(baselines/[0-9a-f]+|worktrees/[^/\s]+)/`)
 
 // failureLinesSubset reports whether every meaningful failing line of current also
 // appears in base (after removing timings, addresses and checkout paths).
@@ -172,7 +215,11 @@ func failureLinesSubset(current, base string) bool {
 		baseSet[norm(l)] = true
 	}
 	baseText := norm(base)
-	for _, l := range strings.Split(current, "\n") {
+	lines := strings.Split(current, "\n")
+	if strings.HasPrefix(current, "…") && len(lines) > 1 {
+		lines = lines[1:] // CompactFailure cut this line mid-way: it can't match a whole line
+	}
+	for _, l := range lines {
 		n := norm(l)
 		if n == "" || n == "FAIL" || strings.HasPrefix(n, "exit status") || strings.HasPrefix(n, "go: downloading") {
 			continue
@@ -186,9 +233,57 @@ func failureLinesSubset(current, base string) bool {
 
 // errorsInBaseline reports whether every current error also occurs in the baseline output:
 // raw output lines for unstructured failures; file name and message for diagnostics.
-func errorsInBaseline(errs []DiagnosticError, base string) bool {
+// unroot replaces a checkout's absolute path (as given and symlink-resolved) with a placeholder,
+// so messages naming files by absolute path (tsc: import("/repo/node_modules/...")) compare
+// equal between the working checkout and the baseline checkout.
+func unroot(s, root string) string {
+	if root == "" {
+		return s
+	}
+	paths := []string{root}
+	if real, err := filepath.EvalSymlinks(root); err == nil && real != root {
+		paths = append(paths, real)
+	}
+	for _, p := range paths {
+		s = strings.ReplaceAll(s, p, "<root>")
+		if q, ok := strings.CutPrefix(p, "/private"); ok { // macOS /tmp -> /private/tmp
+			s = strings.ReplaceAll(s, q, "<root>")
+		}
+	}
+	return s
+}
+
+// splitByBaseline separates failures that are new from those the baseline also has.
+// Unstructured failures cannot be split: they stay new.
+func splitByBaseline(errs []DiagnosticError, base, root string) (fresh, old []DiagnosticError) {
+	for _, e := range errs {
+		if e.Code != "execution_failure" && errorsInBaseline([]DiagnosticError{e}, base, root) {
+			old = append(old, e)
+		} else {
+			fresh = append(fresh, e)
+		}
+	}
+	if len(fresh) == 0 { // cannot happen when the whole set did not match; keep it blocking
+		return errs, nil
+	}
+	return fresh, old
+}
+
+func errorsInBaseline(errs []DiagnosticError, base, root string) bool {
+	if root != "" {
+		cur := make([]DiagnosticError, len(errs))
+		for i, e := range errs {
+			e.Message = unroot(e.Message, root)
+			e.File = unroot(e.File, root)
+			cur[i] = e
+		}
+		errs = cur
+	}
 	norm := func(s string) string { return strings.TrimSpace(volatile.ReplaceAllString(s, "")) }
 	baseText := norm(base)
+	// Diagnostics assembled from several lines (test name + error + expected/received) never
+	// appear verbatim in raw output: compare them with the baseline's parsed diagnostics too.
+	var baseDiags map[string]bool
 	for _, e := range errs {
 		if e.Code == "execution_failure" {
 			if !failureLinesSubset(e.Message, base) {
@@ -196,7 +291,16 @@ func errorsInBaseline(errs []DiagnosticError, base string) bool {
 			}
 			continue
 		}
-		if !strings.Contains(baseText, filepath.Base(e.File)) || !strings.Contains(baseText, norm(e.Message)) {
+		if strings.Contains(baseText, filepath.Base(e.File)) && strings.Contains(baseText, norm(e.Message)) {
+			continue
+		}
+		if baseDiags == nil {
+			baseDiags = map[string]bool{}
+			for _, b := range ParseDiagnostics(base) {
+				baseDiags[filepath.Base(b.File)+"\x00"+norm(b.Message)] = true
+			}
+		}
+		if !baseDiags[filepath.Base(e.File)+"\x00"+norm(e.Message)] {
 			return false
 		}
 	}

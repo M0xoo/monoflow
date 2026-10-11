@@ -154,3 +154,24 @@ func TestVerifyCachingFastIterativeLoop(t *testing.T) {
 		t.Errorf("res4 expected Cached=false after code modification")
 	}
 }
+
+// Dependency builds are merged into one runner call per command naming every upstream package.
+func TestPrepareCommandsMergeUpstreams(t *testing.T) {
+	g := graph.New(t.TempDir())
+	turbo := "pnpm exec turbo run build --output-logs=errors-only --log-prefix=none"
+	g.AddPackage(&graph.PackageNode{Name: "@t/core", Path: "packages/core"})
+	g.AddPackage(&graph.PackageNode{Name: "@t/server", Path: "packages/server", Dependencies: []string{"@t/core"}, PrepareCmd: turbo})
+	g.AddPackage(&graph.PackageNode{Name: "@t/client", Path: "packages/client", Dependencies: []string{"@t/server"}, PrepareCmd: turbo})
+	g.AddPackage(&graph.PackageNode{Name: "@t/leaf", Path: "packages/leaf", PrepareCmd: turbo}) // no upstream
+	g.RebuildEdges()
+	var pkgs []*graph.PackageNode
+	for _, n := range []string{"@t/server", "@t/client", "@t/leaf"} {
+		p, _ := g.GetPackage(n)
+		pkgs = append(pkgs, p)
+	}
+	got := PrepareCommands(g, pkgs)
+	want := turbo + " --filter=@t/core --filter=@t/server"
+	if len(got) != 1 || got[0] != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}

@@ -70,3 +70,35 @@ func TestResolveGoTestFiles(t *testing.T) {
 		t.Fatalf("bad files: %+v", errs)
 	}
 }
+
+func TestParseDiagnosticsVitestFailure(t *testing.T) {
+	out := "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯\n\n" +
+		" FAIL  |@trpc/server| src/unstable-core-do-not-import/procedureBuilder.test.ts > concat() > basic\n" +
+		"AssertionError: expected 'UNPROCESSABLE_CONTENT' to be 'BAD_REQUEST' // Object.is equality\n\n" +
+		"Expected: \"BAD_REQUEST\"\nReceived: \"UNPROCESSABLE_CONTENT\"\n\n" +
+		" ❯ src/unstable-core-do-not-import/procedureBuilder.test.ts:285:22\n" +
+		"    283|       TRPCError,\n    285|     expect(err.code).toBe('BAD_REQUEST');\n" +
+		"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯\n\n Test Files  1 failed | 18 passed (19)\n"
+	errs := ParseDiagnostics(out)
+	if len(errs) != 1 {
+		t.Fatalf("want 1, got %d: %+v", len(errs), errs)
+	}
+	e := errs[0]
+	if e.File != "src/unstable-core-do-not-import/procedureBuilder.test.ts" || e.Line != 285 || e.Col != 22 {
+		t.Fatalf("bad location: %+v", e)
+	}
+	want := `[concat() > basic] AssertionError: expected 'UNPROCESSABLE_CONTENT' to be 'BAD_REQUEST' // Object.is equality; Expected: "BAD_REQUEST"; Received: "UNPROCESSABLE_CONTENT"`
+	if e.Message != want {
+		t.Fatalf("message:\n got %q\nwant %q", e.Message, want)
+	}
+}
+
+func TestParseDiagnosticsJestFailure(t *testing.T) {
+	out := "  ● math › adds\n\n    expect(received).toBe(expected) // Object.is equality\n\n    Expected: 3\n    Received: 4\n\n" +
+		"      at Object.<anonymous> (src/math.test.ts:7:19)\n"
+	errs := ParseDiagnostics(out)
+	if len(errs) != 1 || errs[0].File != "src/math.test.ts" || errs[0].Line != 7 ||
+		errs[0].Message != "[math › adds] expect(received).toBe(expected) // Object.is equality; Expected: 3; Received: 4" {
+		t.Fatalf("got %+v", errs)
+	}
+}

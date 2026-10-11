@@ -30,7 +30,7 @@ func StripANSI(input string) string {
 
 	// Remove carriage returns and spinner artifacts
 	cleaned = strings.ReplaceAll(cleaned, "\r", "\n")
-	spinnerRegex := regexp.MustCompile(`[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏✔✖●○◐◑◒◓]\s*`)
+	spinnerRegex := regexp.MustCompile(`[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏✔✖○◐◑◒◓]\s*`)
 	cleaned = spinnerRegex.ReplaceAllString(cleaned, "")
 
 	return cleaned
@@ -56,6 +56,12 @@ func ParseDiagnostics(rawOutput string) []DiagnosticError {
 	goFailRegex := regexp.MustCompile(`^--- FAIL:\s+(\S+)`)
 	goPkgFailRegex := regexp.MustCompile(`^FAIL\s+(\S+)\s+(\[|[\d.]+s)`)
 	pkgStart := 0 // first diagnostic not yet tied to a go package
+	// vitest: " FAIL  |proj| src/a.test.ts > suite > test", the error, " ❯ src/a.test.ts:285:22".
+	// jest:   "● suite › test", the error, "at Object.<anonymous> (src/a.test.ts:12:5)".
+	vitestFailRegex := regexp.MustCompile(`^FAIL\s+(?:\|[^|]+\|\s+)?(\S+\.(?:test|spec)\.[cm]?[jt]sx?)\s+>\s+(.+)$`)
+	jestFailRegex := regexp.MustCompile(`^● (.+ › .+)$`)
+	jsLocRegex := regexp.MustCompile(`(?:❯\s+|\()([^\s()]+\.[cm]?[jt]sx?):(\d+):(\d+)\)?$`)
+	jsTest, jsHasMsg := -1, false // diagnostic being filled from following lines
 
 	// 3. Rust: error[E0308]: message ... --> path/file.rs:28:14
 	rustLocRegex := regexp.MustCompile(`^\s*-->\s*(.+?\.rs):(\d+):(\d+)`)
@@ -129,6 +135,41 @@ func ParseDiagnostics(rawOutput string) []DiagnosticError {
 				Code:    "go-error",
 				Message: strings.TrimSpace(matches[4]),
 			})
+			continue
+		}
+
+		if jsTest >= 0 {
+			d := &errors[jsTest]
+			switch {
+			case strings.HasPrefix(trimmed, "⎯") || vitestFailRegex.MatchString(trimmed) || jestFailRegex.MatchString(trimmed):
+				jsTest = -1 // next failure or end of this one: handled below
+			default:
+				if m := jsLocRegex.FindStringSubmatch(trimmed); m != nil {
+					if d.Line == 0 && !strings.Contains(m[1], "node_modules") {
+						d.File = strings.TrimPrefix(m[1], "./")
+						d.Line, _ = strconv.Atoi(m[2])
+						d.Col, _ = strconv.Atoi(m[3])
+					}
+					continue
+				}
+				switch {
+				case !jsHasMsg && !strings.HasPrefix(trimmed, "at "):
+					d.Message += trimmed // the error line ("AssertionError: expected …")
+					jsHasMsg = true
+				case jsHasMsg && (strings.HasPrefix(trimmed, "Expected") || strings.HasPrefix(trimmed, "Received")) && len(trimmed) <= 200:
+					d.Message += "; " + trimmed
+				}
+				continue
+			}
+		}
+		if m := vitestFailRegex.FindStringSubmatch(trimmed); m != nil {
+			errors = append(errors, DiagnosticError{File: m[1], Code: "test-failure", Message: "[" + m[2] + "] "})
+			jsTest, jsHasMsg = len(errors)-1, false
+			continue
+		}
+		if m := jestFailRegex.FindStringSubmatch(trimmed); m != nil {
+			errors = append(errors, DiagnosticError{Code: "test-failure", Message: "[" + m[1] + "] "})
+			jsTest, jsHasMsg = len(errors)-1, false
 			continue
 		}
 
