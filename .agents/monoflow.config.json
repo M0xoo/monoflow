@@ -8,7 +8,7 @@
       "language": "go",
       "version": "1.0.0",
       "dependencies": [],
-      "test_cmd": "go test ./pkg/... ./cmd/...",
+      "test_cmd": "go test -v ./pkg/...",
       "typecheck_cmd": "go vet ./pkg/... ./cmd/...",
       "lint_cmd": "go vet ./pkg/..."
     },

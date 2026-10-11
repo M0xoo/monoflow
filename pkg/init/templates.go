@@ -10,6 +10,8 @@ Run as ` + "`" + `./bin/monoflow` + "`" + `. Four calls take a change to a PR:
 3. ` + "`" + `monoflow verify` + "`" + `: builds, lints and tests every package your change can affect (what CI runs for it)
    and lists each break as ` + "`" + `file:line` + "`" + ` with the failing line and test. Fix those, rerun until it passes.
    Nothing else to run: not go test / npm test / tsc / ` + "`" + `verify --all` + "`" + `, no grepping for affected tests.
+   Run it in the foreground (it can take a minute or two). Never poll a log for it: running ` + "`" + `verify` + "`" + ` again
+   waits for the run in progress, or prints the last result at once if the files did not change.
 4. ` + "`" + `monoflow ship -m "<msg>"` + "`" + `: commits and returns; once local CI is green it pushes and opens the PR.
    End your turn; results are delivered to you (on SHIP_FAILED / OUTER_LOOP_REGRESSION: fix, verify, ship).
 

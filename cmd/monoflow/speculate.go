@@ -117,21 +117,55 @@ func speculatedResult(root string, timeout time.Duration) (string, bool) {
 	return string(data), true
 }
 
-// specRunAlive reports whether a background run for key is in progress. A pid file left by a
-// run that was killed is removed: waiting on it would block verify for nothing.
+// specRunAlive reports whether a verify for key is in progress: a background run (<key>.pid)
+// or an agent's own verify (<key>.run). A marker left by a run that was killed is removed:
+// waiting on it would block verify for nothing.
 func specRunAlive(dir, key string) bool {
-	pidFile := filepath.Join(dir, key+".pid")
-	data, err := os.ReadFile(pidFile)
-	if err != nil {
-		return false
+	alive := false
+	for _, ext := range []string{".pid", ".run"} {
+		marker := filepath.Join(dir, key+ext)
+		data, err := os.ReadFile(marker)
+		if err != nil {
+			continue
+		}
+		if pid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && processAlive(pid) {
+			alive = true
+			continue
+		}
+		_ = os.Remove(marker)
+		if ext == ".pid" {
+			_ = os.Remove(filepath.Join(dir, key+".tmp"))
+		}
 	}
-	if pid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && processAlive(pid) {
-		return true
-	}
-	_ = os.Remove(pidFile)
-	_ = os.Remove(filepath.Join(dir, key+".tmp"))
-	return false
+	return alive
 }
+
+// beginForeground marks the agent's own verify as running for the current tree state, so a
+// second verify on the same files waits for it instead of starting over, and returns done,
+// which stores the output under that state (if the files did not change meanwhile): running
+// verify again on unchanged files then prints it at once. Agents that background a long
+// verify and lose track of it (a Haiku run looped 9 minutes waiting on a log line) can simply
+// run it again.
+func beginForeground(root string) (done func(out string)) {
+	key := treeStateKey(root)
+	if key == "" {
+		return func(string) {}
+	}
+	dir := specDir(root)
+	_ = os.MkdirAll(dir, 0755)
+	marker := filepath.Join(dir, key+".run")
+	_ = os.WriteFile(marker, []byte(strconv.Itoa(os.Getpid())), 0644)
+	return func(out string) {
+		if out != "" && treeStateKey(root) == key {
+			_ = os.WriteFile(filepath.Join(dir, key+".out"), []byte(out), 0644)
+			pruneSpecResults(dir, 20)
+		}
+		_ = os.Remove(marker)
+	}
+}
+
+// reusedNote ends a stored result printed again.
+const reusedNote = "reused: same files as the verify that produced this; nothing was re-run\n"
 
 // finishRecord, in a background run, files its output (written to <key>.tmp) under the state
 // key, but only if the tree is still in that state: a result for files that changed mid-run

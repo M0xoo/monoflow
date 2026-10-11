@@ -64,13 +64,17 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 	plain := len(os.Args) == 2 || (len(os.Args) == 3 && os.Args[2] == "--affected")
 	if !recording && plain && !jsonMode() {
 		if out, ok := speculatedResult(rootDir, 15*time.Minute); ok {
-			fmt.Print(out)
+			fmt.Print(out + reusedNote)
 			if !strings.HasPrefix(out, "PASS") {
 				os.Exit(1)
 			}
 			return
 		}
 		stopOtherSpecRuns(rootDir, "") // obsolete; they would compete for the CPU
+	}
+	storeResult := func(string) {}
+	if !recording && plain && !jsonMode() {
+		storeResult = beginForeground(rootDir)
 	}
 
 	g, err := graph.LoadOrDiscover(rootDir)
@@ -170,7 +174,9 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 	}
 	if !verboseOut && !jsonMode() {
 		rootDirForText = rootDir
-		fmt.Print(verifyText(res, out.(map[string]any)))
+		text := verifyText(res, out.(map[string]any))
+		fmt.Print(text)
+		storeResult(text)
 	} else {
 		printOut(out)
 	}
