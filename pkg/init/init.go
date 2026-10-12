@@ -68,17 +68,29 @@ func InitRepo(targetDir string, binarySrcPath string) (*InitResult, error) {
 		}
 	}
 
-	// 4. Write .agents/monoflow.config.json
+	// 4. Write .agents/monoflow.config.json. Re-running init keeps what the repo set per
+	// package (its verify commands, even ones blanked on purpose) and its verify_exclude; only
+	// new packages and fields the old config lacks (fix_cmd) come from discovery.
+	configPath := filepath.Join(agentsDir, "monoflow.config.json")
+	verifyExclude := graph.RepoVerifyExclude(absTarget, pkgNodes)
+	if data, err := os.ReadFile(configPath); err == nil {
+		var old graph.Config
+		if json.Unmarshal(data, &old) == nil {
+			pkgNodes = mergeConfiguredCommands(pkgNodes, old.Packages)
+			if old.VerifyExclude != nil {
+				verifyExclude = old.VerifyExclude
+			}
+		}
+	}
 	cfg := graph.Config{
 		Version:       "1.0",
 		Packages:      pkgNodes,
-		VerifyExclude: graph.DefaultVerifyExclude(pkgNodes),
+		VerifyExclude: verifyExclude,
 	}
 	cfgData, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return nil, err
 	}
-	configPath := filepath.Join(agentsDir, "monoflow.config.json")
 	if err := os.WriteFile(configPath, cfgData, 0644); err != nil {
 		return nil, err
 	}
@@ -89,10 +101,12 @@ func InitRepo(targetDir string, binarySrcPath string) (*InitResult, error) {
 		return nil, err
 	}
 
-	// Agent instructions: merge a delimited MonoFlow section into AGENTS.md (keeping any
-	// existing project instructions) and point CLAUDE.md at it when the repo has one.
+	// Agent instructions: the same delimited MonoFlow section in AGENTS.md and CLAUDE.md
+	// (created when missing; any existing project instructions are kept after it). Claude Code
+	// loads CLAUDE.md, not AGENTS.md: with only a pointer there, or no CLAUDE.md at all, Claude
+	// sessions started without the guide.
 	_ = mergeSection(filepath.Join(absTarget, "AGENTS.md"), AgentRuleTemplate, true)
-	_ = mergeSection(filepath.Join(absTarget, "CLAUDE.md"), ClaudePointer, false)
+	_ = mergeSection(filepath.Join(absTarget, "CLAUDE.md"), AgentRuleTemplate, true)
 
 	skillPath := filepath.Join(agentsDir, "skills", "monoflow", "SKILL.md")
 	if err := os.WriteFile(skillPath, []byte(AgentSkillTemplate), 0644); err != nil {
@@ -305,12 +319,6 @@ const (
 	sectionEnd   = "<!-- monoflow:end -->"
 )
 
-// ClaudePointer is merged into an existing CLAUDE.md (Claude Code reads CLAUDE.md, not AGENTS.md).
-const ClaudePointer = `## MonoFlow
-This monorepo is governed by MonoFlow; follow the MonoFlow section of AGENTS.md.
-The path is ` + "`monoflow start <task-id>` → edit → `monoflow verify` → `monoflow ship -m \"<msg>\"`" + ` (run as ` + "`./bin/monoflow`" + `).
-`
-
 // mergeSection inserts or replaces the MonoFlow-managed section of a markdown file,
 // leaving everything else untouched. When create is false a missing file is left absent.
 func mergeSection(path, content string, create bool) error {
@@ -376,4 +384,25 @@ func linkRootBinary(root string) {
 		_, _ = f.WriteString("\n# MonoFlow binary link\n/bin/monoflow\n")
 		_ = f.Close()
 	}
+}
+
+// mergeConfiguredCommands keeps the commands an existing config sets for a package (matched by
+// name) over the discovered ones; dependencies and paths come from discovery.
+func mergeConfiguredCommands(discovered, configured []graph.PackageNode) []graph.PackageNode {
+	byName := make(map[string]graph.PackageNode, len(configured))
+	for _, p := range configured {
+		byName[p.Name] = p
+	}
+	for i, p := range discovered {
+		old, ok := byName[p.Name]
+		if !ok {
+			continue
+		}
+		discovered[i].TestCmd, discovered[i].LintCmd, discovered[i].TypecheckCmd = old.TestCmd, old.LintCmd, old.TypecheckCmd
+		discovered[i].PrepareCmd = old.PrepareCmd
+		if old.FixCmd != "" {
+			discovered[i].FixCmd = old.FixCmd
+		}
+	}
+	return discovered
 }

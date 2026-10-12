@@ -17,6 +17,7 @@ import (
 
 	"github.com/antigravity/monoflow/pkg/cache"
 	"github.com/antigravity/monoflow/pkg/checkpoint"
+	"github.com/antigravity/monoflow/pkg/conflict"
 	"github.com/antigravity/monoflow/pkg/events"
 	"github.com/antigravity/monoflow/pkg/graph"
 	"github.com/antigravity/monoflow/pkg/guard"
@@ -336,10 +337,16 @@ func (m *PRManager) Create(opts CreateOptions) (*PRMetadata, error) {
 		if outerJob != nil {
 			_, _ = proofs.Publish(m.RootDir, remote, headSHA, cache.NewManager(m.RootDir, cache.DefaultConfig(m.RootDir)), verify.PassedKeys(outerJob.TargetResults))
 		}
+		// Never push a branch that conflicts with the base (checked now: it may have moved
+		// while local CI ran).
+		if err := conflict.GuardPush(m.RootDir, headBranch, headSHA); err != nil {
+			return nil, err
+		}
 		cmdPush := exec.Command("git", "push", "-u", remote, headBranch+":"+headBranch)
 		cmdPush.Dir = m.RootDir
 		if out, err := cmdPush.CombinedOutput(); err == nil {
 			pushed = true
+			conflict.StartWatch(m.RootDir, headBranch)
 		} else {
 			pushErr = strings.TrimSpace(string(out))
 		}

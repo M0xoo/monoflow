@@ -37,7 +37,11 @@ type PackageNode struct {
 	TestCmd            string   `json:"test_cmd,omitempty"`
 	LintCmd            string   `json:"lint_cmd,omitempty"`
 	TypecheckCmd       string   `json:"typecheck_cmd,omitempty"`
-	Visibility         string   `json:"visibility,omitempty"` // "public" or "internal"
+	// FixCmd formats / auto-fixes the package's changed files before verify checks them and
+	// before ship commits ({files} or {files:.ext,...} is replaced by those files; "none" turns
+	// it off). See verify.FixChanged.
+	FixCmd     string `json:"fix_cmd,omitempty"`
+	Visibility string `json:"visibility,omitempty"` // "public" or "internal"
 	// PrepareCmd builds what this package's checks need from its dependencies (Nx/Turborepo
 	// "dependsOn: ^build"), through the repo's task runner. The runner appends the upstream
 	// packages and runs it once for all packages about to be checked, before the checks run
@@ -478,6 +482,51 @@ func DefaultVerifyExclude(pkgs []PackageNode) []string {
 		}
 	}
 	return []string{}
+}
+
+var scriptExclude = regexp.MustCompile(`--exclude[= ]['"]?([A-Za-z0-9._-]+)/\*\*`)
+
+// RepoVerifyExclude adds to DefaultVerifyExclude the directories the repo's own root scripts
+// leave out of their task runs ("nx affected --exclude=integrations/**"): verify then skips the
+// same dependents the repo's CI skips (TanStack Query: 37 packages, integration apps included,
+// against the 20 its CI checks; the first verify took 215 s).
+func RepoVerifyExclude(root string, pkgs []PackageNode) []string {
+	out := DefaultVerifyExclude(pkgs)
+	data, err := os.ReadFile(filepath.Join(root, "package.json"))
+	if err != nil {
+		return out
+	}
+	var p struct {
+		Scripts map[string]string `json:"scripts"`
+	}
+	if json.Unmarshal(data, &p) != nil {
+		return out
+	}
+	seen := map[string]bool{}
+	for _, e := range out {
+		seen[e] = true
+	}
+	names := make([]string, 0, len(p.Scripts))
+	for n := range p.Scripts {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		for _, m := range scriptExclude.FindAllStringSubmatch(p.Scripts[n], -1) {
+			dir := m[1] + "/"
+			if seen[dir] {
+				continue
+			}
+			for _, pk := range pkgs { // only directories that hold packages
+				if strings.HasPrefix(filepath.ToSlash(pk.Path), dir) {
+					seen[dir] = true
+					out = append(out, dir)
+					break
+				}
+			}
+		}
+	}
+	return out
 }
 
 // ExcludedFromVerify reports whether pkg is skipped by verify when it is only a dependent.

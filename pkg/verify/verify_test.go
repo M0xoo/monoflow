@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/antigravity/monoflow/pkg/graph"
@@ -177,15 +178,15 @@ func TestPrepareCommandsMergeUpstreams(t *testing.T) {
 	}
 }
 
-// While a changed package fails, its dependents are not run (fast fix loop); once it passes
-// they are, so a pass still covers every dependent.
+// While a changed package is broken (here: a compile error), its dependents are not run (fast
+// fix loop); once it passes they are, so a pass still covers every dependent.
 func TestVerifyAffectedChecksChangedPackagesFirst(t *testing.T) {
 	root := t.TempDir()
 	_ = os.MkdirAll(filepath.Join(root, "core"), 0755)
 	_ = os.MkdirAll(filepath.Join(root, "app"), 0755)
 	_ = os.WriteFile(filepath.Join(root, "core", "ok"), []byte("no\n"), 0644)
 	g := graph.New(root)
-	g.AddPackage(&graph.PackageNode{Name: "core", Path: "core", Language: graph.LangGeneric, TestCmd: `grep -qx yes ok || { echo "core_test.go:1: not ok"; exit 1; }`})
+	g.AddPackage(&graph.PackageNode{Name: "core", Path: "core", Language: graph.LangGeneric, TestCmd: `grep -qx yes ok || { echo "./core.go:1:2: undefined: x"; exit 1; }`})
 	g.AddPackage(&graph.PackageNode{Name: "app", Path: "app", Language: graph.LangGeneric, Dependencies: []string{"core"}, TestCmd: "touch ran"})
 	g.RebuildEdges()
 	r := NewRunner(root)
@@ -224,6 +225,141 @@ func TestFailedTargetRetriedOnceAndMarkedFlaky(t *testing.T) {
 	}
 	if r := got["broken"]; r.Status != "failed" || r.Flaky {
 		t.Fatalf("broken target: %+v", r)
+	}
+}
+
+// An assertion that fails once (a keep-alive test under load) is not retried by verify, where
+// the agent waits, but is by local CI before it can block a push; a real failure stays failed.
+func TestLocalCIRetriesAnyFailureOnce(t *testing.T) {
+	setup := func() (*graph.DependencyGraph, string) {
+		root := t.TempDir()
+		_ = os.MkdirAll(filepath.Join(root, "ws"), 0755)
+		_ = os.MkdirAll(filepath.Join(root, "broken"), 0755)
+		g := graph.New(root)
+		g.AddPackage(&graph.PackageNode{Name: "ws", Path: "ws", Language: graph.LangGeneric,
+			TestCmd: `if [ -f seen ]; then exit 0; fi; touch seen; echo "ws.test.ts:1552: expected vi.fn() to be called at least once"; exit 1`})
+		g.AddPackage(&graph.PackageNode{Name: "broken", Path: "broken", Language: graph.LangGeneric,
+			TestCmd: `echo "y_test.go:2: want 1"; exit 1`})
+		return g, root
+	}
+	status := func(opt VerifyOptions) map[string]TargetResult {
+		g, root := setup()
+		opt.Strict = true
+		got := map[string]TargetResult{}
+		for _, r := range NewRunner(root).VerifyPackages(g, []string{"ws", "broken"}, opt).Results {
+			got[r.Target] = r
+		}
+		return got
+	}
+	if r := status(VerifyOptions{})["ws"]; r.Status != "failed" {
+		t.Fatalf("verify must not retry an assertion failure: %+v", r)
+	}
+	got := status(VerifyOptions{RetryAllFailures: true})
+	if r := got["ws"]; r.Status != "passed" || !r.Flaky {
+		t.Fatalf("local CI must retry and mark flaky: %+v", r)
+	}
+	if r := got["broken"]; r.Status != "failed" {
+		t.Fatalf("a real failure stays failed: %+v", r)
+	}
+}
+
+// verify re-runs only the failed test files of a vitest check, once: a test that passes alone is
+// reported flaky and does not block; one that fails again stays failed.
+func TestVerifyRetriesFailedTestFilesOnce(t *testing.T) {
+	root := t.TempDir()
+	_ = exec.Command("git", "-C", root, "init", "-q").Run()
+	for _, f := range []string{"ws/src/a.test.ts", "broken/src/b.test.ts"} {
+		_ = os.MkdirAll(filepath.Dir(filepath.Join(root, f)), 0755)
+		_ = os.WriteFile(filepath.Join(root, f), []byte("test"), 0644)
+	}
+	// A stand-in for "pnpm exec vitest": the ws test fails on its first run only.
+	fake := `case "$*" in
+*broken*) printf ' FAIL  |broken| src/b.test.ts > s > t\nAssertionError: want 1\n ❯ src/b.test.ts:2:1\n'; exit 1;;
+esac
+if [ -f "$(git rev-parse --show-toplevel)/.seen" ]; then exit 0; fi
+touch "$(git rev-parse --show-toplevel)/.seen"
+printf ' FAIL  |ws| src/a.test.ts > keep alive > pong\nAssertionError: expected "vi.fn()" to be called at least once\n ❯ src/a.test.ts:1552:7\n'
+exit 1
+`
+	_ = os.WriteFile(filepath.Join(root, "vitest"), []byte(fake), 0755)
+	g := graph.New(root)
+	for _, name := range []string{"ws", "broken"} {
+		g.AddPackage(&graph.PackageNode{Name: name, Path: name, Language: graph.LangTypeScript,
+			TestCmd: `cd "$(git rev-parse --show-toplevel)" && sh vitest run --passWithNoTests ` + name})
+	}
+	got := map[string]TargetResult{}
+	for _, r := range NewRunner(root).VerifyPackages(g, []string{"ws", "broken"}, VerifyOptions{Strict: true}).Results {
+		got[r.Target] = r
+	}
+	if r := got["ws"]; r.Status != "passed" || !r.Flaky {
+		t.Fatalf("a test file passing alone must be reported flaky, not failed: %+v", r)
+	}
+	if r := got["broken"]; r.Status != "failed" {
+		t.Fatalf("a test failing again stays failed: %+v", r)
+	}
+}
+
+// A pass with --update-snapshots is reused by the next plain verify on the files -u left: it
+// used to be stored only under the "-u" command, so the plain run re-ran every package.
+func TestSnapshotUpdatePassIsReusedByPlainVerify(t *testing.T) {
+	root := t.TempDir()
+	_ = exec.Command("git", "-C", root, "init", "-q").Run()
+	_ = os.MkdirAll(filepath.Join(root, "app"), 0755)
+	_ = os.WriteFile(filepath.Join(root, "app", "snap.txt"), []byte("old\n"), 0644)
+	_ = os.WriteFile(filepath.Join(root, "app", "check.sh"), []byte(`if [ "$1" = "-u" ]; then echo new > snap.txt; fi; [ "$(cat snap.txt)" = new ]`), 0644)
+	g := graph.New(root)
+	g.AddPackage(&graph.PackageNode{Name: "app", Path: "app", Language: graph.LangTypeScript, TestCmd: "sh check.sh"})
+
+	if res := NewRunner(root).VerifyPackages(g, []string{"app"}, VerifyOptions{UpdateSnapshots: true, Strict: true}); res.Status != "passed" {
+		t.Fatalf("-u run: %+v", res.Results)
+	}
+	res := NewRunner(root).VerifyPackages(g, []string{"app"}, VerifyOptions{Strict: true})
+	if res.Status != "passed" || res.CachedTargets != 1 {
+		t.Fatalf("plain verify after -u should be a cache hit: cached=%d %+v", res.CachedTargets, res.Results)
+	}
+}
+
+// When the changed package fails only on test assertions (it compiles), its dependents run in
+// the same verify: one round shows every test the change breaks.
+func TestVerifyAffectedRunsDependentsOnTestOnlyFailures(t *testing.T) {
+	root := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(root, "core"), 0755)
+	_ = os.MkdirAll(filepath.Join(root, "app"), 0755)
+	g := graph.New(root)
+	g.AddPackage(&graph.PackageNode{Name: "core", Path: "core", Language: graph.LangGeneric, TestCmd: `echo "--- FAIL: TestCode (0.00s)"; echo "    core_test.go:9: want 422"; echo FAIL; exit 1`})
+	g.AddPackage(&graph.PackageNode{Name: "app", Path: "app", Language: graph.LangGeneric, Dependencies: []string{"core"}, TestCmd: `echo "--- FAIL: TestApp (0.00s)"; echo "    app_test.go:3: want 422"; echo FAIL; exit 1`})
+	g.RebuildEdges()
+	res := NewRunner(root).VerifyAffected(g, []string{"core/x.go"}, VerifyOptions{Strict: true})
+	if res.Status != "failed" || len(res.Pending) != 0 || res.TotalTargets != 2 || res.FailedTargets != 2 {
+		t.Fatalf("want core and app both run and reported failing, nothing pending: %+v", res)
+	}
+}
+
+// The re-run judges each failure: one that passes this time is dropped as flaky even when
+// another failure in the same files persists (trpc: a ping timing test next to a memory test
+// that fails on main blocked a correct push).
+func TestRetryDropsFlakyFailureNextToPersistentOne(t *testing.T) {
+	root := t.TempDir()
+	_ = exec.Command("git", "-C", root, "init", "-q").Run()
+	for _, f := range []string{"ws/src/link.test.ts", "ws/src/memory.test.ts"} {
+		_ = os.MkdirAll(filepath.Dir(filepath.Join(root, f)), 0755)
+		_ = os.WriteFile(filepath.Join(root, f), []byte("test"), 0644)
+	}
+	fake := `printf ' FAIL  |ws| src/memory.test.ts > memory > frees data\nAssertionError: leaked\n ❯ src/memory.test.ts:58:3\n'
+if [ ! -f "$(git rev-parse --show-toplevel)/.seen" ]; then
+  touch "$(git rev-parse --show-toplevel)/.seen"
+  printf ' FAIL  |ws| src/link.test.ts > timeouts > ping\nAssertionError: expected "vi.fn()" to be called 1 times, but got 2 times\n ❯ src/link.test.ts:965:7\n'
+fi
+exit 1
+`
+	_ = os.WriteFile(filepath.Join(root, "vitest"), []byte(fake), 0755)
+	g := graph.New(root)
+	g.AddPackage(&graph.PackageNode{Name: "ws", Path: "ws", Language: graph.LangTypeScript,
+		TestCmd: `cd "$(git rev-parse --show-toplevel)" && sh vitest run --passWithNoTests ws`})
+	res := NewRunner(root).VerifyPackages(g, []string{"ws"}, VerifyOptions{Strict: true})
+	r := res.Results[0]
+	if r.Status != "failed" || len(r.Errors) != 1 || !strings.Contains(r.Errors[0].Message, "memory > frees data") {
+		t.Fatalf("only the persistent failure should remain: %+v", r.Errors)
 	}
 }
 

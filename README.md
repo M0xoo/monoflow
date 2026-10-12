@@ -59,7 +59,7 @@ cd /path/to/your-repo
 | File | Purpose |
 | :--- | :--- |
 | `.agents/monoflow.config.json` | Packages, their commands and the dependency graph |
-| `AGENTS.md` · `.agents/skills/monoflow/` | A 1.4 KB guide, placed first in `AGENTS.md`; your own guide follows it |
+| `AGENTS.md` · `CLAUDE.md` · `.agents/skills/monoflow/` | A 1.4 KB guide, placed first in both `AGENTS.md` and `CLAUDE.md` (Claude Code reads the latter); your own instructions follow it |
 | `.claude/settings.json` · `.opencode/plugin/` | Hooks that deliver results to the agent and redirect raw commands |
 | `.agents/task.json` · `.agents/quarantine.json` | Task boundaries; flaky tests kept out of the loop |
 
@@ -122,6 +122,9 @@ monoflow graph impact packages/core/x.go  # which packages a change to this file
 - **Flaky tests.** A timing-like failure is retried once alone and reported as flaky. Deterministic failures are not retried.
 - **Runs in the background.** In a worktree from `start`, `verify` starts as soon as the agent's edits settle. When the agent asks, the result for those exact files is often already there.
 - **Snapshots.** `verify -u` rewrites mismatched vitest/jest snapshots when the new values are intended.
+- **Formatting is done for you.** Before checking, `verify` (and `ship`, before committing) runs each package's `fix_cmd` on the files the agent changed and lists what it formatted. `init` picks the repo's own formatter: prettier, biome, oxfmt or dprint for JS (from the root `format` script or config), gofmt for Go, ruff for Python, cargo fmt for Rust.
+
+Every package's commands live in `.agents/monoflow.config.json` and can be changed per package: `test_cmd`, `typecheck_cmd`, `lint_cmd`, `fix_cmd` (`{files}` or `{files:.go}` stands for the changed files; `"none"` turns it off) and `prepare_cmd`. Re-running `init` keeps what you set.
 
 ### 3. 🚢 `ship`: nothing red reaches the remote
 
@@ -160,6 +163,32 @@ Full (non-sparse) worktrees for pnpm repos get a real offline `pnpm install`, so
 | **Backpressure** | `review throttle` | More PRs than reviewers can handle |
 | **Circuit breaker** | automatic in `verify` | An agent failing the same targets over and over (snapshots its work) |
 
+### 7. 📦 Package versions: live code or a pinned release
+
+Each in-repo dependency is one of two kinds of edge, and each consumer picks (`monoflow version edges` lists them all):
+
+| Edge | The consumer's manifest points at | A change to the dependency |
+| :--- | :--- | :--- |
+| **source** (default) | the package's directory (`workspace:`, Go `replace`/`go.work`, Cargo/uv path) | affects the consumer at once: `verify` re-tests it, and an API break is fixed in the same change |
+| **pinned** | a release snapshot under `.agents/releases/<pkg>@<version>/` | does not affect it; the consumer upgrades when it chooses |
+
+Releasing and consuming a package:
+
+```bash
+monoflow version suggest money                # required bump from the exported-API diff (removed/changed = major)
+monoflow version bump money minor             # writes the version; reports each consumer's impact, rewrites none
+monoflow version release money                # tags money@1.3.0 and notifies the consumers that pin it
+monoflow version pin ledger money             # ledger builds against money@1.3.0, isolated from later changes
+monoflow version upgrades ledger              # newer releases, with the API changes ledger actually uses
+monoflow version upgrade ledger money         # moves the pin and runs ledger's own checks
+```
+
+- **Releases are git tags** (`<pkg>@<version>`); releasing a version twice, or a package with uncommitted changes, is refused.
+- **Pins are committed snapshots** of the release (and the in-repo code it was built with), so any clone, IDE or CI builds them without MonoFlow. Snapshots nobody pins any more are removed, and `version check` flags one that no longer matches its tag.
+- **Consumers are told**: a release sends each pinning consumer a `DEPENDENCY_RELEASED` event saying whether it is compatible or breaking for that consumer and which of its uses change. A source consumer already builds against the live code, so the note is informational.
+- **Many agents, one release**: agents record the bump a change needs as a changeset (`task changeset`); `version apply` applies the highest bump per package.
+- Pinned edges are left out of the graph `verify` and the cache use, so editing `money` does not re-test a consumer pinned to an older release.
+
 ---
 
 ## ⚙️ How it works
@@ -187,7 +216,7 @@ flowchart LR
 A changed file belongs to the package with the longest matching path prefix. The **affected set** is those packages plus everything that depends on them, transitively. Repo-wide files (lockfiles, `go.work`, root `tsconfig`, `turbo.json`/`nx.json`, CI workflows) mark every package as affected. For Go, `graph query` runs `go list` in every module in parallel to find the packages that actually import the target, so an agent doesn't have to grep for it.
 
 ### The worktree
-`start <id>` fetches the base branch and runs `git worktree add -b agent/<id>` from whichever is newer, local or `origin/<base>`. That puts every agent on its own branch, in its own directory, starting from the latest main.
+`start <id>` fetches the base branch and runs `git worktree add -b agent/<id>` from `origin/<base>`, so local commits that origin does not have never ride along (`--from-local` starts from your local base instead). That puts every agent on its own branch, in its own directory, starting from the latest main.
 * **Shared state:** caches, proofs and events are symlinked to the root checkout, so every worktree sees the same results.
 * **Copied in:** config, `.env*` files and the binary are copied so the agent starts with a working setup.
 * **Dependencies:** pnpm repos get a background `pnpm install --offline`. Otherwise the root's `node_modules` is linked, or copy-on-write cloned with `--isolated-deps`.
@@ -209,7 +238,9 @@ A changed file belongs to the package with the longest matching path prefix. The
 `ship` commits and returns immediately. Before committing, it runs the test-integrity check and secret scan. A detached process then:
 1. **Local CI:** checks the commit out in a clean worktree under `.agents/outer_loop/` and runs the affected packages against `origin/main`, plus your `ci_cmd` if you set one.
 2. **On red:** emits `OUTER_LOOP_REGRESSION` or `SHIP_FAILED` with the errors. Nothing is pushed.
-3. **On green:** builds a proof receipt for the PR body, pushes the branch, opens the PR and starts a CI watcher.
+3. **On green:** checks that the commit merges cleanly into `origin/<base>` (on a conflict: `PR_CONFLICT` with the files, nothing pushed), builds a proof receipt for the PR body, pushes the branch, opens the PR and starts a CI watcher and a conflict watcher.
+
+Every push path (`push`, the push queued behind local CI, `ship`, `pr create`) runs the same conflict check at the moment of pushing. After the push, the conflict watcher re-checks the branch against the base every 2 minutes until it is merged, and emits `PR_CONFLICT` if the base moves into a conflict, so the agent hears about it at its next tool call.
 
 Pushes to `main`/`master` are refused. `init` installs Git hooks that reject `git commit`/`git push` unless MonoFlow runs them. The Claude Code and opencode hooks deny raw `git commit/push/checkout`, `gh pr create` and `gh run watch`, and point the agent to the MonoFlow command instead.
 
@@ -242,7 +273,8 @@ A/B runs in which the same agent does the same task with MonoFlow and with plain
 | Repo | Task | Result |
 | :--- | :--- | :--- |
 | opentelemetry-go (29 Go modules) | a change caught only by another module's tests | MonoFlow faster (median 101 s vs 130 s) and steadier (90–112 s vs 109–338 s); tokens about equal (median 60k vs 55k) |
-| trpc (pnpm + Turborepo) | 400 → 422 for validation errors, across packages | **plain git + Turbo ahead** on time (237–345 s vs 377–586 s) and similar on tokens |
+| trpc (pnpm + Turborepo) | 400 → 422 for validation errors, across packages | **plain git + Turbo ahead** over 5 runs each: 295 s vs 341 s mean, 87k vs 91k tokens. MonoFlow makes 24% fewer tool calls (25 vs 33), and every push was CI-checked on the exact commit. It started at 377–586 s. |
+| TanStack Query (pnpm + Nx) | default networkMode online → always, across framework packages | 3 runs each: MonoFlow **10% fewer tokens** (112k vs 124k) and **23% fewer tool calls** (43 vs 56); **plain git + Nx 15% faster** (451 s vs 517 s mean). |
 
 Every MonoFlow push in these runs was gated on local CI; plain pushes were not. Speculative verify and the Nx (TanStack Query) comparison have not been measured yet.
 
@@ -273,7 +305,7 @@ Every MonoFlow push in these runs was gated on local CI; plain pushes were not. 
 | 🚢 **Ship** | `pr create\|status\|test\|local\|review\|merge` · `outer status\|wait` · `queue spec` · `ci check` |
 | 📬 **Events & CI** | `events unread\|wait\|ack` · `ci health [--check=<name>] [--logs]` |
 | 🛡️ **Guardrails** | `guard check` · `task check\|prove\|slice` · `review risk\|audit\|throttle` |
-| 📦 **Release** | `version list\|bump\|apply\|check` · `deliver` |
+| 📦 **Versions & releases** | `version edges\|suggest\|bump\|release\|pin\|unpin\|upgrades\|upgrade\|apply\|check` · `deliver` |
 
 `monoflow help` prints the short list; `monoflow help <command>` shows one command's flags, and `monoflow help --all` shows everything.
 

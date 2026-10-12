@@ -413,3 +413,77 @@ func TestWorktreeCreateProvisionsBinShieldAndSharedCache(t *testing.T) {
 		t.Fatalf("expected SharedCacheDir in a worktree to resolve to the root cache, got %s want %s", gotDir, wantDir)
 	}
 }
+
+// A worktree keeps the config its branch commits; the root checkout's copy (another branch, or
+// local edits) is used only when the branch has none.
+func TestWorktreeKeepsBranchConfig(t *testing.T) {
+	repoDir := setupTestRepo(t)
+	defer os.RemoveAll(repoDir)
+	run := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repoDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	cfg := filepath.Join(repoDir, ".agents", "monoflow.config.json")
+	_ = os.MkdirAll(filepath.Dir(cfg), 0755)
+	_ = os.WriteFile(cfg, []byte(`{"committed": true}`), 0644)
+	run("add", ".agents/monoflow.config.json")
+	run("commit", "-m", "config")
+	_ = os.WriteFile(cfg, []byte(`{"root_local": true}`), 0644)
+	_ = os.WriteFile(filepath.Join(repoDir, ".agents", "task.json"), []byte(`{"task_id": "root"}`), 0644)
+
+	info, err := NewManager(repoDir).Create("agent-cfg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(info.Path, ".agents", "monoflow.config.json")); string(got) != `{"committed": true}` {
+		t.Fatalf("worktree must keep its branch's config, got %s", got)
+	}
+	if got, _ := os.ReadFile(filepath.Join(info.Path, ".agents", "task.json")); string(got) != `{"task_id": "root"}` {
+		t.Fatalf("a file the branch does not have is still provided from the root, got %s", got)
+	}
+}
+
+// A new worktree starts from origin's base (freshly fetched), not the local one: a local commit
+// origin lacks is left out and reported; FromLocal starts from the local base instead.
+func TestWorktreeStartsFromOriginBase(t *testing.T) {
+	remote := t.TempDir()
+	repoDir := setupTestRepo(t)
+	defer os.RemoveAll(repoDir)
+	git := func(dir string, args ...string) string {
+		cmd := exec.Command("git", append([]string{"-c", "user.email=t@t", "-c", "user.name=t"}, args...)...)
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	git(remote, "init", "-q", "--bare", "-b", "main")
+	git(repoDir, "remote", "add", "origin", remote)
+	git(repoDir, "push", "-q", "origin", "main")
+	_ = os.WriteFile(filepath.Join(repoDir, "local.txt"), []byte("local only\n"), 0644)
+	git(repoDir, "add", "local.txt")
+	git(repoDir, "commit", "-qm", "local only")
+
+	mgr := NewManager(repoDir)
+	info, err := mgr.CreateWithOpts("from-origin", CreateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.BaseRef != "origin/main" || info.LocalOnlyCommits != 1 {
+		t.Fatalf("base %q, local-only %d", info.BaseRef, info.LocalOnlyCommits)
+	}
+	if _, err := os.Stat(filepath.Join(info.Path, "local.txt")); err == nil {
+		t.Fatal("the local-only commit must not be in a worktree cut from origin/main")
+	}
+	local, err := mgr.CreateWithOpts("from-local", CreateOptions{FromLocal: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(local.Path, "local.txt")); err != nil || local.BaseRef != "main" {
+		t.Fatalf("FromLocal must start from the local main (base %q)", local.BaseRef)
+	}
+}

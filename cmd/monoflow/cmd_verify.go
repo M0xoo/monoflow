@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -22,6 +23,7 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 	verifyAll := false
 	verifyBase := ""
 	verboseOut := false
+	noFix := false
 
 	// Check flags
 	for _, arg := range os.Args[2:] {
@@ -54,23 +56,38 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 			verboseOut = true
 		} else if arg == "--strict" {
 			opts.Strict = true
+		} else if arg == "--no-fix" {
+			noFix = true
 		}
 	}
 
 	recording := os.Getenv("MONOFLOW_RECORD_KEY") != ""
 	opts.KeepUntracked = recording
+	// Format the agent's changed files first (each package's fix_cmd), so lint never fails on
+	// what a formatter fixes. Never in a background run: the agent may be editing those files.
+	var fixed verify.FixResult
+	if !recording && !noFix {
+		fixed = fixChangedFiles(rootDir)
+	}
 	// Plain verify: the background run started at the agent's last edit may already have the
 	// answer for exactly this state of the tree (see speculate.go).
 	plain := len(os.Args) == 2 || (len(os.Args) == 3 && os.Args[2] == "--affected")
 	if !recording && plain && !jsonMode() {
 		if out, ok := speculatedResult(rootDir, 15*time.Minute); ok {
-			fmt.Print(out)
+			fmt.Print(out + fixLines(fixed) + reusedNote)
 			if !strings.HasPrefix(out, "PASS") {
 				os.Exit(1)
 			}
 			return
 		}
 		stopOtherSpecRuns(rootDir, "") // obsolete; they would compete for the CPU
+	}
+	storeResult := func(string) {}
+	if !recording && plain && !jsonMode() {
+		storeResult = beginForeground(rootDir)
+	}
+	if !recording {
+		startRootWatcher(rootDir) // outside a worktree: precompute the next verify as the agent edits
 	}
 
 	g, err := graph.LoadOrDiscover(rootDir)
@@ -168,9 +185,19 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 		}
 		out = c
 	}
+	if c, ok := out.(map[string]any); ok {
+		if len(fixed.Fixed) > 0 {
+			c["formatted"] = fixed.Fixed
+		}
+		if len(fixed.Failed) > 0 {
+			c["fix_failed"] = fixed.Failed
+		}
+	}
 	if !verboseOut && !jsonMode() {
 		rootDirForText = rootDir
-		fmt.Print(verifyText(res, out.(map[string]any)))
+		text := verifyText(res, out.(map[string]any))
+		fmt.Print(text)
+		storeResult(text)
 	} else {
 		printOut(out)
 	}
@@ -399,12 +426,18 @@ func compactSuite(res verify.SuiteResult, rootDir string, g *graph.DependencyGra
 		out["failed"] = failed // target -> error count
 	}
 	if len(preexisting) > 0 {
-		total := 0
-		for _, n := range preexisting {
-			total += n
+		names := make([]string, 0, len(preexisting))
+		for t := range preexisting {
+			names = append(names, t)
+		}
+		sort.Strings(names)
+		parts := make([]string, len(names))
+		for i, t := range names {
+			parts[i] = fmt.Sprintf("%s (%d)", t, preexisting[t])
 		}
 		// Spelled out: a bare {"pkg": 1} read as an unexplained failure and sent agents re-testing.
-		out["preexisting"] = fmt.Sprintf("%d failure(s) in %d package(s) that main already has: not caused by your change, not blocking (--verbose lists them)", total, len(preexisting))
+		// No pointer to --verbose: agents followed it and read pages of other people's lint debt.
+		out["preexisting"] = "main already fails these too; not caused by your change, not blocking, nothing to do: " + strings.Join(parts, ", ")
 	}
 	if len(quarantined) > 0 {
 		out["quarantined"] = quarantined
@@ -461,4 +494,37 @@ func resolvePackageArg(g *graph.DependencyGraph, rootDir, arg string) (*graph.Pa
 		}
 	}
 	return best, best != nil
+}
+
+// fixChangedFiles runs the packages' fix_cmd on the uncommitted files (new files included).
+func fixChangedFiles(rootDir string) verify.FixResult {
+	g, err := graph.LoadOrDiscover(rootDir)
+	if err != nil {
+		return verify.FixResult{}
+	}
+	var files []string
+	for _, args := range [][]string{{"diff", "--name-only", "HEAD"}, {"ls-files", "--others", "--exclude-standard"}} {
+		out, err := exec.Command("git", append([]string{"-C", rootDir}, args...)...).Output()
+		if err != nil {
+			continue
+		}
+		for _, f := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			if f != "" && !strings.HasPrefix(f, ".agents/") {
+				files = append(files, f)
+			}
+		}
+	}
+	return verify.FixChanged(rootDir, g, files)
+}
+
+// fixLines renders what fixChangedFiles did, for output printed outside verifyText.
+func fixLines(fr verify.FixResult) string {
+	var b strings.Builder
+	if len(fr.Fixed) > 0 {
+		b.WriteString("formatted: " + strings.Join(fr.Fixed, ", ") + "\n")
+	}
+	if len(fr.Failed) > 0 {
+		b.WriteString("fix_cmd failed (files left as they were): " + strings.Join(fr.Failed, "; ") + "\n")
+	}
+	return b.String()
 }

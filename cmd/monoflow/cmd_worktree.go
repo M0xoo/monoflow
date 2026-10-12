@@ -89,6 +89,7 @@ func handleWorktree(rootDir string) {
 			os.Exit(1)
 		}
 		isolated := false
+		fromLocal := false
 		baseBranch := ""
 		var pkgs []string
 		focusedPkg := ""
@@ -113,6 +114,8 @@ func handleWorktree(rootDir string) {
 				includeDeps = val != "false" && val != "0"
 			} else if strings.HasPrefix(arg, "--base=") {
 				baseBranch = strings.TrimPrefix(arg, "--base=")
+			} else if arg == "--from-local" {
+				fromLocal = true
 			}
 		}
 
@@ -124,6 +127,7 @@ func handleWorktree(rootDir string) {
 			Packages:       pkgs,
 			Strategy:       strategy,
 			IncludeDeps:    includeDeps,
+			FromLocal:      fromLocal,
 		})
 		durMs := float64(time.Since(start).Microseconds()) / 1000.0
 		if err != nil {
@@ -135,6 +139,12 @@ func handleWorktree(rootDir string) {
 			"path":   info.Path,
 			"branch": info.Branch,
 			"next":   "cd " + info.Path + " and work only there (same files as the repo root); edit, then monoflow verify",
+		}
+		if info.BaseRef != "" {
+			resMap["base"] = info.BaseRef
+		}
+		if info.LocalOnlyCommits > 0 {
+			resMap["note"] = fmt.Sprintf("your local base has %d commit(s) origin does not have; they are not in this branch (--from-local to start from them)", info.LocalOnlyCommits)
 		}
 		if info.Isolated {
 			resMap["deps_isolation"] = info.IsolationMethod

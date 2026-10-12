@@ -106,3 +106,34 @@ func TestKeyCoversIgnoredLooseFiles(t *testing.T) {
 		t.Fatal("an ignored loose file must change the key")
 	}
 }
+
+// As an upstream ("source" key), a package's own tests and snapshots do not count: a dependent
+// cannot import them. Its own check key still covers them, and its source code counts for both.
+func TestSourceKeyIgnoresTestFiles(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, s string) {
+		p := filepath.Join(root, rel)
+		_ = os.MkdirAll(filepath.Dir(p), 0755)
+		_ = os.WriteFile(p, []byte(s), 0644)
+	}
+	write("server/src/mw.ts", "export const code = 400\n")
+	write("server/src/mw.test.ts", "expect(code).toBe(400)\n")
+	write("server/src/__snapshots__/mw.test.ts.snap", "400\n")
+	m := NewManager(root, Config{Enabled: true, Dir: t.TempDir()})
+	pkg := &graph.PackageNode{Name: "server", Path: "server", Language: "typescript"}
+	source := func() string { k, _ := m.ComputePackageKey(pkg, nil, "", "source"); return k }
+	own := func() string { k, _ := m.ComputePackageKey(pkg, nil, "vitest run", "test"); return k }
+	s0, o0 := source(), own()
+	write("server/src/mw.test.ts", "expect(code).toBe(422)\n")
+	write("server/src/__snapshots__/mw.test.ts.snap", "422\n")
+	if source() != s0 {
+		t.Fatal("an upstream's test edit must not change its source key")
+	}
+	if own() == o0 {
+		t.Fatal("the package's own check key must cover its tests")
+	}
+	write("server/src/mw.ts", "export const code = 422\n")
+	if source() == s0 {
+		t.Fatal("a source edit must change the source key")
+	}
+}

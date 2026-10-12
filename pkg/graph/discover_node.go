@@ -78,6 +78,7 @@ func (g *DependencyGraph) discoverNodeWorkspaces(files []string) {
 			TypecheckCmd: script(typecheckScripts...),
 		}
 		node.PrepareCmd = root.prepare(name, used)
+		node.FixCmd = root.fix()
 		// Many monorepos run vitest/jest/eslint/tsc once from the root; scope those
 		// root tools to this package instead of leaving it unverified.
 		if node.TestCmd == "" {
@@ -198,6 +199,7 @@ type rootToolchain struct {
 	exec      string              // package-manager exec prefix ("pnpm exec", "yarn", "npx --no-install")
 	test      string              // "vitest" | "jest" | ""
 	lint      string              // "eslint" | ""
+	format    string              // "prettier" | "biome" | "oxfmt" | "dprint" | "": the repo's formatter
 	tsc       bool
 }
 
@@ -280,6 +282,27 @@ func rootRunners(root string) rootToolchain {
 	if direct("eslint") || hasConfig("eslint.config.*", ".eslintrc*") {
 		tc.lint = "eslint"
 	}
+	// The formatter the root "format" script runs, else one configured at the root. Only tools
+	// that take file arguments: a whole-repo format script would rewrite files the agent did
+	// not touch.
+	_, prettierDep := p.DevDependencies["prettier"]
+	if f := strings.Fields(p.Scripts["format"]); len(f) > 0 {
+		switch f[0] {
+		case "prettier", "oxfmt", "biome", "dprint":
+			tc.format = f[0]
+		}
+	}
+	switch {
+	case tc.format != "":
+	case direct("biome") || hasConfig("biome.json", "biome.jsonc"):
+		tc.format = "biome"
+	case prettierDep || direct("prettier") || hasConfig(".prettierrc*", "prettier.config.*"):
+		tc.format = "prettier"
+	case direct("oxfmt") || hasConfig(".oxfmtrc*"):
+		tc.format = "oxfmt"
+	case direct("dprint") || hasConfig("dprint.json", ".dprint.json"):
+		tc.format = "dprint"
+	}
 	all := ""
 	for _, v := range p.Scripts {
 		all += " " + v
@@ -291,6 +314,22 @@ func rootRunners(root string) rootToolchain {
 	}
 	tc.tsc = strings.Contains(all, "tsc") || strings.Contains(all, "typescript")
 	return tc
+}
+
+// fix returns the command formatting a package's changed files with the repo's formatter, run
+// from the root so the root config and ignore files apply.
+func (tc rootToolchain) fix() string {
+	switch tc.format {
+	case "prettier":
+		return `cd "$(git rev-parse --show-toplevel)" && ` + tc.exec + " prettier --write --ignore-unknown {files}"
+	case "biome":
+		return `cd "$(git rev-parse --show-toplevel)" && ` + tc.exec + " biome format --write {files}"
+	case "oxfmt":
+		return `cd "$(git rev-parse --show-toplevel)" && ` + tc.exec + " oxfmt {files}"
+	case "dprint":
+		return `cd "$(git rev-parse --show-toplevel)" && ` + tc.exec + " dprint fmt {files}"
+	}
+	return ""
 }
 
 // prepare returns the task-runner command that builds what the given scripts depend on in

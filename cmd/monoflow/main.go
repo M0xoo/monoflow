@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/antigravity/monoflow/pkg/conflict"
 	"io"
 	"os"
 	"os/exec"
@@ -20,6 +21,7 @@ func main() {
 	}
 
 	cmd := os.Args[1]
+	maybeWarmBaseline(cmd)
 	if isHelpArg(cmd) {
 		switch {
 		case len(os.Args) > 2 && os.Args[2] == "--all":
@@ -87,6 +89,12 @@ func main() {
 
 	case "ci":
 		handleCI(rootDir)
+
+	case "conflict-watch": // internal: started after a push, see pkg/conflict
+		conflict.Watch(rootDir)
+
+	case "baseline-warm": // internal: see maybeWarmBaseline
+		warmBaseline(rootDir)
 
 	case "speculate-watch": // internal: started by start, see speculate.go
 		speculateWatch(rootDir)
@@ -213,6 +221,7 @@ func hasHelpArg(args []string) bool {
 var commandDetails = map[string]string{
 	"start": `  start <task-id>                     Isolated worktree on branch agent/<task-id> off the latest main (full checkout)
   start <task-id> --packages=<p1,p2>  Same, projecting only those packages (+ their dependencies)
+  start <task-id> --from-local        Start from your local main instead of origin's (the default)
 Then cd into the printed path and work there.`,
 	"ship": `  ship -m "<commit message>"          Commit uncommitted work, run local CI on that commit, push, open the PR
   ship -m "<msg>" --title="<PR title>" --body="<text>" | --body-file=<path>
@@ -230,11 +239,13 @@ One call replaces commit + pr create. Afterwards end your turn: CI results are d
   verify --update-snapshots | -u      Rewrite mismatched vitest/jest snapshots (when the new values are intended)
   verify --base=<ref>                 Changes since the merge-base with <ref> (CI: the PR base)
   verify --strict                     Also block on failures that pre-exist on the base branch
+  verify --no-fix                     Do not run the packages' fix_cmd (formatter) on your changed files first
   verify --proof=<task-id>            Verify a Proof-of-Work receipt
 In a worktree from 'start', verify already runs in the background once your edits settle;
 'monoflow verify' then prints that result (or waits for it) when the files are unchanged.`,
-	"worktree": `  worktree create <agent-id> --packages=<p1,p2> [--deps=<strategy>] [--isolated-deps]
-                                      Isolated worktree on branch agent/<agent-id>
+	"worktree": `  worktree create <agent-id> --packages=<p1,p2> [--deps=<strategy>] [--isolated-deps] [--from-local]
+                                      Isolated worktree on branch agent/<agent-id>, cut from origin/main
+                                      (freshly fetched); --from-local cuts it from your local main
   worktree list                       List registered worktrees
   worktree focus|update <agent-id> --packages=<...>   Change the projected packages
   worktree sync --to=<agent> --from=<agent>   AST-merge another agent's changes into a worktree

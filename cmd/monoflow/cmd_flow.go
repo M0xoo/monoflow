@@ -88,6 +88,11 @@ func handleShip(rootDir string) {
 			printRaw(`{"error": "uncommitted changes: pass -m \"<commit message>\""}`)
 			os.Exit(1)
 		}
+		// The repo's formatter on the changed files, so nothing unformatted is committed even
+		// when the agent shipped without a final verify.
+		if fr := fixChangedFiles(rootDir); len(fr.Fixed) > 0 {
+			out["formatted"] = fr.Fixed
+		}
 		res, ok := runSelf(exe, rootDir, "commit", "-m", msg)
 		if !ok {
 			res["step"] = "commit"
@@ -97,6 +102,17 @@ func handleShip(rootDir string) {
 		if c, ok := res["commit"].(map[string]any); ok {
 			out["commit"] = c["commit_sha"]
 		}
+	}
+	// Never push a branch that conflicts with the base: say so now, with the files, instead of
+	// a PR that cannot merge (and an agent that never hears about it).
+	if base, files, checked := baseConflicts(rootDir); checked && len(files) > 0 {
+		emitConflict(rootDir, base, files)
+		out["status"] = "conflict"
+		out["error"] = fmt.Sprintf("your branch conflicts with origin/%s; nothing was pushed", base)
+		out["conflicts"] = files
+		out["next"] = conflictNext(base, files)
+		printOut(out)
+		os.Exit(1)
 	}
 	if title == "" {
 		title = strings.SplitN(strings.TrimSpace(msg), "\n", 2)[0]

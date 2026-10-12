@@ -147,7 +147,7 @@ h3 {
 }
 .theme:hover { background: var(--ground-3); }
 .theme:active { transform: translateY(1px); }
-@media (max-width: 1040px) { .nav a:not(.gh) { display: none; } }
+@media (max-width: 1240px) { .nav a:not(.gh) { display: none; } }
 
 /* Hero */
 .hero { margin-top: 0; padding-top: 48px; border-top: 0; }
@@ -302,6 +302,28 @@ h3 {
 .f-ship p { color: var(--red-ink); }
 .f-ship :not(pre) > code { background: color-mix(in srgb, var(--red-ink) 16%, transparent); }
 
+/* Versions: two edge kinds side by side, then the release flow */
+.edges-grid { margin-top: 40px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 1px; background: var(--rule); border: 1px solid var(--rule); }
+@media (min-width: 900px) { .edges-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.edges-grid article { background: var(--ground); padding: 26px 24px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.edge-kind {
+  font: 900 clamp(2rem, 3.6vw, 3rem)/0.9 var(--sans); font-variation-settings: "wdth" 122;
+  letter-spacing: -0.045em; text-transform: uppercase;
+}
+.edge-pinned { color: var(--red); }
+.edge-what { margin: 0; font-weight: 600; max-width: 52ch; }
+.edges-grid p:not(.edge-what) { margin: 0; color: var(--ink-2); max-width: 52ch; }
+.flow { list-style: none; margin: 28px 0 0; padding: 0; counter-reset: f; border-top: 1px solid var(--rule); }
+.flow li {
+  counter-increment: f; display: grid; grid-template-columns: 40px minmax(0, 1fr); gap: 4px 14px;
+  padding: 14px 0; border-bottom: 1px solid var(--rule-soft); align-items: baseline;
+}
+@media (min-width: 900px) { .flow li { grid-template-columns: 40px minmax(0, 22rem) minmax(0, 1fr); } }
+.flow li::before { content: counter(f); font: 700 0.8rem var(--mono); color: var(--red); }
+.flow li > code { background: none; padding: 0; font-weight: 700; color: var(--ink); overflow-wrap: anywhere; }
+.flow li > span { color: var(--ink-2); grid-column: 2; }
+@media (min-width: 900px) { .flow li > span { grid-column: 3; } }
+
 /* How it works: six stages in a ruled grid, each naming the files it writes */
 .how-steps {
   list-style: none; margin: 44px 0 0; padding: 0; counter-reset: h;
@@ -337,7 +359,7 @@ h3 {
 }
 .stat dd small { font-size: 0.3em; letter-spacing: 0; margin-left: 6px; font-variation-settings: "wdth" 100; }
 .stat .win dt { color: var(--red); }
-.stat .win dd { color: var(--ink); }
+.stat .win dd, .stat .level dd { color: var(--ink); }
 .stat p { margin: 0; color: var(--ink-2); font-size: 0.95rem; max-width: 52ch; }
 
 /* Install */

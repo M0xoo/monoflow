@@ -68,6 +68,19 @@ func handlePR(rootDir string) {
 			}
 		}
 
+		// A PR is outward-facing: never open one under an invented title (an agent's
+		// "pr create --help" on an old binary opened PR #23 as "feat(...): agent changes on ...").
+		if strings.TrimSpace(opts.Title) == "" {
+			printOut(map[string]any{"error": `pr create needs --title="<PR title>" (and --body=... or --body-file=...); nothing was created. Usually 'monoflow ship -m "<msg>"' does commit, push and PR in one call`})
+			os.Exit(2)
+		}
+
+		if base, files, checked := baseConflicts(rootDir); checked && len(files) > 0 {
+			emitConflict(rootDir, base, files)
+			printOut(map[string]any{"status": "blocked", "error": fmt.Sprintf("your branch conflicts with origin/%s; nothing was pushed or opened", base), "conflicts": files, "next": conflictNext(base, files)})
+			os.Exit(1)
+		}
+
 		res, err := mgr.Create(opts)
 		if err != nil {
 			var gateErr *pr.GateError

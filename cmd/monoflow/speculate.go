@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/antigravity/monoflow/pkg/verify"
 )
 
 // Speculative verification: verify runs while the agent is still thinking, not after it asks.
@@ -58,28 +60,36 @@ func treeStateKey(root string) string {
 
 // maybeVerifyInBackground starts a background verify for the current state unless one ran or
 // runs for it already. Cheap when nothing changed (one git diff).
-func maybeVerifyInBackground(root string) {
+// It never cancels a background run for an older state: agents edit every few seconds, so
+// cancelled runs never finished (trpc: an agent edited for a minute and its first verify still
+// took 110 s). A finished run caches every package it checked, so packages the agent has not
+// touched since are cache hits by the time it asks; the newest state starts once it is done.
+// It reports whether the current state is handled (started, running or done).
+func maybeVerifyInBackground(root string) bool {
 	if os.Getenv("MONOFLOW_RECORD_KEY") != "" || os.Getenv("MONOFLOW_NO_SPECULATE") != "" {
-		return
+		return true
 	}
-	// Only in agent worktrees: the shared root may hold someone's half-done work, and nobody
-	// asked for its CPU.
-	if !strings.Contains(filepath.ToSlash(root), "/.agents/worktrees/") {
-		return
+	// In agent worktrees, or in a checkout whose own verify started the watcher (the agent
+	// asked to verify that tree). Never on a hook alone: a shared root may hold someone's
+	// half-done work, and nobody asked for its CPU.
+	if !speculationAllowed(root) {
+		return true
 	}
 	key := treeStateKey(root)
 	if key == "" {
-		return
+		return true
 	}
 	dir := specDir(root)
 	if _, err := os.Stat(filepath.Join(dir, key+".out")); err == nil || specRunAlive(dir, key) {
-		return // done or running for this state
+		return true // done or running for this state
+	}
+	if anySpecRunAlive(dir) {
+		return false // let it finish; the watcher starts this state afterwards
 	}
 	_ = os.MkdirAll(dir, 0755)
-	stopOtherSpecRuns(root, "") // a run for an older state is obsolete
 	exe, err := os.Executable()
 	if err != nil {
-		return
+		return true
 	}
 	tmp := filepath.Join(dir, key+".tmp")
 	script := fmt.Sprintf("sleep %.1f; MONOFLOW_RECORD_KEY=%s %q verify > %q 2>&1; rm -f %q",
@@ -88,11 +98,28 @@ func maybeVerifyInBackground(root string) {
 	cmd.Dir = root
 	cmd.SysProcAttr = detachedSysProcAttr()
 	if err := cmd.Start(); err != nil {
-		return
+		return true
 	}
 	_ = os.WriteFile(filepath.Join(dir, key+".pid"), []byte(strconv.Itoa(cmd.Process.Pid)), 0644)
 	_ = cmd.Process.Release()
 	pruneSpecResults(dir, 20)
+	return true
+}
+
+// anySpecRunAlive reports a verify in progress for any state: a background run or the agent's own.
+func anySpecRunAlive(dir string) bool {
+	for _, ext := range []string{"*.pid", "*.run"} {
+		marks, _ := filepath.Glob(filepath.Join(dir, ext))
+		for _, m := range marks {
+			if filepath.Base(m) == "watch.pid" {
+				continue
+			}
+			if specRunAlive(dir, strings.TrimSuffix(strings.TrimSuffix(filepath.Base(m), ".pid"), ".run")) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // speculatedResult returns the stored verify output for the current state, waiting (up to
@@ -117,21 +144,55 @@ func speculatedResult(root string, timeout time.Duration) (string, bool) {
 	return string(data), true
 }
 
-// specRunAlive reports whether a background run for key is in progress. A pid file left by a
-// run that was killed is removed: waiting on it would block verify for nothing.
+// specRunAlive reports whether a verify for key is in progress: a background run (<key>.pid)
+// or an agent's own verify (<key>.run). A marker left by a run that was killed is removed:
+// waiting on it would block verify for nothing.
 func specRunAlive(dir, key string) bool {
-	pidFile := filepath.Join(dir, key+".pid")
-	data, err := os.ReadFile(pidFile)
-	if err != nil {
-		return false
+	alive := false
+	for _, ext := range []string{".pid", ".run"} {
+		marker := filepath.Join(dir, key+ext)
+		data, err := os.ReadFile(marker)
+		if err != nil {
+			continue
+		}
+		if pid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && processAlive(pid) {
+			alive = true
+			continue
+		}
+		_ = os.Remove(marker)
+		if ext == ".pid" {
+			_ = os.Remove(filepath.Join(dir, key+".tmp"))
+		}
 	}
-	if pid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && processAlive(pid) {
-		return true
-	}
-	_ = os.Remove(pidFile)
-	_ = os.Remove(filepath.Join(dir, key+".tmp"))
-	return false
+	return alive
 }
+
+// beginForeground marks the agent's own verify as running for the current tree state, so a
+// second verify on the same files waits for it instead of starting over, and returns done,
+// which stores the output under that state (if the files did not change meanwhile): running
+// verify again on unchanged files then prints it at once. Agents that background a long
+// verify and lose track of it (a Haiku run looped 9 minutes waiting on a log line) can simply
+// run it again.
+func beginForeground(root string) (done func(out string)) {
+	key := treeStateKey(root)
+	if key == "" {
+		return func(string) {}
+	}
+	dir := specDir(root)
+	_ = os.MkdirAll(dir, 0755)
+	marker := filepath.Join(dir, key+".run")
+	_ = os.WriteFile(marker, []byte(strconv.Itoa(os.Getpid())), 0644)
+	return func(out string) {
+		if out != "" && treeStateKey(root) == key {
+			_ = os.WriteFile(filepath.Join(dir, key+".out"), []byte(out), 0644)
+			pruneSpecResults(dir, 20)
+		}
+		_ = os.Remove(marker)
+	}
+}
+
+// reusedNote ends a stored result printed again.
+const reusedNote = "reused: same files as the verify that produced this; nothing was re-run\n"
 
 // finishRecord, in a background run, files its output (written to <key>.tmp) under the state
 // key, but only if the tree is still in that state: a result for files that changed mid-run
@@ -216,23 +277,103 @@ func startSpeculateWatcher(wt string) {
 
 // speculateWatch polls the worktree's state and starts background verifies as it changes.
 func speculateWatch(root string) {
-	if !strings.Contains(filepath.ToSlash(root), "/.agents/worktrees/") {
+	if !speculationAllowed(root) {
 		return
 	}
 	_ = os.MkdirAll(specDir(root), 0755)
 	me := strconv.Itoa(os.Getpid())
 	marker := filepath.Join(specDir(root), "watch.pid")
 	_ = os.WriteFile(marker, []byte(me), 0644)
-	last, lastChange := "", time.Now()
-	for time.Since(lastChange) < time.Hour {
+	idle := time.Hour
+	if !inWorktree(root) {
+		idle = 15 * time.Minute // a checkout that is not an agent's own: stop sooner
+	}
+	last, handled, lastChange := "", "", time.Now()
+	for time.Since(lastChange) < idle {
 		time.Sleep(time.Second)
 		if data, err := os.ReadFile(marker); err != nil || string(data) != me {
 			return // worktree removed, or a newer watcher took over
 		}
-		if k := treeStateKey(root); k != last {
+		k := treeStateKey(root)
+		if k != last {
 			last, lastChange = k, time.Now()
-			maybeVerifyInBackground(root)
+		}
+		// Retried every second until started: a run for an older state may still be going.
+		if k != handled && maybeVerifyInBackground(root) {
+			handled = k
 		}
 	}
 	_ = os.Remove(marker)
+}
+
+// maybeWarmBaseline prepares, in the background, the baseline checkout verify compares failures
+// against, when it is missing: an agent's first monoflow call (help, start, graph) comes long
+// before its first failing verify, which otherwise paid ~30 s for the checkout and install.
+func maybeWarmBaseline(cmd string) {
+	switch cmd {
+	case "init", "clone", "hook", "baseline-warm", "speculate-watch", "outer", "scenario":
+		return
+	}
+	if os.Getenv("MONOFLOW_NO_WARM") != "" || os.Getenv("MONOFLOW_RECORD_KEY") != "" {
+		return
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		return
+	}
+	if _, err := os.Stat(filepath.Join(root, ".agents", "monoflow.config.json")); err != nil {
+		return
+	}
+	if verify.BaselineReady(root) {
+		return
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return
+	}
+	c := exec.Command(exe, "baseline-warm")
+	c.Dir = root
+	c.Env = append(os.Environ(), "MONOFLOW_NO_WARM=1")
+	c.SysProcAttr = detachedSysProcAttr()
+	if c.Start() == nil {
+		_ = c.Process.Release()
+	}
+}
+
+func warmBaseline(root string) { verify.WarmBaseline(root) }
+
+func inWorktree(root string) bool {
+	return strings.Contains(filepath.ToSlash(root), "/.agents/worktrees/")
+}
+
+// speculationAllowed: agent worktrees, or any checkout whose watcher verify started
+// (MONOFLOW_SPECULATE_HERE, set only for that watcher process).
+func speculationAllowed(root string) bool {
+	return inWorktree(root) || os.Getenv("MONOFLOW_SPECULATE_HERE") == "1"
+}
+
+// startRootWatcher starts the background watcher for a checkout that is not a worktree, when
+// the agent runs verify there (agents that skip start still get their next verify precomputed
+// while they edit: trpc A-14 worked in the root and its verifies ran cold, 80-125 s). Read-only
+// (no formatting, no file removal), one watcher at a time, gone after 15 idle minutes.
+func startRootWatcher(root string) {
+	if inWorktree(root) || os.Getenv("MONOFLOW_NO_SPECULATE") != "" || os.Getenv("MONOFLOW_NO_ROOT_SPECULATE") != "" {
+		return
+	}
+	if data, err := os.ReadFile(filepath.Join(specDir(root), "watch.pid")); err == nil {
+		if pid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && processAlive(pid) {
+			return
+		}
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return
+	}
+	cmd := exec.Command(exe, "speculate-watch")
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(), "MONOFLOW_SPECULATE_HERE=1")
+	cmd.SysProcAttr = detachedSysProcAttr()
+	if cmd.Start() == nil {
+		_ = cmd.Process.Release()
+	}
 }

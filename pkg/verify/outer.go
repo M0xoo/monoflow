@@ -14,6 +14,7 @@ import (
 
 	"github.com/antigravity/monoflow/pkg/cache"
 	"github.com/antigravity/monoflow/pkg/checkpoint"
+	"github.com/antigravity/monoflow/pkg/conflict"
 	"github.com/antigravity/monoflow/pkg/events"
 	"github.com/antigravity/monoflow/pkg/graph"
 	"github.com/antigravity/monoflow/pkg/guard"
@@ -278,7 +279,7 @@ func (om *OuterLoopManager) executeJobInternal(job *OuterJob) error {
 	// global-cache hit, so only what differs in the committed state is re-run.
 	runner := NewRunner(workDir)
 	runner.SetGraph(g)
-	suite := runner.VerifyAffected(g, changedFiles, VerifyOptions{})
+	suite := runner.VerifyAffected(g, changedFiles, VerifyOptions{RetryAllFailures: true})
 	results := suite.Results
 	if len(results) == 0 && len(packagesToVerify) > 0 {
 		results = make([]TargetResult, 0)
@@ -408,11 +409,16 @@ func (om *OuterLoopManager) promoteToRemote(job *OuterJob) error {
 	if job.RemoteBranch == "main" || job.RemoteBranch == "master" || job.RemoteBranch == "HEAD" {
 		return fmt.Errorf("refusing to push to protected/unnamed branch %q; open a PR instead", job.RemoteBranch)
 	}
+	// The base may have moved while local CI ran: never push into a conflict.
+	if err := conflict.GuardPush(om.RootDir, job.RemoteBranch, job.CommitSHA); err != nil {
+		return err
+	}
 	refspec := fmt.Sprintf("%s:refs/heads/%s", job.CommitSHA, job.RemoteBranch)
 	_, err := om.runGit("push", "-u", job.Remote, refspec)
 	if err != nil {
 		return fmt.Errorf("failed to promote commit to remote %s: %w", job.Remote, err)
 	}
+	conflict.StartWatch(om.RootDir, job.RemoteBranch)
 	return nil
 }
 

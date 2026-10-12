@@ -43,6 +43,10 @@ type VerifyOptions struct {
 	// KeepUntracked: do not remove files the checks created (background runs: the agent may be
 	// creating files at the same time).
 	KeepUntracked bool
+	// RetryAllFailures re-runs any failed package once, alone, before reporting it, not only
+	// timing-like failures. Local CI sets it: nobody waits on it, and a flaky test there blocks
+	// a correct push (trpc: a websocket keep-alive test failed under load, passed 3/3 alone).
+	RetryAllFailures bool
 }
 
 // TargetResult holds the result of verifying a single package.
@@ -104,6 +108,9 @@ type Runner struct {
 	// within one run: they do not depend on the package, so N packages run them once.
 	rootMu   sync.Mutex
 	rootRuns map[string]*rootRun
+	// assumeEdits makes baselineSHA treat the tree as having local edits (WarmBaseline runs
+	// before the agent's first edit and must prepare the baseline its later verifies use).
+	assumeEdits bool
 }
 
 type rootRun struct {
@@ -289,6 +296,22 @@ func (r *Runner) VerifyTarget(pkg *graph.PackageNode, opt VerifyOptions) TargetR
 				Timestamp:  time.Now().UTC(),
 				Output:     string(out),
 			})
+			// A pass with -u is also a pass of the plain checks on the files as -u left them:
+			// store it under that key too, or the next plain verify re-ran every package (trpc:
+			// 11 packages, 60 s, after the agent's snapshot run).
+			if opt.UpdateSnapshots && r.graph != nil {
+				plain := opt
+				plain.UpdateSnapshots = false
+				if cmds, _ := r.commandsFor(pkg, plain); len(cmds) > 0 {
+					plainCmd := strings.Join(cmds, " && ")
+					if key, err := r.cacheMgr.ComputePackageKey(pkg, r.cacheMgr.UpstreamKeysFresh(r.graph, pkg), plainCmd, opt.Stage+":"+opt.Mode); err == nil && key != "" {
+						_ = r.cacheMgr.PutVerification(&cache.VerificationRecord{
+							Key: key, Target: pkg.Name, Language: string(pkg.Language), Status: "passed",
+							DurationMs: durationMs, CommandRun: plainCmd, Timestamp: time.Now().UTC(), Output: string(out),
+						})
+					}
+				}
+			}
 		}
 	}
 
@@ -392,11 +415,20 @@ func (r *Runner) VerifyAffected(g *graph.DependencyGraph, changedFiles []string,
 		rest = append(rest, n)
 	}
 	res := r.VerifyPackages(g, affected.DirectlyChanged, opt)
-	if res.Status == "failed" && len(rest) > 0 {
+	// Hold the dependents back only while the changed packages are broken (type, build or lint
+	// errors: the dependents would fail on the same thing). When all that fails is test
+	// assertions, the change itself compiles, and its dependents' tests are what the agent must
+	// update next: run them now, so one verify shows every test to fix (trpc: staging cost an
+	// extra 45-90 s verify round per task).
+	if res.Status == "failed" && len(rest) > 0 && !onlyTestFailures(res) {
 		res.Pending = rest
 	} else if len(rest) > 0 {
+		failedFirst := res.Status == "failed"
 		dep := r.VerifyPackages(g, rest, opt)
 		res.Status = dep.Status
+		if failedFirst {
+			res.Status = "failed"
+		}
 		res.TotalTargets += dep.TotalTargets
 		res.PassedTargets += dep.PassedTargets
 		res.FailedTargets += dep.FailedTargets
@@ -409,13 +441,35 @@ func (r *Runner) VerifyAffected(g *graph.DependencyGraph, changedFiles []string,
 	return res
 }
 
+// onlyTestFailures reports whether every failed package failed on test assertions only.
+func onlyTestFailures(res SuiteResult) bool {
+	any := false
+	for _, t := range res.Results {
+		if t.Status != "failed" {
+			continue
+		}
+		if len(t.Errors) == 0 {
+			return false
+		}
+		for _, e := range t.Errors {
+			if e.Code != "test-failure" {
+				return false
+			}
+		}
+		any = true
+	}
+	return any
+}
+
 // VerifyPackages verifies the named packages in parallel and, unless Strict, classifies
 // failures main already has as preexisting. Every verify mode (--affected, --package, --all)
 // goes through it: --all used to report preexisting failures as new, so an agent that saw
 // --affected green and --all red stopped trusting both.
 func (r *Runner) VerifyPackages(g *graph.DependencyGraph, names []string, opt VerifyOptions) SuiteResult {
 	start := time.Now()
-	if r.cacheMgr != nil {
+	// No key memo when -u rewrites snapshots mid-run: keys computed before the rewrite would
+	// file later packages' passes under content that no longer exists.
+	if r.cacheMgr != nil && !opt.UpdateSnapshots {
 		r.cacheMgr.BeginRun()
 		defer r.cacheMgr.EndRun()
 	}
@@ -499,17 +553,37 @@ func (r *Runner) VerifyPackages(g *graph.DependencyGraph, names []string, opt Ve
 	// while 48 packages ran, blocking a correct change.)
 	var failedIdx []int
 	for i, res := range results {
-		if res.Status == "failed" && len(res.Errors) > 0 && res.Errors[0].Code != "package_not_projected" && res.Target != PrepareTarget && timingFailure(res.Errors) {
+		if res.Status == "failed" && len(res.Errors) > 0 && res.Errors[0].Code != "package_not_projected" && res.Target != PrepareTarget && (opt.RetryAllFailures || timingFailure(res.Errors)) {
 			failedIdx = append(failedIdx, i)
 		}
 	}
-	if len(failedIdx) > 0 && len(failedIdx) <= 5 {
+	if len(failedIdx) > 0 && (len(failedIdx) <= 5 || opt.RetryAllFailures) {
 		for _, i := range failedIdx {
 			if pkg, ok := g.GetPackage(results[i].Target); ok {
 				if again := r.VerifyTarget(pkg, opt); again.Status == "passed" {
 					again.Flaky = true
 					results[i] = again
 				}
+			}
+		}
+	}
+
+	// A test that fails while dozens of checks run at once but passes alone (trpc: a websocket
+	// keep-alive assertion) blocked a correct change and cost the agent two more full verifies.
+	// Re-running only the failed test files is seconds, so every new test failure gets it once.
+	for i := range results {
+		pkg, ok := g.GetPackage(results[i].Target)
+		if !ok || results[i].Status != "failed" || results[i].Flaky {
+			continue
+		}
+		// Judged per failure: a pre-existing failure in the same files (trpc: a memory test that
+		// fails on main) must not make a flaky one look persistent and block the push.
+		if remaining, ran := r.retryFailedTestFiles(&results[i], pkg.Path); ran {
+			if len(remaining) == 0 {
+				results[i].Status, results[i].Flaky = "passed", true
+				results[i].Errors, results[i].ErrorCount = []DiagnosticError{}, 0
+			} else {
+				results[i].Errors = remaining
 			}
 		}
 	}
@@ -680,6 +754,84 @@ func removeNewUntracked(dir string, before map[string]bool) {
 			}
 		}
 	}
+}
+
+// testRunnerCall finds the repo's own root-level vitest/jest invocation in a check command.
+var testRunnerCall = regexp.MustCompile(`cd "\$\(git rev-parse --show-toplevel\)" && (\S+(?: exec| x)?) (vitest run|jest)\b`)
+
+// jsTestFile matches the test files vitest/jest report failures in.
+var jsTestFile = regexp.MustCompile(`\.(test|spec)\.[cm]?[jt]sx?$`)
+
+// failedTestFilesCmd returns the command running only the test files a vitest/jest check
+// reported failing (repo-relative paths, run from the repo root), when every error is in such
+// a file (a type or lint error is not) and there are at most 10. Paths in errors may be repo-
+// or package-relative.
+func (r *Runner) failedTestFilesCmd(res *TargetResult, pkgPath string) (string, bool) {
+	m := testRunnerCall.FindStringSubmatch(res.CommandRun)
+	if m == nil || len(res.Errors) == 0 {
+		return "", false
+	}
+	seen := map[string]bool{}
+	var files []string
+	for _, e := range res.Errors {
+		if !jsTestFile.MatchString(e.File) {
+			return "", false
+		}
+		f := filepath.ToSlash(filepath.Clean(e.File))
+		if _, err := os.Stat(filepath.Join(r.RootDir, f)); err != nil {
+			f = filepath.ToSlash(filepath.Join(pkgPath, f))
+			if _, err := os.Stat(filepath.Join(r.RootDir, f)); err != nil {
+				return "", false
+			}
+		}
+		if !seen[f] {
+			seen[f] = true
+			files = append(files, "'"+strings.ReplaceAll(f, "'", `'\''`)+"'")
+		}
+	}
+	if len(files) > 10 {
+		return "", false
+	}
+	return repoRootPrefix + m[1] + " " + m[2] + " " + strings.Join(files, " "), true
+}
+
+// retryFailedTestFiles re-runs, once and alone, the failed test files of a vitest/jest check
+// and returns the failures that happen again (a failure whose test passes this time is
+// flaky and dropped; one the re-run cannot account for is kept). ran=false: not re-runnable.
+func (r *Runner) retryFailedTestFiles(res *TargetResult, pkgPath string) (remaining []DiagnosticError, ran bool) {
+	c, ok := r.failedTestFilesCmd(res, pkgPath)
+	if !ok {
+		return nil, false
+	}
+	cmd := exec.Command("sh", "-c", c)
+	cmd.Dir = r.RootDir
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		return nil, true
+	}
+	again := map[string]bool{}
+	for _, e := range ParseDiagnostics(StripANSI(string(out))) {
+		if name := testName(e.Message); name != "" {
+			again[name] = true
+		}
+	}
+	for _, e := range res.Errors {
+		if name := testName(e.Message); name == "" || again[name] {
+			remaining = append(remaining, e)
+		}
+	}
+	return remaining, true
+}
+
+// testName is the "[suite > test]" prefix the parsers put on a test failure ("" if none).
+func testName(msg string) string {
+	if !strings.HasPrefix(msg, "[") {
+		return ""
+	}
+	if i := strings.Index(msg, "]"); i > 0 {
+		return msg[1:i]
+	}
+	return ""
 }
 
 // timingFlake matches failures that load can cause (a deterministic assertion or snapshot

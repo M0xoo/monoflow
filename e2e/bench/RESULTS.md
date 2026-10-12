@@ -179,17 +179,66 @@ Input validation errors become 422 instead of 400: one line in `packages/server`
 inline snapshots and docs across server, client, openapi and adapters. Same setup as the Haiku
 otel runs (one run at a time, fresh copy each). The plain arm has the repo's own Turborepo.
 
-| | runs | time (s) | tool calls | tokens |
-|---|---|---|---|---|
-| plain git + Turbo (B-1, B-2) | 2 | 345 / 237 | 32 / 36 | 79k / 87k |
-| MonoFlow (A-1..A-4) | 4 | 539 / 586 / 470 / 377 | 24 / 41 / 28 / 34 | 76k / 106k / 83k / 91k |
-| MonoFlow (A-5, A-6) | 2 | 610* / 398 | 23 / 27 | 87k / 77k |
+| | build | time (s) | tool calls | tokens | ground truth |
+|---|---|---|---|---|---|
+| plain git + Turbo B-1..B-5 | | 345 / 237 / 239 / 307 / 349 (mean 295) | 32 / 36 / 29 / 36 / 32 | 79k / 87k / 83k / 91k / 93k (mean 87k) | pass (5/5) |
+| MonoFlow A-1..A-4 | early | 539 / 586 / 470 / 377 | 24 / 41 / 28 / 34 | 76k / 106k / 83k / 91k | pass |
+| MonoFlow A-5, A-6 | v20 | 610* / 398 | 23 / 27 | 87k / 77k | A-6 never pushed (bug below) |
+| MonoFlow A-7 | v22 | 839 | 35 | 82k | correct; push blocked by a flaky test (fixed) |
+| MonoFlow A-8 | v23 | 408 | 33 | 83k | pass |
+| MonoFlow A-9 | v24 | 339 | 40 | 95k | pass |
+| MonoFlow A-10 | v25 | 423 | 27 | 89k | pass |
+| MonoFlow A-11 | v26 | 411 | 29 | 77k | correct; push blocked by a flaky test under my load** |
+| MonoFlow A-12 | v27 | 292 | 26 | 100k | pass |
+| MonoFlow A-13 | v29 | **277** | **22** | 87k | pass*** |
+| MonoFlow A-14 | v30 | 377 | 22 | 87k | pass (skipped start: no background verify) |
+| MonoFlow A-15 | v31 | 307 | 33 | 90k | pass*** |
+| MonoFlow A-16 | v31 | 312 | 25 | 90k | pass |
+| MonoFlow A-17 | v31 | 433 | 24 | 100k | correct, but its push was wrongly blocked (fixed in v32, below) |
 
 \* A-5's time is contaminated (heavy runs of mine on the same machine during it).
+\*\* My Go test suite ran during A-11's local CI; the failing timing test passes 3/3 alone.
+\*\*\* One openapi CLI test timed out in the ground-truth run (5 s limit; it passes alone, the
+same file's other CLI tests time out on main too, and the change does not touch the CLI).
 
-Reading: **MonoFlow loses here.** It is slower and does not save tokens: plain git plus Turbo
-already has a good affected-task runner, and MonoFlow's verify ran ~160 s cold on trpc (vitest +
-the openapi CLI tests). All runs that pushed were green; A-6 never pushed: see below.
+**Five runs per side (A-13..A-17 against B-1..B-5): MonoFlow loses on trpc.** Time 341 s
+against 295 s (+16%), tokens 91k against 87k (+5%), tool calls 25 against 33 (-24%). Correctness:
+every change on both sides was right; MonoFlow wrongly refused one push (A-17). What remains is
+the length of each verify (90-145 s on trpc: everything CI runs for the change, 9-11 packages),
+where the plain agent runs a few vitest files it picks itself.
+
+Bugs found by A-14..A-17 (fixed):
+- agents that skip start got no background verify -> verify outside a worktree starts the watcher
+  there (read-only, 15 min idle limit).
+- background runs were cancelled by each new edit, so they never finished -> they run to the end,
+  then the newest state runs.
+- A-17: the test-file re-run counted a pre-existing failure (a memory test failing on main) and a
+  flaky one (a ping timing test, passes 5/5 alone) as one result, so the flaky one was judged new
+  and blocked a correct push -> each failure is judged on its own.
+- the ground-truth script counted openapi CLI test timeouts under its own full parallel run as
+  agent errors (A-13, A-15) -> failures are re-run alone before they count, for both arms.
+
+Earlier reading: MonoFlow started far behind here (539-610 s against 237-345 s) and is now level on time
+with plain git plus Turbo (277 s against a mean of 274 s, slower than its two fastest runs) with
+the fewest tool calls of any run (22 against 29-36), and tokens at the top of the plain range
+(87k against 79-87k). Every MonoFlow push was gated on local CI on the exact commit and checked
+for conflicts with main; plain pushes were not. What closed the gap, run by run:
+- A-7: an agent backgrounded verify and looped 9 minutes on a log line -> verify on unchanged
+  files reprints the stored result; a second verify waits for the one running.
+- A-7, A-8: a websocket timing test blocked correct changes -> local CI retries a failed package
+  once; verify re-runs only the failed test files once (seconds) and reports a pass as flaky.
+- A-8: the pre-existing note sent the agent to --verbose (pages of another package's lint debt)
+  -> pre-existing failures listed inline.
+- A-9: the agent ran prettier itself -> per-package fix_cmd formats changed files in verify/ship.
+- A-10: a --update-snapshots pass was not reused by the next plain verify (60 s) -> stored under
+  the plain key too; failures compared against main by running only the failed test files there.
+- A-11: a test edit in @trpc/server re-ran its 8 dependents (66 s) -> an upstream's tests no
+  longer count in its dependents' cache keys; the main baseline is prepared in the background.
+- A-12: 3-5 verify rounds, one only to discover the dependents' failures -> dependents run in the
+  same verify when the changed packages fail only on test assertions. A-13: 2 rounds.
+
+What is left: each verify is still 70-110 s on trpc (11 packages; @trpc/openapi's CLI tests alone
+take ~50 s), where the plain agent runs a few vitest files. And 3 plain runs is a small sample.
 
 Bugs found by these runs (fixed):
 - Worktree tests failed under Vite's `fs.allow` (node_modules symlinked into the main checkout) and
@@ -200,5 +249,30 @@ Bugs found by these runs (fixed):
   10 minutes for an install that was not running (the 931 s outer loop; A-6 never pushed). The
   marker now holds the installer's pid and is never committed.
 
-Not yet measured: the build with speculative verify (verify runs in the background once the
-agent's edits settle) and the TanStack Query (Nx) comparison.
+Not yet measured: the TanStack Query (Nx) comparison.
+
+## TanStack Query (pnpm + Nx, ~100 projects), Claude Haiku (`tasks/tanstack-networkmode.txt`)
+Change query-core's default `networkMode` from 'online' to 'always' and update everything that
+depends on it (tests in query-core, react, preact, solid and angular packages, docs). Same setup
+as trpc: one run at a time, fresh copy each, leftover processes of earlier runs stopped first.
+Ground truth: `nx run-many -t test:lib,test:types` over the repo's projects (examples and
+integrations excluded, as the repo's own scripts do), failures re-run alone before they count.
+
+| | build | time (s) | tool calls | tokens | ground truth |
+|---|---|---|---|---|---|
+| plain git + Nx B-1..B-3 | | 556 / 371 / 426 (mean 451) | 49 / 73 / 45 (mean 56) | 119k / 134k / 118k (mean 124k) | pass (3/3) |
+| MonoFlow A-1 | v32 | 684 | 52 | 122k | pass (verify ran 37 packages, integration apps included) |
+| MonoFlow A-2..A-4 | v33-v34 | 559* / 540 / 451 (mean 517) | 48 / 35 / 46 (mean 43) | 113k / 107k / 115k (mean 112k) | pass (3/3) |
+
+\* A-2 ran partly alongside A-1's leftover remote-CI stand-in (verify --all over 101 projects).
+
+Reading: on Nx, MonoFlow uses 10% fewer tokens and 23% fewer tool calls, and is 15% slower (10%
+over the clean runs A-3, A-4). Same shape as trpc: verify covers what CI covers, which the plain
+agent does not do in its loop.
+
+Fixed from these runs:
+- A-1: verify checked 37 projects, the integration apps' slow builds and old failures included,
+  where the repo's scripts exclude `examples/**` and `integrations/**` -> init derives
+  verify_exclude from the repo's own `--exclude=<dir>/**`.
+- A-2: a previous run's watchers and remote-CI stand-in were still running -> one conflict
+  watcher per repository instead of one per branch; the bench stops leftovers between runs.

@@ -36,6 +36,7 @@ func (g *DependencyGraph) discoverGoModules(files []string) {
 			TestCmd:      "go test ./...",
 			LintCmd:      GoLintCmd,
 			TypecheckCmd: "go build ./...",
+			FixCmd:       "gofmt -w {files:.go}",
 		})
 	}
 	sort.Slice(found, func(i, j int) bool { return found[i].Path < found[j].Path })

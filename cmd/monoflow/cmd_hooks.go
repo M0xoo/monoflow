@@ -112,6 +112,7 @@ func hookStop(root string) {
 		StopHookActive bool `json:"stop_hook_active"`
 	}
 	_ = json.Unmarshal(readHookStdin(), &payload)
+	checkPushedBranchConflicts(root) // the base may have moved under a pushed branch
 	branch := currentBranch(root)
 	wait := stopWaitMinutes(root)
 	if hookFlag("wait") != "" {

@@ -8,8 +8,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
+	"time"
 
 	"github.com/antigravity/monoflow/pkg/graph"
 )
@@ -58,7 +61,13 @@ func (r *Runner) classifyPreexisting(g *graph.DependencyGraph, results []TargetR
 			if _, err := os.Stat(dir); err != nil {
 				return // package is new in this change: nothing to compare against
 			}
-			baseOut, baseFailed := runBaselineCheck(baseDir, dir, res.CommandRun)
+			// Only the failed test files when that is all that failed: running the package's
+			// whole command (typecheck, lint, every test) on main again took ~20 s per verify.
+			baseCmd, narrow := r.failedTestFilesCmd(res, pkgPath)
+			if !narrow {
+				baseCmd = res.CommandRun
+			}
+			baseOut, baseFailed := runBaselineCheck(baseDir, dir, baseCmd)
 			if !baseFailed {
 				return
 			}
@@ -131,7 +140,7 @@ func (r *Runner) baselineSHA(baseRef string) string {
 	if mb == "" {
 		return ""
 	}
-	if mb == strings.TrimSpace(string(head)) && !worktreeDirty(r.RootDir) {
+	if mb == strings.TrimSpace(string(head)) && !r.assumeEdits && !worktreeDirty(r.RootDir) {
 		// HEAD is on the base branch with no local edits: the change under test is HEAD
 		// itself, so the baseline is its parent (never the commit being judged).
 		parent, err := exec.Command("git", "-C", r.RootDir, "rev-parse", "HEAD^").Output()
@@ -149,6 +158,21 @@ func (r *Runner) baselineDir(baseRef string) string {
 		return ""
 	}
 	dir := filepath.Join(r.cacheMgr.LocalDir, "baselines", mb)
+	ready := filepath.Join(dir, ".monoflow-ready")
+	if _, err := os.Stat(ready); err == nil {
+		return dir
+	}
+	// One creator at a time: a background warm-up (WarmBaseline) and the agent's verify may both
+	// get here; the second waits for the first instead of racing it.
+	_ = os.MkdirAll(filepath.Dir(dir), 0755)
+	unlock, ok := lockFile(dir+".lock", 10*time.Minute)
+	if !ok {
+		return ""
+	}
+	defer unlock()
+	if _, err := os.Stat(ready); err == nil {
+		return dir
+	}
 	if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
 		if _, err := os.Lstat(filepath.Join(dir, "node_modules")); err != nil {
 			// Made before dependencies were linked: link them and drop results memoised without them.
@@ -160,9 +184,9 @@ func (r *Runner) baselineDir(baseRef string) string {
 				}
 			}
 		}
+		_ = os.WriteFile(ready, nil, 0644)
 		return dir
 	}
-	_ = os.MkdirAll(filepath.Dir(dir), 0755)
 	pruneBaselines(r.RootDir, filepath.Dir(dir), 2)
 	if out, err := exec.Command("git", "-C", r.RootDir, "worktree", "add", "--detach", dir, mb).CombinedOutput(); err != nil {
 		_ = out
@@ -171,7 +195,68 @@ func (r *Runner) baselineDir(baseRef string) string {
 	// Without dependencies every JS check fails differently on the baseline, so old failures
 	// all looked new (trpc: 40 of 48 packages "failed" on a one-line change).
 	graph.PrepareNodeModules(r.RootDir, dir)
+	_ = os.WriteFile(ready, nil, 0644)
 	return dir
+}
+
+// WarmBaseline prepares the baseline checkout verify compares failures against (checkout and
+// dependency install, ~30 s on trpc), so the agent's first failing verify does not pay for it.
+// Run in the background by any monoflow command when it is missing.
+func WarmBaseline(root string) {
+	r := NewRunner(root)
+	r.assumeEdits = true
+	r.baselineDir("")
+}
+
+// BaselineReady reports whether the baseline for root's edits is prepared (or being prepared).
+func BaselineReady(root string) bool {
+	r := NewRunner(root)
+	r.assumeEdits = true
+	mb := r.baselineSHA("")
+	if mb == "" || r.cacheMgr == nil {
+		return true // nothing to prepare
+	}
+	dir := filepath.Join(r.cacheMgr.LocalDir, "baselines", mb)
+	if _, err := os.Stat(filepath.Join(dir, ".monoflow-ready")); err == nil {
+		return true
+	}
+	return lockHeld(dir + ".lock")
+}
+
+// lockFile takes an exclusive lock file (holding the pid), waiting up to timeout for a live
+// holder; a lock left by a dead process is taken over.
+func lockFile(path string, timeout time.Duration) (unlock func(), ok bool) {
+	deadline := time.Now().Add(timeout)
+	for {
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+		if err == nil {
+			_, _ = f.WriteString(strconv.Itoa(os.Getpid()))
+			_ = f.Close()
+			return func() { _ = os.Remove(path) }, true
+		}
+		if !lockHeld(path) {
+			_ = os.Remove(path)
+			continue
+		}
+		if time.Now().After(deadline) {
+			return nil, false
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+}
+
+// lockHeld reports whether the lock file's process is alive.
+func lockHeld(path string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil || pid <= 0 {
+		return false
+	}
+	p, err := os.FindProcess(pid)
+	return err == nil && p.Signal(syscall.Signal(0)) == nil
 }
 
 // worktreeDirty reports uncommitted changes, ignoring MonoFlow's own .agents/ files.

@@ -220,6 +220,16 @@ func (m *Manager) SetHTTPClient(client *http.Client) {
 // dependent's cached verification and build artifact. Pinned dependencies need no entry:
 // the pinned version is part of the consumer's own (hashed) manifest.
 func (m *Manager) UpstreamKeys(g *graph.DependencyGraph, pkg *graph.PackageNode) map[string]string {
+	return m.upstreamKeys(g, pkg, true)
+}
+
+// UpstreamKeysFresh is UpstreamKeys from the files as they are now, ignoring the run's memo
+// (after a check rewrote files, e.g. snapshot updates).
+func (m *Manager) UpstreamKeysFresh(g *graph.DependencyGraph, pkg *graph.PackageNode) map[string]string {
+	return m.upstreamKeys(g, pkg, false)
+}
+
+func (m *Manager) upstreamKeys(g *graph.DependencyGraph, pkg *graph.PackageNode, memo bool) map[string]string {
 	keys := map[string]string{}
 	visited := map[string]bool{pkg.Name: true}
 	queue := g.GetUpstream(pkg.Name)
@@ -231,11 +241,11 @@ func (m *Manager) UpstreamKeys(g *graph.DependencyGraph, pkg *graph.PackageNode)
 		}
 		visited[name] = true
 		if dep, ok := g.GetPackage(name); ok {
-			if k, ok := m.sourceKeys.Load(name); ok && m.memoOn.Load() {
+			if k, ok := m.sourceKeys.Load(name); ok && memo && m.memoOn.Load() {
 				keys[name] = k.(string)
 			} else {
 				keys[name], _ = m.ComputePackageKey(dep, nil, "", "source")
-				if m.memoOn.Load() {
+				if memo && m.memoOn.Load() {
 					m.sourceKeys.Store(name, keys[name])
 				}
 			}
@@ -276,6 +286,12 @@ func (m *Manager) ComputePackageKey(pkg *graph.PackageNode, upstreamKeys map[str
 		fileList, err := collectSourceFiles(absPkgPath)
 		if err == nil {
 			for _, relPath := range fileList {
+				// As an upstream of another package ("source" key), its own tests and snapshots
+				// cannot affect the dependent: an edit to them re-ran every dependent (trpc: an
+				// agent's test edit in @trpc/server re-ran 8 packages, 66 s).
+				if mode == "source" && isTestOnlyFile(relPath) {
+					continue
+				}
 				fullPath := filepath.Join(absPkgPath, relPath)
 				fileHash, err := hashFile(fullPath)
 				if err == nil {
@@ -917,6 +933,24 @@ var packageManifests = []string{"go.mod", "package.json", "Cargo.toml", "pyproje
 func isPackageRoot(dir string) bool {
 	for _, m := range packageManifests {
 		if _, err := os.Stat(filepath.Join(dir, m)); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// isTestOnlyFile reports test files and snapshots, which no other package imports.
+func isTestOnlyFile(rel string) bool {
+	rel = filepath.ToSlash(rel)
+	if strings.Contains("/"+rel, "/__snapshots__/") || strings.HasSuffix(rel, ".snap") {
+		return true
+	}
+	base := filepath.Base(rel)
+	if strings.HasSuffix(base, "_test.go") {
+		return true
+	}
+	for _, mark := range []string{".test.", ".spec."} {
+		if strings.Contains(base, mark) {
 			return true
 		}
 	}

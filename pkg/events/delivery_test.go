@@ -28,3 +28,18 @@ func TestDeliveryOncePerConsumer(t *testing.T) {
 		t.Fatalf("agent/b gets only its own CI event (source-consumer notes are informational), got %+v", b)
 	}
 }
+
+// An event that was acknowledged, or superseded by a newer commit's result, is never delivered:
+// an agent handed a replaced CI failure would set out to fix what the newer push already fixed.
+func TestDeliverySkipsReadEvents(t *testing.T) {
+	em := NewEventManager(t.TempDir())
+	_ = em.Emit(&Event{ID: "old", Type: EventCIFailed, CommitSHA: "aaa", Branch: "agent/a", RequiresAction: true, Summary: "red"})
+	_ = em.Emit(&Event{ID: "new", Type: EventCIPassed, CommitSHA: "bbb", Branch: "agent/a", Summary: "green"})
+	if err := em.Ack("old"); err != nil { // what superseding (or 'events ack') records
+		t.Fatal(err)
+	}
+	got := em.Pending("agent/a", "agent/a", nil)
+	if len(got) != 1 || got[0].ID != "new" {
+		t.Fatalf("only the unread result may be delivered, got %+v", got)
+	}
+}

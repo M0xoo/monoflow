@@ -136,6 +136,13 @@ func (cw *CIWatcher) StartWatch(opts WatchOptions) (*WatchJob, error) {
 			spawn = cw.spawnDetached
 		}
 		if err := spawn(job, opts); err != nil {
+			// Say so: an agent waiting for this commit's CI result would otherwise wait for an
+			// event that never comes.
+			short := job.CommitSHA[:min(8, len(job.CommitSHA))]
+			evt := &Event{Type: EventCISkipped, CommitSHA: job.CommitSHA, Branch: job.Branch,
+				Summary: fmt.Sprintf("CI for %s on %s is not being watched (%v); 'monoflow events wait %s' watches it", short, job.Branch, err, short)}
+			_ = cw.events.Emit(evt)
+			job.EventEmitted, job.EventID = true, evt.ID
 			cw.finishJob(job, WatchStatusTimedOut, "failed to start background watcher: "+err.Error())
 			return job, err
 		}
@@ -163,9 +170,9 @@ func (cw *CIWatcher) spawnDetached(job *WatchJob, opts WatchOptions) error {
 	if err != nil {
 		return err
 	}
-	// Only the monoflow CLI can serve as the watcher process (never a test binary, which
-	// would re-run its own test suite).
-	if !strings.HasPrefix(filepath.Base(exe), "monoflow") {
+	// Never a Go test binary (pkg.test), which would re-run its own test suite; any other
+	// name is the monoflow CLI, possibly installed under another name.
+	if strings.HasSuffix(filepath.Base(exe), ".test") {
 		if alt, lookErr := exec.LookPath("monoflow"); lookErr == nil {
 			exe = alt
 		} else {
@@ -210,7 +217,10 @@ func (cw *CIWatcher) remoteIsGitHub(remote string) bool {
 	if remote == "" {
 		remote = "origin"
 	}
-	out, err := exec.Command("git", "-C", cw.RootDir, "remote", "get-url", remote).Output()
+	// The configured URL, as pr create reads it: `remote get-url` applies insteadOf rewrites,
+	// so a repo whose GitHub remote goes through a mirror looked non-GitHub here and its CI
+	// results were never fetched from GitHub.
+	out, err := exec.Command("git", "-C", cw.RootDir, "config", "--get", "remote."+remote+".url").Output()
 	if err != nil {
 		return false
 	}
