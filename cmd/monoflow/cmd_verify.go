@@ -248,7 +248,16 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 			if res.Status == "passed" {
 				// Nothing to fix in the changed packages: wait for the dependents' run within the
 				// call's budget (under the harness's 120 s tool limit), else answer PENDING.
-				if full, ok, _ := speculatedResultOrRunning(rootDir, 95*time.Second-time.Since(callStart)); ok {
+				// Briefly: a run far from done is better answered PENDING at once, so the agent does
+				// its docs and changeset meanwhile (trpc: a verify waited 46 s and then said PENDING
+				// anyway). A verify on unchanged files waits up to its full budget.
+				wait := 95*time.Second - time.Since(callStart)
+				pendingMark := filepath.Join(specDir(rootDir), treeStateKey(rootDir)+".pending")
+				if _, err := os.Stat(pendingMark); err != nil {
+					wait = min(wait, 20*time.Second) // first ask for this state
+					_ = os.WriteFile(pendingMark, nil, 0644)
+				}
+				if full, ok, _ := speculatedResultOrRunning(rootDir, wait); ok {
 					fmt.Print(full + fixLines(fixed))
 					if !strings.HasPrefix(full, "PASS") {
 						os.Exit(1)
