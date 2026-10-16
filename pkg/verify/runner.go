@@ -538,34 +538,9 @@ func (r *Runner) VerifyAffected(g *graph.DependencyGraph, changedFiles []string,
 		}(opt)
 	}
 	opt.prepared = true
-	if !opt.FailFast && opt.DependentsTestsOnly && len(rest) > 0 {
-		// A background run of the agent's loop: nobody waits for the changed packages' answer
-		// first, so their dependents' tests start at once too (after their upstream builds)
-		// instead of after them (trpc: 8-15 s on the critical path).
-		var dep SuiteResult
-		depDone := make(chan struct{})
-		go func(o VerifyOptions) {
-			defer close(depDone)
-			<-prepDone
-			dep = r.VerifyPackages(g, rest, o)
-		}(opt)
-		res := r.VerifyPackages(g, affected.DirectlyChanged, opt)
-		<-depDone
-		res.Results = append(res.Results, directPrep...)
-		dep.Results = append(dep.Results, restPrep...)
-		if len(directPrep)+len(restPrep) > 0 || dep.Status == "failed" {
-			res.Status = "failed"
-		}
-		res.TotalTargets += dep.TotalTargets + len(directPrep) + len(restPrep)
-		res.PassedTargets += dep.PassedTargets
-		res.FailedTargets += dep.FailedTargets + len(directPrep) + len(restPrep)
-		res.CachedTargets += dep.CachedTargets
-		res.AffectedPackages = append(res.AffectedPackages, dep.AffectedPackages...)
-		res.Results = append(res.Results, dep.Results...)
-		res.Excluded, res.ExcludedNames = excluded, excludedNames
-		res.DurationMs = float64(time.Since(start).Microseconds()) / 1000.0
-		return res
-	}
+	// The changed packages first, also in background runs: the agent's own verify of them waits
+	// on their lock, and a background run checking 23 dependents' tests beside them (TanStack
+	// Query) held it for 79 s where 12 s is usual.
 	res := r.VerifyPackages(g, affected.DirectlyChanged, opt)
 	<-prepDone
 	if len(directPrep) > 0 {
