@@ -19,6 +19,7 @@ import (
 )
 
 func handleVerify(rootDir string, metrics *telemetry.Collector) {
+	callStart := time.Now()
 	opts := verify.VerifyOptions{}
 	targetPkg := ""
 	verifyAll := false
@@ -82,20 +83,20 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 		}
 	}
 	if !recording && plain && !jsonMode() {
-		// Bounded below the harness's 120 s tool limit: a call past it was moved to the
-		// background and the agent had to come back for it anyway.
-		out, ok, running := speculatedResultOrRunning(rootDir, 95*time.Second)
-		if ok {
+		// A finished result for these files is printed at once. A run still in progress is not
+		// waited for here: it checks everything and finishes late, so this verify checks the
+		// changed packages itself first (cached where the run got to them) and waits for the run
+		// only once they pass. Waiting first cost an agent 108 s for a PENDING (trpc).
+		wait := time.Duration(0)
+		if foregroundRunAlive(rootDir) {
+			wait = 95 * time.Second // the agent's own earlier verify of these files: its answer
+		}
+		if out, ok, _ := speculatedResultOrRunning(rootDir, wait); ok {
 			fmt.Print(out + fixLines(fixed) + reusedNote)
 			if !strings.HasPrefix(out, "PASS") {
 				os.Exit(1)
 			}
 			return
-		}
-		if running {
-			fmt.Print("PENDING: the check of exactly these files is still running in the background (the dependents)\n" + fixLines(fixed) +
-				"next: monoflow verify again collects it (nothing else to run); or first finish other work (docs, changeset)\n")
-			os.Exit(1)
 		}
 	}
 	failFast := !recording && plain && !jsonMode()
@@ -234,10 +235,19 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 		if len(res.Pending) > 0 && opts.FailFast {
 			// Not the answer for this state (the dependents are unchecked): a background run
 			// produces that, started here, and a verify on unchanged files waits for it.
-			// PENDING answers at once (the agent can finish docs and changesets meanwhile); the
-			// next verify on these files blocks for the run's result, up to 95 s a call.
 			storeResult("")
 			ensureSpecRun(rootDir)
+			if res.Status == "passed" {
+				// Nothing to fix in the changed packages: wait for the dependents' run within the
+				// call's budget (under the harness's 120 s tool limit), else answer PENDING.
+				if full, ok, _ := speculatedResultOrRunning(rootDir, 95*time.Second-time.Since(callStart)); ok {
+					fmt.Print(full + fixLines(fixed))
+					if !strings.HasPrefix(full, "PASS") {
+						os.Exit(1)
+					}
+					return
+				}
+			}
 		} else {
 			storeResult(text)
 		}

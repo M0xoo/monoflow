@@ -90,6 +90,21 @@ func maybeVerifyInBackground(root string) bool {
 	return true
 }
 
+// foregroundRunAlive reports an agent's own verify of the current state still running (its
+// .run marker), as opposed to a background run.
+func foregroundRunAlive(root string) bool {
+	key := treeStateKey(root)
+	if key == "" {
+		return false
+	}
+	data, err := os.ReadFile(filepath.Join(specDir(root), key+".run"))
+	if err != nil {
+		return false
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	return err == nil && processAlive(pid)
+}
+
 // ensureSpecRun starts the background run for the current state now, whatever started it so
 // far: the agent's own verify answered without the dependents and promised them. Runs for other
 // (older) states are stopped: this state is the one asked about. A verify in a root checkout
