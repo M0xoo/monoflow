@@ -7,7 +7,7 @@ Run as ` + "`" + `./bin/monoflow` + "`" + `. Four calls take a change to a PR:
 1. ` + "`" + `monoflow start <task-id>` + "`" + ` first, then work in the printed ` + "`" + `path` + "`" + ` (your worktree and branch; same files).
    Forgot and edited on main? ` + "`" + `ship` + "`" + ` moves your changes onto their own branch for you.
 2. ` + "`" + `monoflow graph query <dir>` + "`" + `: every package, in every module, importing it (instead of grep). Make the change.
-3. ` + "`" + `monoflow verify` + "`" + `: builds, lints and tests every package your change can affect (what CI runs for it)
+3. ` + "`" + `monoflow verify` + "`" + `: builds and tests every package your change can affect, and lints the ones you changed (local CI lints the rest before push)
    and lists each break as ` + "`" + `file:line` + "`" + ` with the failing line and test. Fix those, rerun until it passes.
    It formats your changed files first (the repo's formatter). Nothing else to run: not go test / npm test /
    tsc / prettier / gofmt / ` + "`" + `verify --all` + "`" + `, no grepping for affected tests.

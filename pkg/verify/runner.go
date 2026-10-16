@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -47,6 +48,15 @@ type VerifyOptions struct {
 	// timing-like failures. Local CI sets it: nobody waits on it, and a flaky test there blocks
 	// a correct push (trpc: a websocket keep-alive test failed under load, passed 3/3 alone).
 	RetryAllFailures bool
+	// LintDependents also lints packages the change only reaches through their dependencies.
+	// The agent's loop leaves it off: a linter reads a package's own files, so an upstream
+	// change cannot give a dependent new lint errors (TanStack Query: linting 22 dependents
+	// cost ~35 s of every verify). Local CI sets it, so a push is still linted everywhere.
+	LintDependents bool
+	// direct (set by VerifyAffected) names the packages containing changed files.
+	direct map[string]bool
+	// prepared: VerifyAffected already ran the dependency builds (see VerifyPackages).
+	prepared bool
 }
 
 // TargetResult holds the result of verifying a single package.
@@ -95,7 +105,8 @@ type SuiteResult struct {
 	// once the changed packages pass.
 	Pending []string `json:"pending,omitempty"`
 	// Excluded counts dependents skipped by verify_exclude (default: examples/).
-	Excluded int `json:"excluded,omitempty"`
+	Excluded      int      `json:"excluded,omitempty"`
+	ExcludedNames []string `json:"-"`
 }
 
 // Runner executes verification tasks with maximum parallelism, caching, and minimal latency.
@@ -235,6 +246,12 @@ func (r *Runner) VerifyTarget(pkg *graph.PackageNode, opt VerifyOptions) TargetR
 	var out []byte
 	var err error
 	for i, c := range cmds {
+		ck := r.commandKey(pkg, c, opt)
+		if ck != "" {
+			if rec, hit := r.cacheMgr.PeekVerification(ck); hit && rec.Status == "passed" {
+				continue
+			}
+		}
 		var o []byte
 		o, err = r.runCheck(c, absPkgPath)
 		out = append(out, o...)
@@ -242,6 +259,12 @@ func (r *Runner) VerifyTarget(pkg *graph.PackageNode, opt VerifyOptions) TargetR
 			res.CommandRun = c
 			res.remaining, res.dir = cmds[i+1:], absPkgPath
 			break
+		}
+		if ck != "" {
+			_ = r.cacheMgr.PutVerification(&cache.VerificationRecord{
+				Key: ck, Target: pkg.Name, Language: string(pkg.Language), Status: "passed",
+				CommandRun: c, Timestamp: time.Now().UTC(),
+			})
 		}
 	}
 	durationMs := float64(time.Since(start).Microseconds()) / 1000.0
@@ -331,6 +354,15 @@ func (r *Runner) commandsFor(pkg *graph.PackageNode, opt VerifyOptions) (cmds []
 		}
 	}
 	cmds = checkCommands(pkg, opt)
+	if !opt.LintDependents && !opt.AllPackages && opt.direct != nil && !opt.direct[pkg.Name] && pkg.LintCmd != "" && pkg.LintCmd != pkg.TypecheckCmd && pkg.LintCmd != pkg.TestCmd {
+		kept := cmds[:0:0]
+		for _, c := range cmds {
+			if c != pkg.LintCmd {
+				kept = append(kept, c)
+			}
+		}
+		cmds = kept
+	}
 	if opt.UpdateSnapshots && (pkg.Language == graph.LangJavaScript || pkg.Language == graph.LangTypeScript) {
 		for i, c := range cmds {
 			if c == pkg.TestCmd {
@@ -339,6 +371,21 @@ func (r *Runner) commandsFor(pkg *graph.PackageNode, opt VerifyOptions) (cmds []
 		}
 	}
 	return cmds, false
+}
+
+// commandKey identifies one check command's pass on the package's current inputs, so a
+// package failing on one check does not re-run the others that passed (TanStack Query: every
+// verify re-ran typecheck and lint of the packages whose tests the agent was fixing), and local
+// CI, running the same commands, reuses them. "" when there is no cache or -u rewrites files.
+func (r *Runner) commandKey(pkg *graph.PackageNode, c string, opt VerifyOptions) string {
+	if r.cacheMgr == nil || opt.NoCache || opt.UpdateSnapshots {
+		return ""
+	}
+	key, err := r.cacheMgr.ComputePackageKey(pkg, r.upstreamKeys(pkg), c, "command")
+	if err != nil {
+		return ""
+	}
+	return key
 }
 
 // checkCommands returns the commands for the requested checks, in run order.
@@ -402,7 +449,8 @@ func (r *Runner) VerifyAffected(g *graph.DependencyGraph, changedFiles []string,
 	for _, n := range affected.DirectlyChanged {
 		direct[n] = true
 	}
-	var rest []string
+	opt.direct = direct
+	var rest, excludedNames []string
 	excluded := 0
 	for _, n := range affected.AllAffected {
 		if direct[n] {
@@ -410,11 +458,32 @@ func (r *Runner) VerifyAffected(g *graph.DependencyGraph, changedFiles []string,
 		}
 		if p, ok := g.GetPackage(n); ok && g.ExcludedFromVerify(p) {
 			excluded++ // verify_exclude (default: examples/), as the repo's CI does
+			excludedNames = append(excludedNames, n)
 			continue
 		}
 		rest = append(rest, n)
 	}
+	// Dependency builds for the dependents run while the changed packages are checked (TanStack
+	// Query: 24 s of nx builds used to wait for the 18 s of checks before them). The changed
+	// packages' own builds run first: two builds of one package at once would race on its output.
+	if r.graph == nil {
+		r.graph = g
+	}
+	graph.WaitForDeps(r.RootDir, 10*time.Minute)
+	directPrep := r.prepare(g, affected.DirectlyChanged, opt)
+	var restPrep []TargetResult
+	prepDone := make(chan struct{})
+	go func() {
+		defer close(prepDone)
+		restPrep = r.prepare(g, rest, opt)
+	}()
+	opt.prepared = true
 	res := r.VerifyPackages(g, affected.DirectlyChanged, opt)
+	<-prepDone
+	if len(directPrep) > 0 {
+		res.Results = append(res.Results, directPrep...)
+		res.Status = "failed"
+	}
 	// Hold the dependents back only while the changed packages are broken (type, build or lint
 	// errors: the dependents would fail on the same thing). When all that fails is test
 	// assertions, the change itself compiles, and its dependents' tests are what the agent must
@@ -425,6 +494,12 @@ func (r *Runner) VerifyAffected(g *graph.DependencyGraph, changedFiles []string,
 	} else if len(rest) > 0 {
 		failedFirst := res.Status == "failed"
 		dep := r.VerifyPackages(g, rest, opt)
+		if len(restPrep) > 0 {
+			dep.Results = append(dep.Results, restPrep...)
+			dep.Status = "failed"
+			dep.TotalTargets += len(restPrep)
+			dep.FailedTargets += len(restPrep)
+		}
 		res.Status = dep.Status
 		if failedFirst {
 			res.Status = "failed"
@@ -436,7 +511,7 @@ func (r *Runner) VerifyAffected(g *graph.DependencyGraph, changedFiles []string,
 		res.AffectedPackages = append(res.AffectedPackages, dep.AffectedPackages...)
 		res.Results = append(res.Results, dep.Results...)
 	}
-	res.Excluded = excluded
+	res.Excluded, res.ExcludedNames = excluded, excludedNames
 	res.DurationMs = float64(time.Since(start).Microseconds()) / 1000.0
 	return res
 }
@@ -501,19 +576,9 @@ func (r *Runner) VerifyPackages(g *graph.DependencyGraph, names []string, opt Ve
 		defer removeNewUntracked(r.RootDir, before)
 	}
 
-	// Build what the checks need from upstream packages once, through the repo's task runner,
-	// before the checks run in parallel (only for packages that will actually run).
-	var toRun []*graph.PackageNode
-	for _, name := range names {
-		if pkg, ok := g.GetPackage(name); ok && !r.cachedPass(pkg, opt) {
-			toRun = append(toRun, pkg)
-		}
-	}
 	var prepFailures []TargetResult
-	for _, c := range PrepareCommands(g, toRun) {
-		if out, err := r.runCheck(c, r.RootDir); err != nil {
-			prepFailures = append(prepFailures, failedResult(PrepareTarget, c, string(out)))
-		}
+	if !opt.prepared {
+		prepFailures = r.prepare(g, names, opt)
 	}
 
 	results := make([]TargetResult, len(names))
@@ -525,26 +590,39 @@ func (r *Runner) VerifyPackages(g *graph.DependencyGraph, names []string, opt Ve
 	if limit <= 0 {
 		limit = min(max(runtime.NumCPU()/2, 2), 8)
 	}
-	sem := make(chan struct{}, limit)
-	for i, pkgName := range names {
+	// Slowest first: the run ends when its last package does (TanStack Query: vue-query's 29 s
+	// suite started last and set the end of the run).
+	times := loadDurations(r.RootDir)
+	order := slowestFirst(r.RootDir, g, names, times)
+	next := make(chan int, len(order))
+	for _, i := range order {
+		next <- i
+	}
+	close(next)
+	var timesMu sync.Mutex
+	for w := 0; w < min(limit, len(names)); w++ {
 		wg.Add(1)
-		go func(idx int, name string) {
+		go func() {
 			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			pkg, exists := g.GetPackage(name)
-			if !exists {
-				results[idx] = TargetResult{
-					Target: name,
-					Status: "passed",
+			for idx := range next {
+				name := names[idx]
+				pkg, exists := g.GetPackage(name)
+				if !exists {
+					results[idx] = TargetResult{Target: name, Status: "passed"}
+					continue
 				}
-				return
+				results[idx] = r.VerifyTarget(pkg, opt)
+				if !results[idx].Cached && results[idx].DurationMs > 0 {
+					timesMu.Lock()
+					times[name] = results[idx].DurationMs
+					timesMu.Unlock()
+				}
 			}
-			results[idx] = r.VerifyTarget(pkg, opt)
-		}(i, pkgName)
+		}()
 	}
 
 	wg.Wait()
+	saveDurations(r.RootDir, times)
 	results = append(results, prepFailures...)
 
 	// A failure under the load of many checks at once (test timeouts, spawned processes) is not
@@ -554,6 +632,13 @@ func (r *Runner) VerifyPackages(g *graph.DependencyGraph, names []string, opt Ve
 	var failedIdx []int
 	for i, res := range results {
 		if res.Status == "failed" && len(res.Errors) > 0 && res.Errors[0].Code != "package_not_projected" && res.Target != PrepareTarget && (opt.RetryAllFailures || timingFailure(res.Errors)) {
+			// Failed test files alone are re-run below, in seconds; the whole package again
+			// (TanStack Query: 4 packages, typecheck, lint and tests, 49 s) adds nothing.
+			if pkg, ok := g.GetPackage(res.Target); ok {
+				if _, ok := r.failedTestFilesCmd(&results[i], pkg.Path); ok {
+					continue
+				}
+			}
 			failedIdx = append(failedIdx, i)
 		}
 	}
@@ -623,6 +708,94 @@ func (r *Runner) VerifyPackages(g *graph.DependencyGraph, names []string, opt Ve
 	}
 }
 
+// prepare builds what the named packages' checks need from upstream packages, once, through the
+// repo's task runner (only for packages that will actually run), and returns the failed builds.
+func (r *Runner) prepare(g *graph.DependencyGraph, names []string, opt VerifyOptions) []TargetResult {
+	var toRun []*graph.PackageNode
+	for _, name := range names {
+		if pkg, ok := g.GetPackage(name); ok && !r.cachedPass(pkg, opt) {
+			toRun = append(toRun, pkg)
+		}
+	}
+	var failures []TargetResult
+	for _, c := range PrepareCommands(g, toRun) {
+		if out, err := r.runCheck(c, r.RootDir); err != nil {
+			failures = append(failures, failedResult(PrepareTarget, c, string(out)))
+		}
+	}
+	return failures
+}
+
+// durationsFile holds each package's last check time, shared by the repository's worktrees.
+func durationsFile(root string) string {
+	return filepath.Join(cache.SharedCacheDir(root), "durations.json")
+}
+
+func loadDurations(root string) map[string]float64 {
+	times := map[string]float64{}
+	if data, err := os.ReadFile(durationsFile(root)); err == nil {
+		_ = json.Unmarshal(data, &times)
+	}
+	return times
+}
+
+func saveDurations(root string, times map[string]float64) {
+	if data, err := json.Marshal(times); err == nil {
+		p := durationsFile(root)
+		_ = os.MkdirAll(filepath.Dir(p), 0o755)
+		tmp := fmt.Sprintf("%s.%d", p, os.Getpid())
+		if os.WriteFile(tmp, data, 0o644) == nil {
+			_ = os.Rename(tmp, p)
+		}
+	}
+}
+
+// slowestFirst orders the indexes of names by each package's last check time, longest first;
+// a package never timed ranks by its number of files (a larger package has more to check).
+func slowestFirst(root string, g *graph.DependencyGraph, names []string, times map[string]float64) []int {
+	size := map[string]int{}
+	known := true
+	for _, n := range names {
+		if times[n] == 0 {
+			known = false
+		}
+	}
+	if !known {
+		if out, err := exec.Command("git", "-C", root, "ls-files").Output(); err == nil {
+			paths := map[string]string{}
+			for _, n := range names {
+				if p, ok := g.GetPackage(n); ok && p.Path != "" && p.Path != "." {
+					paths[filepath.ToSlash(p.Path)+"/"] = n
+				}
+			}
+			for _, f := range strings.Split(string(out), "\n") {
+				for dir := path.Dir(f); dir != "." && dir != "/"; dir = path.Dir(dir) {
+					if n, ok := paths[dir+"/"]; ok {
+						size[n]++
+						break
+					}
+				}
+			}
+		}
+	}
+	order := make([]int, len(names))
+	for i := range order {
+		order[i] = i
+	}
+	sort.SliceStable(order, func(a, b int) bool {
+		na, nb := names[order[a]], names[order[b]]
+		ta, tb := times[na], times[nb]
+		if ta != tb && ta > 0 && tb > 0 {
+			return ta > tb
+		}
+		if (ta > 0) != (tb > 0) {
+			return ta == 0 // never timed first: it may be the slowest
+		}
+		return size[na] > size[nb]
+	})
+	return order
+}
+
 // PrepareTarget names the result of a failed dependency build (PackageNode.PrepareCmd).
 const PrepareTarget = "(dependency build)"
 
@@ -672,8 +845,19 @@ func (r *Runner) cachedPass(pkg *graph.PackageNode, opt VerifyOptions) bool {
 		return true
 	}
 	key, _ := r.cacheMgr.ComputePackageKey(pkg, r.upstreamKeys(pkg), strings.Join(cmds, " && "), opt.Stage+":"+opt.Mode)
-	rec, hit := r.cacheMgr.PeekVerification(key)
-	return key != "" && hit && (rec.Status == "passed" || (rec.Status == "preexisting" && !opt.Strict))
+	if rec, hit := r.cacheMgr.PeekVerification(key); key != "" && hit && (rec.Status == "passed" || (rec.Status == "preexisting" && !opt.Strict)) {
+		return true
+	}
+	for _, c := range cmds {
+		ck := r.commandKey(pkg, c, opt)
+		if ck == "" {
+			return false
+		}
+		if rec, hit := r.cacheMgr.PeekVerification(ck); !hit || rec.Status != "passed" {
+			return false
+		}
+	}
+	return true
 }
 
 // failedResult turns a failed command's output into a result with diagnostics.
@@ -840,7 +1024,13 @@ var timingFlake = regexp.MustCompile(`(?i)timed? ?out|timeout|ETIMEDOUT|ECONNRES
 
 func timingFailure(errs []DiagnosticError) bool {
 	for _, e := range errs {
-		if timingFlake.MatchString(e.Message) {
+		// The failure, not the test's name: TanStack Query's "refetchOnReconnect" tests made
+		// every assertion failure in them look like a timing flake.
+		msg := e.Message
+		if name := testName(msg); name != "" {
+			msg = msg[len(name)+2:]
+		}
+		if timingFlake.MatchString(msg) {
 			return true
 		}
 	}

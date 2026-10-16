@@ -80,7 +80,11 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 			}
 			return
 		}
-		stopOtherSpecRuns(rootDir, "") // obsolete; they would compete for the CPU
+	}
+	if !recording {
+		// Obsolete for this verify, and they would compete with it for the CPU: a --json verify
+		// once ran every check twice, side by side with the background run (trpc: 152 s, not 65 s).
+		stopOtherSpecRuns(rootDir, "")
 	}
 	storeResult := func(string) {}
 	if !recording && plain && !jsonMode() {
@@ -163,8 +167,8 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 				c["scope"] = fmt.Sprintf("%d of %d packages: the changed ones and all their dependents (what CI runs for this change); the other %d cannot be affected", res.TotalTargets, total, others)
 				if others <= 5 { // name them, so nobody goes looking (or re-tests them "to be sure")
 					in := map[string]bool{}
-					for _, n := range res.AffectedPackages {
-						in[n] = true
+					for _, n := range append(res.AffectedPackages, res.ExcludedNames...) {
+						in[n] = true // the skipped dependents are summarized in "excluded"
 					}
 					var out []string
 					for _, p := range g.GetAllPackages() {
