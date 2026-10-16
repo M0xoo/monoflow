@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/antigravity/monoflow/pkg/cache"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -547,7 +548,9 @@ func fixChangedFiles(rootDir string) verify.FixResult {
 			}
 		}
 	}
-	return verify.FixChanged(rootDir, g, files)
+	fr := verify.FixChanged(rootDir, g, files)
+	cache.RecordFormatAliases(rootDir, fr.Aliases)
+	return fr
 }
 
 // fixLines renders what fixChangedFiles did, for output printed outside verifyText.

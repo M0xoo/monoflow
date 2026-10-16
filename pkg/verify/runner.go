@@ -219,7 +219,7 @@ func (r *Runner) VerifyTarget(pkg *graph.PackageNode, opt VerifyOptions) TargetR
 	// 2. Check Verification Cache (Local and Remote)
 	var cacheKey string
 	if r.cacheMgr != nil {
-		modeTag := opt.Stage + ":" + opt.Mode
+		modeTag := keyMode(pkg, cmdStr, opt.Stage+":"+opt.Mode)
 		cacheKey, _ = r.cacheMgr.ComputePackageKey(pkg, r.upstreamKeys(pkg), cmdStr, modeTag)
 		if !opt.NoCache && cacheKey != "" {
 			res.CacheKey = cacheKey
@@ -340,7 +340,7 @@ func (r *Runner) VerifyTarget(pkg *graph.PackageNode, opt VerifyOptions) TargetR
 				plain.UpdateSnapshots = false
 				if cmds, _ := r.commandsFor(pkg, plain); len(cmds) > 0 {
 					plainCmd := strings.Join(cmds, " && ")
-					if key, err := r.cacheMgr.ComputePackageKey(pkg, r.cacheMgr.UpstreamKeysFresh(r.graph, pkg), plainCmd, opt.Stage+":"+opt.Mode); err == nil && key != "" {
+					if key, err := r.cacheMgr.ComputePackageKey(pkg, r.cacheMgr.UpstreamKeysFresh(r.graph, pkg), plainCmd, keyMode(pkg, plainCmd, opt.Stage+":"+opt.Mode)); err == nil && key != "" {
 						_ = r.cacheMgr.PutVerification(&cache.VerificationRecord{
 							Key: key, Target: pkg.Name, Language: string(pkg.Language), Status: "passed",
 							DurationMs: durationMs, CommandRun: plainCmd, Timestamp: time.Now().UTC(), Output: string(out),
@@ -386,6 +386,15 @@ func (r *Runner) commandsFor(pkg *graph.PackageNode, opt VerifyOptions) (cmds []
 	return cmds, false
 }
 
+// keyMode is the cache key mode for commands: exact file contents when they lint (formatting
+// aliases apply to tests and type checks only; a formatter can fix what a linter reports).
+func keyMode(pkg *graph.PackageNode, cmdStr, mode string) string {
+	if pkg.LintCmd != "" && strings.Contains(cmdStr, pkg.LintCmd) {
+		return mode + cache.ExactMode
+	}
+	return mode
+}
+
 // commandKey identifies one check command's pass on the package's current inputs, so a
 // package failing on one check does not re-run the others that passed (TanStack Query: every
 // verify re-ran typecheck and lint of the packages whose tests the agent was fixing), and local
@@ -394,7 +403,7 @@ func (r *Runner) commandKey(pkg *graph.PackageNode, c string, opt VerifyOptions)
 	if r.cacheMgr == nil || opt.NoCache || opt.UpdateSnapshots {
 		return ""
 	}
-	key, err := r.cacheMgr.ComputePackageKey(pkg, r.upstreamKeys(pkg), c, "command")
+	key, err := r.cacheMgr.ComputePackageKey(pkg, r.upstreamKeys(pkg), c, keyMode(pkg, c, "command"))
 	if err != nil {
 		return ""
 	}
@@ -867,7 +876,7 @@ func (r *Runner) cachedPass(pkg *graph.PackageNode, opt VerifyOptions) bool {
 	if unaffected || len(cmds) == 0 {
 		return true
 	}
-	key, _ := r.cacheMgr.ComputePackageKey(pkg, r.upstreamKeys(pkg), strings.Join(cmds, " && "), opt.Stage+":"+opt.Mode)
+	key, _ := r.cacheMgr.ComputePackageKey(pkg, r.upstreamKeys(pkg), strings.Join(cmds, " && "), keyMode(pkg, strings.Join(cmds, " && "), opt.Stage+":"+opt.Mode))
 	if rec, hit := r.cacheMgr.PeekVerification(key); key != "" && hit && (rec.Status == "passed" || (rec.Status == "preexisting" && !opt.Strict)) {
 		return true
 	}
