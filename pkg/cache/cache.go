@@ -12,7 +12,9 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
@@ -290,6 +292,11 @@ func (m *Manager) ComputePackageKey(pkg *graph.PackageNode, upstreamKeys map[str
 				// cannot affect the dependent: an edit to them re-ran every dependent (trpc: an
 				// agent's test edit in @trpc/server re-ran 8 packages, 66 s).
 				if mode == "source" && isTestOnlyFile(relPath) {
+					continue
+				}
+				// Incremental tests key each test file (and its snapshot) on its own: exactly
+				// those, so an edit to any other file (a helper, a fixture) still counts here.
+				if mode == "test-sources" && IsTrackedTestFile(relPath) {
 					continue
 				}
 				fullPath := filepath.Join(absPkgPath, relPath)
@@ -940,6 +947,28 @@ func isPackageRoot(dir string) bool {
 }
 
 // isTestOnlyFile reports test files and snapshots, which no other package imports.
+// jsTestFileRe matches the JS/TS test files vitest and jest run.
+var jsTestFileRe = regexp.MustCompile(`\.(test|spec)\.[cm]?[jt]sx?$`)
+
+// IsTrackedTestFile reports a JS/TS test file or a snapshot file next to one (__snapshots__/).
+func IsTrackedTestFile(rel string) bool {
+	rel = filepath.ToSlash(rel)
+	if jsTestFileRe.MatchString(rel) {
+		return true
+	}
+	if strings.HasSuffix(rel, ".snap") && path.Base(path.Dir(rel)) == "__snapshots__" {
+		return jsTestFileRe.MatchString(strings.TrimSuffix(path.Base(rel), ".snap"))
+	}
+	return false
+}
+
+// SourceFiles lists dir's files as the cache keys see them (what git would commit, nested
+// packages left out), relative to dir.
+func SourceFiles(dir string) []string {
+	files, _ := collectSourceFiles(dir)
+	return files
+}
+
 func isTestOnlyFile(rel string) bool {
 	rel = filepath.ToSlash(rel)
 	if strings.Contains("/"+rel, "/__snapshots__/") || strings.HasSuffix(rel, ".snap") {

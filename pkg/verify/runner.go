@@ -57,6 +57,13 @@ type VerifyOptions struct {
 	direct map[string]bool
 	// prepared: VerifyAffected already ran the dependency builds (see VerifyPackages).
 	prepared bool
+	// FailFast (the agent's plain verify) returns as soon as the changed packages fail, leaving
+	// their dependents pending: core tests found every failure in 6-8 s while the full verify
+	// answered after 93-225 s (TanStack Query). A background run checks the dependents meanwhile.
+	FailFast bool
+	// BeforeDependents runs before the dependents are checked (the agent's verify waits there
+	// for a background run checking them, then reuses what it cached).
+	BeforeDependents func()
 }
 
 // TargetResult holds the result of verifying a single package.
@@ -253,7 +260,13 @@ func (r *Runner) VerifyTarget(pkg *graph.PackageNode, opt VerifyOptions) TargetR
 			}
 		}
 		var o []byte
-		o, err = r.runCheck(c, absPkgPath)
+		handled := false
+		if c == pkg.TestCmd {
+			o, err, handled = r.runTestsIncremental(pkg, c, absPkgPath, opt)
+		}
+		if !handled {
+			o, err = r.runCheck(c, absPkgPath)
+		}
 		out = append(out, o...)
 		if err != nil {
 			res.CommandRun = c
@@ -473,10 +486,14 @@ func (r *Runner) VerifyAffected(g *graph.DependencyGraph, changedFiles []string,
 	directPrep := r.prepare(g, affected.DirectlyChanged, opt)
 	var restPrep []TargetResult
 	prepDone := make(chan struct{})
-	go func(opt VerifyOptions) {
-		defer close(prepDone)
-		restPrep = r.prepare(g, rest, opt)
-	}(opt)
+	if opt.FailFast {
+		close(prepDone) // built only once the changed packages pass (below)
+	} else {
+		go func(opt VerifyOptions) {
+			defer close(prepDone)
+			restPrep = r.prepare(g, rest, opt)
+		}(opt)
+	}
 	opt.prepared = true
 	res := r.VerifyPackages(g, affected.DirectlyChanged, opt)
 	<-prepDone
@@ -489,9 +506,15 @@ func (r *Runner) VerifyAffected(g *graph.DependencyGraph, changedFiles []string,
 	// assertions, the change itself compiles, and its dependents' tests are what the agent must
 	// update next: run them now, so one verify shows every test to fix (trpc: staging cost an
 	// extra 45-90 s verify round per task).
-	if res.Status == "failed" && len(rest) > 0 && !onlyTestFailures(res) {
+	if res.Status == "failed" && len(rest) > 0 && (opt.FailFast || !onlyTestFailures(res)) {
 		res.Pending = rest
 	} else if len(rest) > 0 {
+		if opt.BeforeDependents != nil {
+			opt.BeforeDependents()
+		}
+		if opt.FailFast {
+			restPrep = r.prepare(g, rest, opt)
+		}
 		failedFirst := res.Status == "failed"
 		dep := r.VerifyPackages(g, rest, opt)
 		if len(restPrep) > 0 {

@@ -53,7 +53,10 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 			verifyBase = strings.TrimPrefix(arg, "--base=")
 			opts.BaseRef = verifyBase
 		} else if arg == "--verbose" {
-			verboseOut = true
+			// The text output lists every failure now; --verbose (the raw result) is for
+			// scripts: with --json. Agents used it to see failures a cut list left out, and
+			// re-ran every check to get them (88 s, files unchanged).
+			verboseOut = jsonMode()
 		} else if arg == "--strict" {
 			opts.Strict = true
 		} else if arg == "--no-fix" {
@@ -71,7 +74,12 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 	}
 	// Plain verify: the background run started at the agent's last edit may already have the
 	// answer for exactly this state of the tree (see speculate.go).
-	plain := len(os.Args) == 2 || (len(os.Args) == 3 && os.Args[2] == "--affected")
+	plain := true
+	for _, a := range os.Args[2:] {
+		if a != "--affected" && a != "--verbose" {
+			plain = false
+		}
+	}
 	if !recording && plain && !jsonMode() {
 		if out, ok := speculatedResult(rootDir, 15*time.Minute); ok {
 			fmt.Print(out + fixLines(fixed) + reusedNote)
@@ -81,7 +89,14 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 			return
 		}
 	}
-	if !recording {
+	failFast := !recording && plain && !jsonMode()
+	if failFast {
+		// A background run of an earlier state is checking packages this verify needs, mostly
+		// with the same inputs: wait for it before the dependents (it caches them) instead of
+		// killing it; the changed packages are checked meanwhile.
+		opts.FailFast = true
+		opts.BeforeDependents = func() { waitSpecRuns(rootDir, 10*time.Minute) }
+	} else if !recording {
 		// Obsolete for this verify, and they would compete with it for the CPU: a --json verify
 		// once ran every check twice, side by side with the background run (trpc: 152 s, not 65 s).
 		stopOtherSpecRuns(rootDir, "")
@@ -154,7 +169,11 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 			c["note"] = "plain 'monoflow verify' already checks every package your change can affect; --all re-tests the rest too (not needed to ship)"
 		}
 		if targetPkg == "" && !verifyAll && len(res.Pending) > 0 {
-			c["scope"] = fmt.Sprintf("%d changed packages checked first; %d dependents run once they pass", res.TotalTargets, len(res.Pending))
+			if opts.FailFast {
+				c["scope"] = fmt.Sprintf("the %d changed packages, answered first; their %d dependents are being checked in the background now (the next verify includes them, cached)", res.TotalTargets, len(res.Pending))
+			} else {
+				c["scope"] = fmt.Sprintf("%d changed packages checked first; %d dependents run once they pass", res.TotalTargets, len(res.Pending))
+			}
 			c["next"] = "fix the errors listed (file:line), then monoflow verify"
 		} else if targetPkg == "" && !verifyAll && res.TotalTargets > 0 {
 			// Name the packages left out and why: an agent told "every module must pass" saw
@@ -201,7 +220,14 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 		rootDirForText = rootDir
 		text := verifyText(res, out.(map[string]any))
 		fmt.Print(text)
-		storeResult(text)
+		if len(res.Pending) > 0 && opts.FailFast {
+			// Not the answer for this state (the dependents are unchecked): the background run
+			// produces that, and a verify on unchanged files waits for it.
+			storeResult("")
+			maybeVerifyInBackground(rootDir)
+		} else {
+			storeResult(text)
+		}
 	} else {
 		printOut(out)
 	}
@@ -394,7 +420,7 @@ func dedupedSuite(res verify.SuiteResult, rootDir string, g *graph.DependencyGra
 	for _, p := range g.GetAllPackages() {
 		pathOf[p.Name] = p.Path
 	}
-	verify.DedupeErrors(&res, rootDir, pathOf, 30)
+	verify.DedupeErrors(&res, rootDir, pathOf, 0) // all of them; the text output keeps them short
 	return res
 }
 
@@ -528,7 +554,14 @@ func fixLines(fr verify.FixResult) string {
 		b.WriteString("formatted: " + strings.Join(fr.Fixed, ", ") + "\n")
 	}
 	if len(fr.Failed) > 0 {
-		b.WriteString("fix_cmd failed (files left as they were): " + strings.Join(fr.Failed, "; ") + "\n")
+		short := make([]string, len(fr.Failed))
+		for i, f := range fr.Failed {
+			short[i], _, _ = strings.Cut(f, "\n")
+			if len(short[i]) > 120 {
+				short[i] = short[i][:120] + "…"
+			}
+		}
+		b.WriteString("formatter could not run (files left as they were; checks still ran): " + strings.Join(short, "; ") + "\n")
 	}
 	return b.String()
 }

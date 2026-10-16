@@ -212,6 +212,25 @@ func finishRecord(root string) {
 	}
 }
 
+// waitSpecRuns waits (up to timeout) while a background run, for any state, is in progress.
+func waitSpecRuns(root string, timeout time.Duration) {
+	dir := specDir(root)
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		alive := false
+		marks, _ := filepath.Glob(filepath.Join(dir, "*.pid"))
+		for _, m := range marks {
+			if k := strings.TrimSuffix(filepath.Base(m), ".pid"); k != "watch" && specRunAlive(dir, k) {
+				alive = true
+			}
+		}
+		if !alive {
+			return
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+}
+
 // stopOtherSpecRuns stops background runs for states other than keep ("" stops all).
 func stopOtherSpecRuns(root, keep string) {
 	runs, _ := filepath.Glob(filepath.Join(specDir(root), "*.pid"))
