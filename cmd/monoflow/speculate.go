@@ -127,23 +127,30 @@ func anySpecRunAlive(dir string) bool {
 // speculatedResult returns the stored verify output for the current state, waiting (up to
 // timeout) for a background run in progress. ok=false: run verify normally.
 func speculatedResult(root string, timeout time.Duration) (string, bool) {
+	out, ok, _ := speculatedResultOrRunning(root, timeout)
+	return out, ok
+}
+
+// speculatedResultOrRunning is speculatedResult that also reports a run for this state still
+// going when timeout passed (the caller says so instead of starting the same checks again).
+func speculatedResultOrRunning(root string, timeout time.Duration) (out string, ok, running bool) {
 	key := treeStateKey(root)
 	if key == "" {
-		return "", false
+		return "", false, false
 	}
 	dir := specDir(root)
 	deadline := time.Now().Add(timeout)
 	for specRunAlive(dir, key) {
 		if time.Now().After(deadline) {
-			return "", false
+			return "", false, true
 		}
 		time.Sleep(300 * time.Millisecond)
 	}
 	data, err := os.ReadFile(filepath.Join(dir, key+".out"))
 	if err != nil || len(data) == 0 || treeStateKey(root) != key {
-		return "", false
+		return "", false, false
 	}
-	return string(data), true
+	return string(data), true, false
 }
 
 // specRunAlive reports whether a verify for key is in progress: a background run (<key>.pid)

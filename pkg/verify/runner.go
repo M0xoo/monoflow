@@ -517,6 +517,11 @@ func (r *Runner) VerifyAffected(g *graph.DependencyGraph, changedFiles []string,
 	// extra 45-90 s verify round per task).
 	if res.Status == "failed" && len(rest) > 0 && (opt.FailFast || !onlyTestFailures(res)) {
 		res.Pending = rest
+	} else if len(rest) > 0 && opt.FailFast && !r.allCached(g, rest, opt) {
+		// The changed packages pass; their dependents are still to check (minutes on TanStack
+		// Query). Answer now: a verify blocking past the harness's 120 s tool limit was moved to
+		// the background, and the agent left docs and changesets for after it (~100 s).
+		res.Pending = rest
 	} else if len(rest) > 0 {
 		if opt.BeforeDependents != nil {
 			opt.BeforeDependents()
@@ -865,6 +870,16 @@ func PrepareCommands(g *graph.DependencyGraph, pkgs []*graph.PackageNode) []stri
 		}
 	}
 	return cmds
+}
+
+// allCached reports whether every named package has a cached pass (checking them is instant).
+func (r *Runner) allCached(g *graph.DependencyGraph, names []string, opt VerifyOptions) bool {
+	for _, n := range names {
+		if pkg, ok := g.GetPackage(n); ok && !g.ExcludedFromVerify(pkg) && !r.cachedPass(pkg, opt) {
+			return false
+		}
+	}
+	return true
 }
 
 // cachedPass reports whether the package's checks have a cached pass (it will not run).

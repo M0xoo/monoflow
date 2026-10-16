@@ -37,6 +37,8 @@ func verifyText(res verify.SuiteResult, c map[string]any) string {
 	status := "PASS"
 	if res.Status != "passed" {
 		status = "FAIL"
+	} else if len(res.Pending) > 0 {
+		status = "PENDING" // the changed packages pass; the dependents are not checked yet
 	}
 	fmt.Fprintf(&b, "%s %d/%d packages passed", status, res.PassedTargets, res.TotalTargets)
 	if res.CachedTargets > 0 {

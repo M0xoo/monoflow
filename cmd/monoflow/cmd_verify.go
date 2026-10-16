@@ -82,12 +82,20 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 		}
 	}
 	if !recording && plain && !jsonMode() {
-		if out, ok := speculatedResult(rootDir, 15*time.Minute); ok {
+		// Bounded below the harness's 120 s tool limit: a call past it was moved to the
+		// background and the agent had to come back for it anyway.
+		out, ok, running := speculatedResultOrRunning(rootDir, 95*time.Second)
+		if ok {
 			fmt.Print(out + fixLines(fixed) + reusedNote)
 			if !strings.HasPrefix(out, "PASS") {
 				os.Exit(1)
 			}
 			return
+		}
+		if running {
+			fmt.Print("PENDING: the check of exactly these files is still running in the background (the dependents)\n" + fixLines(fixed) +
+				"next: monoflow verify again collects it (nothing else to run); or first finish other work (docs, changeset)\n")
+			os.Exit(1)
 		}
 	}
 	failFast := !recording && plain && !jsonMode()
@@ -169,7 +177,10 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 		if verifyAll && len(opts.ChangedFiles) > 0 {
 			c["note"] = "plain 'monoflow verify' already checks every package your change can affect; --all re-tests the rest too (not needed to ship)"
 		}
-		if targetPkg == "" && !verifyAll && len(res.Pending) > 0 {
+		if targetPkg == "" && !verifyAll && len(res.Pending) > 0 && res.Status == "passed" {
+			c["scope"] = fmt.Sprintf("the %d changed packages pass; their %d dependents are being checked in the background now", res.TotalTargets, len(res.Pending))
+			c["next"] = "finish other work (docs, changeset) if any, then monoflow verify: it returns the dependents' result (nothing else to run)"
+		} else if targetPkg == "" && !verifyAll && len(res.Pending) > 0 {
 			if opts.FailFast {
 				c["scope"] = fmt.Sprintf("the %d changed packages, answered first; their %d dependents are being checked in the background now (the next verify includes them, cached)", res.TotalTargets, len(res.Pending))
 			} else {
@@ -235,6 +246,10 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 	if recording {
 		finishRecord(rootDir)
 		return
+	}
+
+	if res.Status == "passed" && len(res.Pending) > 0 {
+		os.Exit(1) // not a pass yet: the dependents are unchecked
 	}
 
 	cb := guard.NewCircuitBreaker(rootDir, 5)
