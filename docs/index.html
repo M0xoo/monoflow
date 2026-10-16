@@ -95,7 +95,7 @@
         <li>
           <span class="verb">Verify</span>
           <code>monoflow verify</code>
-          <p>Your packages' failures in seconds; every dependent checked in the background behind them. Re-runs only the test files your edits touched.</p>
+          <p>Your packages' failures in seconds; every dependent's tests in the background behind them. Re-runs only the test files your edits touched. Local CI checks everything before the push.</p>
         </li>
         <li>
           <span class="verb">Ship</span>
@@ -223,7 +223,7 @@ not affected: internal/tools, schema</code></pre>
         </li>
         <li class="how-step">
           <h3>Verify</h3>
-          <p>Changed packages run first, in parallel, while the dependents' upstream builds run; the agent's <code>verify</code> answers with their failures at once, or <code>PENDING</code> when they pass, and the dependents are checked in the background. Results are keyed by a SHA-256 of files, command and upstream keys, per check and per vitest test file, so unchanged inputs aren't re-run, and a reformatted file keeps its keys. A failure is re-checked against main: if main fails the same way, it's reported as pre-existing and doesn't block. Output is stripped to <code>file:line</code> with source context.</p>
+          <p>Changed packages run first, in parallel, while the dependents' upstream builds run; the agent's <code>verify</code> answers with their failures at once, or <code>PENDING</code> when they pass, and the dependents' tests run in the background (their typecheck and lint in local CI, before the push). Results are keyed by a SHA-256 of files, command and upstream keys, per check and per vitest test file, so unchanged inputs aren't re-run, and a reformatted file keeps its keys. A failure is re-checked against main: if main fails the same way, it's reported as pre-existing and doesn't block. Output is stripped to <code>file:line</code> with source context.</p>
           <p class="how-io">.agents/cache/verify/</p>
         </li>
         <li class="how-step">

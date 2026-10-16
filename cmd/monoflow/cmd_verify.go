@@ -99,6 +99,9 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 			return
 		}
 	}
+	// The agent's loop (its plain verify and the background runs for it): dependents' tests
+	// only; local CI checks everything before the push.
+	opts.DependentsTestsOnly = plain && !jsonMode()
 	failFast := !recording && plain && !jsonMode()
 	if failFast {
 		// A background run of an earlier state is checking packages this verify needs, mostly
@@ -199,6 +202,9 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 			}
 			if others := total - res.TotalTargets - res.Excluded; others > 0 {
 				c["scope"] = fmt.Sprintf("%d of %d packages: the changed ones and all their dependents (what CI runs for this change); the other %d cannot be affected", res.TotalTargets, total, others)
+				if opts.DependentsTestsOnly && res.TotalTargets > 1 {
+					c["scope"] = fmt.Sprintf("%d of %d packages: the changed ones fully, their dependents' tests (their typecheck runs in local CI before the push); the other %d cannot be affected", res.TotalTargets, total, others)
+				}
 				if others <= 5 { // name them, so nobody goes looking (or re-tests them "to be sure")
 					in := map[string]bool{}
 					for _, n := range append(res.AffectedPackages, res.ExcludedNames...) {
