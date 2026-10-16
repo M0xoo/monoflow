@@ -19,6 +19,10 @@ func (g *DependencyGraph) discoverGoModules(files []string) {
 			dirs[filepath.ToSlash(filepath.Clean(rel))] = true
 		}
 	}
+	testCmd := "go test ./..."
+	if ciRunsGoTestsWithRace(g.RootDir) {
+		testCmd = "go test -race ./..." // as CI does: a data race fails CI, so it must fail verify
+	}
 	var found []*PackageNode
 	for rel := range dirs {
 		name := rel
@@ -33,7 +37,7 @@ func (g *DependencyGraph) discoverGoModules(files []string) {
 			Path:         rel,
 			Language:     LangGo,
 			Version:      "1.0.0",
-			TestCmd:      "go test ./...",
+			TestCmd:      testCmd,
 			LintCmd:      GoLintCmd,
 			TypecheckCmd: "go build ./...",
 			FixCmd:       "gofmt -w {files:.go}",
@@ -44,6 +48,24 @@ func (g *DependencyGraph) discoverGoModules(files []string) {
 	for _, p := range found {
 		g.AddPackage(p)
 	}
+}
+
+// ciRunsGoTestsWithRace reports whether a GitHub Actions workflow runs go test with -race.
+// Local CI without it passed a commit whose race GitHub's CI then failed.
+func ciRunsGoTestsWithRace(root string) bool {
+	files, _ := filepath.Glob(filepath.Join(root, ".github", "workflows", "*.y*ml"))
+	for _, f := range files {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			if strings.Contains(line, "go test") && strings.Contains(line, " -race") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // GoLintCmd fails on unformatted files (naming them) as well as vet findings, so agents

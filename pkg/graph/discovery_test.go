@@ -257,3 +257,18 @@ func TestRepoVerifyExcludeFromScripts(t *testing.T) {
 		t.Fatalf("got %v", got)
 	}
 }
+
+// Go tests run with -race when the repository's CI does, so a race fails verify, not CI.
+func TestGoTestCmdFollowsCIRaceFlag(t *testing.T) {
+	plain := discover(t, writeTree(t, map[string]string{"go.mod": "module m\n\ngo 1.22\n"}))
+	if p, _ := plain.GetPackage("m"); p.TestCmd != "go test ./..." {
+		t.Fatalf("without CI: %q", p.TestCmd)
+	}
+	race := discover(t, writeTree(t, map[string]string{
+		"go.mod":                   "module m\n\ngo 1.22\n",
+		".github/workflows/ci.yml": "jobs:\n  t:\n    steps:\n      - run: go test -v -race ./...\n",
+	}))
+	if p, _ := race.GetPackage("m"); p.TestCmd != "go test -race ./..." {
+		t.Fatalf("CI runs -race: %q", p.TestCmd)
+	}
+}

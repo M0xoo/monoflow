@@ -473,10 +473,10 @@ func (r *Runner) VerifyAffected(g *graph.DependencyGraph, changedFiles []string,
 	directPrep := r.prepare(g, affected.DirectlyChanged, opt)
 	var restPrep []TargetResult
 	prepDone := make(chan struct{})
-	go func() {
+	go func(opt VerifyOptions) {
 		defer close(prepDone)
 		restPrep = r.prepare(g, rest, opt)
-	}()
+	}(opt)
 	opt.prepared = true
 	res := r.VerifyPackages(g, affected.DirectlyChanged, opt)
 	<-prepDone

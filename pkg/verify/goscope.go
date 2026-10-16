@@ -24,7 +24,8 @@ import (
 // Go source: go.mod, embedded files, testdata). skip=true means no package of the module
 // imports the change, so nothing can break.
 func goScopedCommands(root string, pkg *graph.PackageNode, changed []string) (cmds []string, skip, ok bool) {
-	if pkg.Language != graph.LangGo || pkg.TestCmd != "go test ./..." || pkg.LintCmd != graph.GoLintCmd ||
+	race := pkg.TestCmd == "go test -race ./..."
+	if pkg.Language != graph.LangGo || (pkg.TestCmd != "go test ./..." && !race) || pkg.LintCmd != graph.GoLintCmd ||
 		(pkg.TypecheckCmd != "" && pkg.TypecheckCmd != "go build ./...") {
 		return nil, false, false
 	}
@@ -45,7 +46,11 @@ func goScopedCommands(root string, pkg *graph.PackageNode, changed []string) (cm
 	}
 	if len(selected) > 0 {
 		list := strings.Join(selected, " ")
-		cmds = append(cmds, "go vet "+list, "go test "+list)
+		test := "go test "
+		if race {
+			test = "go test -race "
+		}
+		cmds = append(cmds, "go vet "+list, test+list)
 	}
 	return cmds, false, true
 }
@@ -217,7 +222,8 @@ func isDocChange(f string) bool {
 // goFormatScopedCommands keeps every package of the module (verify --all / --package) but runs
 // gofmt on the changed files only, as verify does.
 func goFormatScopedCommands(root string, pkg *graph.PackageNode, changed []string) ([]string, bool) {
-	if pkg.Language != graph.LangGo || pkg.TestCmd != "go test ./..." || pkg.LintCmd != graph.GoLintCmd ||
+	race := pkg.TestCmd == "go test -race ./..."
+	if pkg.Language != graph.LangGo || (pkg.TestCmd != "go test ./..." && !race) || pkg.LintCmd != graph.GoLintCmd ||
 		(pkg.TypecheckCmd != "" && pkg.TypecheckCmd != "go build ./...") {
 		return nil, false
 	}
