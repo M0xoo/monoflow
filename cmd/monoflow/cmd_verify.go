@@ -19,6 +19,7 @@ import (
 )
 
 func handleVerify(rootDir string, metrics *telemetry.Collector) {
+	callStart := time.Now()
 	opts := verify.VerifyOptions{}
 	targetPkg := ""
 	verifyAll := false
@@ -82,20 +83,20 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 		}
 	}
 	if !recording && plain && !jsonMode() {
-		// Bounded below the harness's 120 s tool limit: a call past it was moved to the
-		// background and the agent had to come back for it anyway.
-		out, ok, running := speculatedResultOrRunning(rootDir, 95*time.Second)
-		if ok {
+		// A finished result for these files is printed at once. A run still in progress is not
+		// waited for here: it checks everything and finishes late, so this verify checks the
+		// changed packages itself first (cached where the run got to them) and waits for the run
+		// only once they pass. Waiting first cost an agent 108 s for a PENDING (trpc).
+		wait := time.Duration(0)
+		if foregroundRunAlive(rootDir) {
+			wait = 95 * time.Second // the agent's own earlier verify of these files: its answer
+		}
+		if out, ok, _ := speculatedResultOrRunning(rootDir, wait); ok {
 			fmt.Print(out + fixLines(fixed) + reusedNote)
 			if !strings.HasPrefix(out, "PASS") {
 				os.Exit(1)
 			}
 			return
-		}
-		if running {
-			fmt.Print("PENDING: the check of exactly these files is still running in the background (the dependents)\n" + fixLines(fixed) +
-				"next: monoflow verify again collects it (nothing else to run); or first finish other work (docs, changeset)\n")
-			os.Exit(1)
 		}
 	}
 	failFast := !recording && plain && !jsonMode()
@@ -105,11 +106,11 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 		// killing it; the changed packages are checked meanwhile.
 		opts.FailFast = true
 		opts.BeforeDependents = func() { waitSpecRuns(rootDir, 10*time.Minute) }
-	} else if !recording {
-		// Obsolete for this verify, and they would compete with it for the CPU: a --json verify
-		// once ran every check twice, side by side with the background run (trpc: 152 s, not 65 s).
-		stopOtherSpecRuns(rootDir, "")
 	}
+	// Background runs are never killed: one stopped in the middle of a test suite that
+	// regenerates fixtures left them deleted from the agent's tree (trpc: openapi's generated
+	// clients). They run at low priority, and a package being checked by one run is waited for
+	// by another (see Runner.lockPackage), which then reuses its result.
 	storeResult := func(string) {}
 	if !recording && plain && !jsonMode() {
 		storeResult = beginForeground(rootDir)
@@ -169,8 +170,10 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 		}
 	}
 
+	envBroken := false
 	var out any = res
 	if !verboseOut {
+		envBroken = environmentFailure(res) // before compactSuite moves the errors
 		c := compactSuite(res, rootDir, g)
 		// Say what was covered and what to do next: agents that were not told re-ran
 		// verify --all and raw go test / npm test "to be sure" (benchmark: +6 calls a run).
@@ -231,21 +234,45 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 	if !verboseOut && !jsonMode() {
 		rootDirForText = rootDir
 		text := verifyText(res, out.(map[string]any))
-		fmt.Print(text)
 		if len(res.Pending) > 0 && opts.FailFast {
-			// Not the answer for this state (the dependents are unchecked): the background run
-			// produces that, and a verify on unchanged files waits for it.
+			// Not the answer for this state (the dependents are unchecked): a background run
+			// produces that, started here, and a verify on unchanged files waits for it.
 			storeResult("")
-			maybeVerifyInBackground(rootDir)
+			ensureSpecRun(rootDir)
+			if res.Status == "passed" {
+				// Nothing to fix in the changed packages: wait for the dependents' run within the
+				// call's budget (under the harness's 120 s tool limit), else answer PENDING.
+				if full, ok, _ := speculatedResultOrRunning(rootDir, 95*time.Second-time.Since(callStart)); ok {
+					fmt.Print(full + fixLines(fixed))
+					if !strings.HasPrefix(full, "PASS") {
+						os.Exit(1)
+					}
+					return
+				}
+			}
 		} else {
-			storeResult(text)
+			if envBroken {
+				storeResult("") // a check that could not run is not this state's answer
+			} else {
+				storeResult(text)
+			}
 		}
+		fmt.Print(text)
 	} else {
 		printOut(out)
 	}
 	if recording {
-		finishRecord(rootDir)
+		if envBroken {
+			_ = os.Remove(filepath.Join(specDir(rootDir), os.Getenv("MONOFLOW_RECORD_KEY")+".tmp"))
+		} else {
+			finishRecord(rootDir)
+		}
 		return
+	}
+	if !plain && targetPkg != "" {
+		// verify --package checks one package; the change's dependents still need checking. An
+		// agent iterating with --package got its first full verify cold (TanStack Query: 94 s).
+		ensureSpecRun(rootDir)
 	}
 
 	if res.Status == "passed" && len(res.Pending) > 0 {
@@ -585,4 +612,23 @@ func fixLines(fr verify.FixResult) string {
 		b.WriteString("formatter could not run (files left as they were; checks still ran): " + strings.Join(short, "; ") + "\n")
 	}
 	return b.String()
+}
+
+// environmentFailure reports a check that could not run at all (a missing tool: exit 127,
+// "command not found"), as opposed to one that ran and failed. Such a result is not stored for
+// reuse: an agent repaired a broken pnpm, ran verify again, got the stored failure back in 2 s,
+// and fell back to --force (90 s).
+func environmentFailure(res verify.SuiteResult) bool {
+	for _, r := range res.Results {
+		for _, e := range r.Errors {
+			if e.Code != "execution_failure" {
+				continue
+			}
+			m := strings.ToLower(e.Message)
+			if strings.Contains(m, "command not found") || strings.Contains(m, "not found: ") || strings.Contains(m, "no such file or directory") || strings.Contains(m, "exit status 127") || strings.Contains(m, "cannot find module") {
+				return true
+			}
+		}
+	}
+	return false
 }

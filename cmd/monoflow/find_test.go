@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/antigravity/monoflow/pkg/verify"
 	"strings"
 	"testing"
 )
@@ -21,5 +22,13 @@ func TestFindGroupsAndLeavesOutGenerated(t *testing.T) {
 	}
 	if strings.Contains(out, "CHANGELOG") {
 		t.Fatalf("changelog must be left out:\n%s", out)
+	}
+}
+
+func TestEnvironmentFailureIsNotARealResult(t *testing.T) {
+	broken := verify.SuiteResult{Results: []verify.TargetResult{{Status: "failed", Errors: []verify.DiagnosticError{{Code: "execution_failure", Message: "sh: pnpm: command not found"}}}}}
+	real := verify.SuiteResult{Results: []verify.TargetResult{{Status: "failed", Errors: []verify.DiagnosticError{{Code: "test-failure", Message: "[a > b] expected 1 to be 2"}}}}}
+	if !environmentFailure(broken) || environmentFailure(real) {
+		t.Fatalf("a missing tool is an environment failure; a failing test is not")
 	}
 }

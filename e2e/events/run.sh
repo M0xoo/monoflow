@@ -11,6 +11,8 @@ REPO_ROOT="$(cd "$HERE/../.." && pwd)"
 T="$(mktemp -d "${TMPDIR:-/tmp}/mf-events.XXXXXX")"
 BIN="${1:-}"
 if [ -z "$BIN" ]; then BIN="$T/monoflow"; (cd "$REPO_ROOT" && go build -o "$BIN" ./cmd/monoflow) || exit 1; fi
+# Absolute: every helper runs it from inside a scenario's repo (make passes ./bin/monoflow).
+BIN="$(cd "$(dirname "$BIN")" && pwd)/$(basename "$BIN")"
 mkdir -p "$T/fakebin" && cp "$HERE/fake-gh" "$T/fakebin/gh"
 # Stop every background process the scenarios left (conflict and CI watchers, background
 # verifies): each records its pid under .agents/.

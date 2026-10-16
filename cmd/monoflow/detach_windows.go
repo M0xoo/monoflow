@@ -15,3 +15,8 @@ func killGroup(pid int) {
 		_ = p.Kill()
 	}
 }
+
+// backgroundNice prefixes background verify runs to give them low CPU priority.
+const backgroundNice = ""
+
+func lowerPriority() {}

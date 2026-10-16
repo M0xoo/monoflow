@@ -97,6 +97,7 @@ func main() {
 		conflict.Watch(rootDir)
 
 	case "baseline-warm": // internal: see maybeWarmBaseline
+		lowerPriority() // never slows the agent's own verify
 		warmBaseline(rootDir)
 
 	case "speculate-watch": // internal: started by start, see speculate.go

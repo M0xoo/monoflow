@@ -1,6 +1,8 @@
 package verify
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -10,6 +12,7 @@ import (
 	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -249,6 +252,19 @@ func (r *Runner) VerifyTarget(pkg *graph.PackageNode, opt VerifyOptions) TargetR
 		}
 	}
 
+	// One run at a time per package in this checkout: two runs of a suite that rewrites its
+	// fixtures (trpc's openapi tests regenerate clients) raced and left them deleted. The second
+	// run waits, then usually finds the first one's pass in the cache.
+	unlock := r.lockPackage(pkg)
+	defer unlock()
+	if r.cacheMgr != nil && !opt.NoCache && cacheKey != "" {
+		if rec, hit := r.cacheMgr.PeekVerification(cacheKey); hit && rec.Status == "passed" {
+			res.Cached = true
+			res.DurationMs = float64(time.Since(start).Microseconds()) / 1000.0
+			return res
+		}
+	}
+
 	// 3. Cache Miss: run each check in order, stopping at the first failure.
 	var out []byte
 	var err error
@@ -393,6 +409,15 @@ func keyMode(pkg *graph.PackageNode, cmdStr, mode string) string {
 		return mode + cache.ExactMode
 	}
 	return mode
+}
+
+// lockPackage takes this checkout's lock for pkg (waiting for another run holding it) and
+// returns its release.
+func (r *Runner) lockPackage(pkg *graph.PackageNode) func() {
+	h := sha256.Sum256([]byte(pkg.Name))
+	dir := filepath.Join(r.RootDir, ".agents", "verify", "locks")
+	_ = os.MkdirAll(dir, 0o755)
+	return lockFileBlocking(filepath.Join(dir, hex.EncodeToString(h[:8])+".lock"))
 }
 
 // commandKey identifies one check command's pass on the package's current inputs, so a
@@ -624,8 +649,14 @@ func (r *Runner) VerifyPackages(g *graph.DependencyGraph, names []string, opt Ve
 	// Bounded: every target at once (48 on trpc, each starting vitest/tsc with its own workers)
 	// oversubscribed the machine and made timing-sensitive tests fail (websocket reconnects).
 	limit := opt.Concurrency
+	if n, err := strconv.Atoi(os.Getenv("MONOFLOW_VERIFY_CONCURRENCY")); err == nil && n > 0 && limit <= 0 {
+		limit = n
+	}
 	if limit <= 0 {
-		limit = min(max(runtime.NumCPU()/2, 2), 8)
+		// One package per CPU: measured cold, 8 at once on 8 cores took 118 s on TanStack Query
+		// where 4 took 166 s (trpc: 60 s, 70 s), same verdicts. Load-induced test failures are
+		// handled by re-running the failed test files alone.
+		limit = min(max(runtime.NumCPU(), 2), 8)
 	}
 	// Slowest first: the run ends when its last package does (TanStack Query: vue-query's 29 s
 	// suite started last and set the end of the run).
@@ -700,7 +731,10 @@ func (r *Runner) VerifyPackages(g *graph.DependencyGraph, names []string, opt Ve
 		}
 		// Judged per failure: a pre-existing failure in the same files (trpc: a memory test that
 		// fails on main) must not make a flaky one look persistent and block the push.
-		if remaining, ran := r.retryFailedTestFiles(&results[i], pkg.Path); ran {
+		unlock := r.lockPackage(pkg)
+		remaining, ran := r.retryFailedTestFiles(&results[i], pkg.Path)
+		unlock()
+		if ran {
 			if len(remaining) == 0 {
 				results[i].Status, results[i].Flaky = "passed", true
 				results[i].Errors, results[i].ErrorCount = []DiagnosticError{}, 0

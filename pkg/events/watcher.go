@@ -233,10 +233,22 @@ func (cw *CIWatcher) remoteIsGitHub(remote string) bool {
 }
 
 // runLocalCI is the CI backend for remotes without GitHub Actions visibility: it clones
-// the pushed commit from the remote and runs the repo's ci_cmd (default: full verify).
+// the pushed commit from the remote and runs the repo's ci_cmd; without one, it reports CI_SKIPPED.
 func (cw *CIWatcher) runLocalCI(job *WatchJob, remote string) {
 	if remote == "" {
 		remote = "origin"
+	}
+	if readCICommand(cw.RootDir) == "" {
+		// No CI on this remote and none configured: local CI already checked this exact commit
+		// before the push. Re-running everything here (verify --all --no-cache, in a clone with
+		// no dependencies installed) took 5 minutes of CPU next to the agent's next task and
+		// reported environment errors as a CI failure (trpc: lib.dom.d.ts against @types/ws).
+		evt := &Event{Type: EventCISkipped, CommitSHA: job.CommitSHA, Branch: job.Branch,
+			Summary: fmt.Sprintf("No CI on remote %q and no ci_cmd configured: local CI checked this commit before the push", remote)}
+		_ = cw.events.Emit(evt)
+		job.EventEmitted, job.EventID = true, evt.ID
+		cw.finishJob(job, WatchStatusCompletedPassed, "no remote CI")
+		return
 	}
 	tmp, err := os.MkdirTemp("", "monoflow-ci-*")
 	if err != nil {
@@ -267,8 +279,7 @@ func (cw *CIWatcher) runLocalCI(job *WatchJob, remote string) {
 	}
 	ciCmd := readCICommand(tmp)
 	if ciCmd == "" {
-		exe, _ := os.Executable()
-		ciCmd = fmt.Sprintf("%q verify --all --no-cache", exe)
+		ciCmd = readCICommand(cw.RootDir)
 	}
 	cmd := exec.Command("sh", "-c", ciCmd)
 	cmd.Dir = tmp

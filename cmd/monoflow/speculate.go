@@ -86,26 +86,66 @@ func maybeVerifyInBackground(root string) bool {
 	if anySpecRunAlive(dir) {
 		return false // let it finish; the watcher starts this state afterwards
 	}
+	startSpecRun(root, key, speculateDebounce)
+	return true
+}
+
+// foregroundRunAlive reports an agent's own verify of the current state still running (its
+// .run marker), as opposed to a background run.
+func foregroundRunAlive(root string) bool {
+	key := treeStateKey(root)
+	if key == "" {
+		return false
+	}
+	data, err := os.ReadFile(filepath.Join(specDir(root), key+".run"))
+	if err != nil {
+		return false
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	return err == nil && processAlive(pid)
+}
+
+// ensureSpecRun starts the background run for the current state now, whatever started it so
+// far: the agent's own verify answered without the dependents and promised them. A verify in a root checkout
+// once answered PENDING with no run behind it (speculation there needs the root watcher), and
+// the agent polled it with sleep for a minute. Returns the state's key ("" when none).
+func ensureSpecRun(root string) string {
+	key := treeStateKey(root)
+	if key == "" {
+		return ""
+	}
+	dir := specDir(root)
+	if _, err := os.Stat(filepath.Join(dir, key+".out")); err == nil || specRunAlive(dir, key) {
+		return key
+	}
+	startSpecRun(root, key, 0) // runs for older states finish (never killed: see handleVerify)
+	return key
+}
+
+// startSpecRun starts a background verify recording its result under key, after delay.
+func startSpecRun(root, key string, delay time.Duration) {
+	dir := specDir(root)
 	_ = os.MkdirAll(dir, 0755)
 	exe, err := os.Executable()
 	if err != nil {
-		return true
+		return
 	}
 	tmp := filepath.Join(dir, key+".tmp")
 	// Always text: the stored result is printed to a plain verify. A watcher started under
 	// MONOFLOW_FORMAT=json (local CI's environment) stored JSON, and plain verify printed it.
-	script := fmt.Sprintf("sleep %.1f; MONOFLOW_FORMAT= MONOFLOW_RECORD_KEY=%s %q verify > %q 2>&1; rm -f %q",
-		speculateDebounce.Seconds(), key, exe, tmp, filepath.Join(dir, key+".pid"))
+	// Low CPU priority: the agent's own verify comes first. A background check of 23 dependents
+	// slowed the agent's 12 s verify of the changed package to 35-40 s (TanStack Query).
+	script := fmt.Sprintf("sleep %.1f; MONOFLOW_FORMAT= MONOFLOW_RECORD_KEY=%s %s%q verify > %q 2>&1; rm -f %q",
+		delay.Seconds(), key, backgroundNice, exe, tmp, filepath.Join(dir, key+".pid"))
 	cmd := exec.Command("sh", "-c", script)
 	cmd.Dir = root
 	cmd.SysProcAttr = detachedSysProcAttr()
 	if err := cmd.Start(); err != nil {
-		return true
+		return
 	}
 	_ = os.WriteFile(filepath.Join(dir, key+".pid"), []byte(strconv.Itoa(cmd.Process.Pid)), 0644)
 	_ = cmd.Process.Release()
 	pruneSpecResults(dir, 20)
-	return true
 }
 
 // anySpecRunAlive reports a verify in progress for any state: a background run or the agent's own.
