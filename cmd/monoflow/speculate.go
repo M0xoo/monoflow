@@ -92,7 +92,9 @@ func maybeVerifyInBackground(root string) bool {
 		return true
 	}
 	tmp := filepath.Join(dir, key+".tmp")
-	script := fmt.Sprintf("sleep %.1f; MONOFLOW_RECORD_KEY=%s %q verify > %q 2>&1; rm -f %q",
+	// Always text: the stored result is printed to a plain verify. A watcher started under
+	// MONOFLOW_FORMAT=json (local CI's environment) stored JSON, and plain verify printed it.
+	script := fmt.Sprintf("sleep %.1f; MONOFLOW_FORMAT= MONOFLOW_RECORD_KEY=%s %q verify > %q 2>&1; rm -f %q",
 		speculateDebounce.Seconds(), key, exe, tmp, filepath.Join(dir, key+".pid"))
 	cmd := exec.Command("sh", "-c", script)
 	cmd.Dir = root
