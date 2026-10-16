@@ -170,8 +170,10 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 		}
 	}
 
+	envBroken := false
 	var out any = res
 	if !verboseOut {
+		envBroken = environmentFailure(res) // before compactSuite moves the errors
 		c := compactSuite(res, rootDir, g)
 		// Say what was covered and what to do next: agents that were not told re-ran
 		// verify --all and raw go test / npm test "to be sure" (benchmark: +6 calls a run).
@@ -249,14 +251,22 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 				}
 			}
 		} else {
-			storeResult(text)
+			if envBroken {
+				storeResult("") // a check that could not run is not this state's answer
+			} else {
+				storeResult(text)
+			}
 		}
 		fmt.Print(text)
 	} else {
 		printOut(out)
 	}
 	if recording {
-		finishRecord(rootDir)
+		if envBroken {
+			_ = os.Remove(filepath.Join(specDir(rootDir), os.Getenv("MONOFLOW_RECORD_KEY")+".tmp"))
+		} else {
+			finishRecord(rootDir)
+		}
 		return
 	}
 	if !plain && targetPkg != "" {
@@ -602,4 +612,23 @@ func fixLines(fr verify.FixResult) string {
 		b.WriteString("formatter could not run (files left as they were; checks still ran): " + strings.Join(short, "; ") + "\n")
 	}
 	return b.String()
+}
+
+// environmentFailure reports a check that could not run at all (a missing tool: exit 127,
+// "command not found"), as opposed to one that ran and failed. Such a result is not stored for
+// reuse: an agent repaired a broken pnpm, ran verify again, got the stored failure back in 2 s,
+// and fell back to --force (90 s).
+func environmentFailure(res verify.SuiteResult) bool {
+	for _, r := range res.Results {
+		for _, e := range r.Errors {
+			if e.Code != "execution_failure" {
+				continue
+			}
+			m := strings.ToLower(e.Message)
+			if strings.Contains(m, "command not found") || strings.Contains(m, "not found: ") || strings.Contains(m, "no such file or directory") || strings.Contains(m, "exit status 127") || strings.Contains(m, "cannot find module") {
+				return true
+			}
+		}
+	}
+	return false
 }
