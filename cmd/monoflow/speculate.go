@@ -120,8 +120,10 @@ func startSpecRun(root, key string, delay time.Duration) {
 	tmp := filepath.Join(dir, key+".tmp")
 	// Always text: the stored result is printed to a plain verify. A watcher started under
 	// MONOFLOW_FORMAT=json (local CI's environment) stored JSON, and plain verify printed it.
-	script := fmt.Sprintf("sleep %.1f; MONOFLOW_FORMAT= MONOFLOW_RECORD_KEY=%s %q verify > %q 2>&1; rm -f %q",
-		delay.Seconds(), key, exe, tmp, filepath.Join(dir, key+".pid"))
+	// Low CPU priority: the agent's own verify comes first. A background check of 23 dependents
+	// slowed the agent's 12 s verify of the changed package to 35-40 s (TanStack Query).
+	script := fmt.Sprintf("sleep %.1f; MONOFLOW_FORMAT= MONOFLOW_RECORD_KEY=%s %s%q verify > %q 2>&1; rm -f %q",
+		delay.Seconds(), key, backgroundNice, exe, tmp, filepath.Join(dir, key+".pid"))
 	cmd := exec.Command("sh", "-c", script)
 	cmd.Dir = root
 	cmd.SysProcAttr = detachedSysProcAttr()
