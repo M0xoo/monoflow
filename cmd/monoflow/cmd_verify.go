@@ -99,6 +99,9 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 			return
 		}
 	}
+	// The agent's loop (its plain verify and the background runs for it): dependents' tests
+	// only; local CI checks everything before the push.
+	opts.DependentsTestsOnly = plain && !jsonMode()
 	failFast := !recording && plain && !jsonMode()
 	if failFast {
 		// A background run of an earlier state is checking packages this verify needs, mostly
@@ -199,6 +202,9 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 			}
 			if others := total - res.TotalTargets - res.Excluded; others > 0 {
 				c["scope"] = fmt.Sprintf("%d of %d packages: the changed ones and all their dependents (what CI runs for this change); the other %d cannot be affected", res.TotalTargets, total, others)
+				if opts.DependentsTestsOnly && res.TotalTargets > 1 {
+					c["scope"] = fmt.Sprintf("%d of %d packages: the changed ones fully, their dependents' tests (their typecheck runs in local CI before the push); the other %d cannot be affected", res.TotalTargets, total, others)
+				}
 				if others <= 5 { // name them, so nobody goes looking (or re-tests them "to be sure")
 					in := map[string]bool{}
 					for _, n := range append(res.AffectedPackages, res.ExcludedNames...) {
@@ -242,7 +248,16 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 			if res.Status == "passed" {
 				// Nothing to fix in the changed packages: wait for the dependents' run within the
 				// call's budget (under the harness's 120 s tool limit), else answer PENDING.
-				if full, ok, _ := speculatedResultOrRunning(rootDir, 95*time.Second-time.Since(callStart)); ok {
+				// Briefly: a run far from done is better answered PENDING at once, so the agent does
+				// its docs and changeset meanwhile (trpc: a verify waited 46 s and then said PENDING
+				// anyway). A verify on unchanged files waits up to its full budget.
+				wait := 95*time.Second - time.Since(callStart)
+				pendingMark := filepath.Join(specDir(rootDir), treeStateKey(rootDir)+".pending")
+				if _, err := os.Stat(pendingMark); err != nil {
+					wait = min(wait, 20*time.Second) // first ask for this state
+					_ = os.WriteFile(pendingMark, nil, 0644)
+				}
+				if full, ok, _ := speculatedResultOrRunning(rootDir, wait); ok {
 					fmt.Print(full + fixLines(fixed))
 					if !strings.HasPrefix(full, "PASS") {
 						os.Exit(1)
@@ -264,8 +279,15 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 	if recording {
 		if envBroken {
 			_ = os.Remove(filepath.Join(specDir(rootDir), os.Getenv("MONOFLOW_RECORD_KEY")+".tmp"))
-		} else {
-			finishRecord(rootDir)
+			return
+		}
+		finishRecord(rootDir)
+		if plain && res.Status == "passed" && len(res.Pending) == 0 && opts.DependentsTestsOnly {
+			// The answer is recorded; now, still at low priority, the checks the loop left to
+			// local CI (the dependents' typecheck and lint), so local CI finds them cached and
+			// the push follows ship quickly (TanStack Query: local CI spent 88 s on them).
+			_ = os.Remove(filepath.Join(specDir(rootDir), os.Getenv("MONOFLOW_RECORD_KEY")+".pid")) // nobody waits on this part
+			runner.VerifyAffected(g, getGitChangedFiles(rootDir), verify.VerifyOptions{LintDependents: true, KeepUntracked: true})
 		}
 		return
 	}

@@ -56,6 +56,12 @@ type VerifyOptions struct {
 	// change cannot give a dependent new lint errors (TanStack Query: linting 22 dependents
 	// cost ~35 s of every verify). Local CI sets it, so a push is still linted everywhere.
 	LintDependents bool
+	// DependentsTestsOnly (the agent's plain verify, foreground and background) runs only the
+	// tests of the packages the change reaches through their dependencies: their typecheck and
+	// build checks run in local CI, before anything is pushed. On trpc each verify typechecked
+	// every dependent (openapi alone 9-26 s) where agents with plain git ran vitest only, and
+	// finished in 205 s against 362 s.
+	DependentsTestsOnly bool
 	// direct (set by VerifyAffected) names the packages containing changed files.
 	direct map[string]bool
 	// prepared: VerifyAffected already ran the dependency builds (see VerifyPackages).
@@ -383,6 +389,9 @@ func (r *Runner) commandsFor(pkg *graph.PackageNode, opt VerifyOptions) (cmds []
 		}
 	}
 	cmds = checkCommands(pkg, opt)
+	if opt.DependentsTestsOnly && !opt.AllPackages && opt.direct != nil && !opt.direct[pkg.Name] && pkg.TestCmd != "" && (opt.Mode == "" || opt.Mode == "all") {
+		cmds = []string{pkg.TestCmd}
+	}
 	if !opt.LintDependents && !opt.AllPackages && opt.direct != nil && !opt.direct[pkg.Name] && pkg.LintCmd != "" && pkg.LintCmd != pkg.TypecheckCmd && pkg.LintCmd != pkg.TestCmd {
 		kept := cmds[:0:0]
 		for _, c := range cmds {
@@ -529,6 +538,9 @@ func (r *Runner) VerifyAffected(g *graph.DependencyGraph, changedFiles []string,
 		}(opt)
 	}
 	opt.prepared = true
+	// The changed packages first, also in background runs: the agent's own verify of them waits
+	// on their lock, and a background run checking 23 dependents' tests beside them (TanStack
+	// Query) held it for 79 s where 12 s is usual.
 	res := r.VerifyPackages(g, affected.DirectlyChanged, opt)
 	<-prepDone
 	if len(directPrep) > 0 {
