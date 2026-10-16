@@ -279,8 +279,15 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 	if recording {
 		if envBroken {
 			_ = os.Remove(filepath.Join(specDir(rootDir), os.Getenv("MONOFLOW_RECORD_KEY")+".tmp"))
-		} else {
-			finishRecord(rootDir)
+			return
+		}
+		finishRecord(rootDir)
+		if plain && res.Status == "passed" && len(res.Pending) == 0 && opts.DependentsTestsOnly {
+			// The answer is recorded; now, still at low priority, the checks the loop left to
+			// local CI (the dependents' typecheck and lint), so local CI finds them cached and
+			// the push follows ship quickly (TanStack Query: local CI spent 88 s on them).
+			_ = os.Remove(filepath.Join(specDir(rootDir), os.Getenv("MONOFLOW_RECORD_KEY")+".pid")) // nobody waits on this part
+			runner.VerifyAffected(g, getGitChangedFiles(rootDir), verify.VerifyOptions{LintDependents: true, KeepUntracked: true})
 		}
 		return
 	}
