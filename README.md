@@ -71,8 +71,9 @@ Three commands take a change to a PR:
 
 ```bash
 monoflow start fix-tax-rounding     # worktree + branch agent/fix-tax-rounding; cd into the printed path
+monoflow find "roundTax"            # every occurrence, grouped code / tests / docs (instead of grep -rn)
 # ... edit ...
-monoflow verify                     # build + test every package the change can affect, lint the changed ones
+monoflow verify                     # your packages' failures in seconds; every dependent checked behind them
 monoflow ship -m "fix: tax rounding" # commit, local CI on that commit, push, open the PR
 ```
 
@@ -82,6 +83,8 @@ flowchart LR
     B --> C["edit"]
     C --> D{"verify"}
     D -- "fail: file:line" --> C
+    D -- "PENDING: dependents still running" --> G["docs, changeset"]
+    G --> D
     D -- "pass" --> E["ship"]
     E --> F["end turn<br/>(result delivered)"]
 ```
@@ -106,23 +109,30 @@ next: fix the errors listed (file:line), then monoflow verify
 ### 1. 🗺️ A map of the repo
 
 ```bash
+monoflow find "BAD_REQUEST"               # occurrences: source lines with text; tests, docs, examples as file:lines
 monoflow graph query packages/core        # dependencies, dependents, and (Go) every package importing it
 monoflow graph impact packages/core/x.go  # which packages a change to this file affects
 ```
+
+`find` leaves out changelogs, build output and generated reference docs. On trpc, `find BAD_REQUEST` prints 5 KB where `grep -rn` prints 23 KB, and grep dumps were the largest token cost in agent runs with and without MonoFlow.
 
 `graph query` works on a package name or any directory inside one. For Go it lists the importing packages across all modules in about a second, which agents otherwise approximate with a repo-wide grep.
 
 ### 2. ⚡ `verify`: the CI for this change, locally
 
 - **Scope.** The changed packages and everything that depends on them, which is what CI runs for this change. The output says how many packages were left out and why. For Go, only the packages whose code or tests import a changed package are run, and gofmt checks only the changed files.
-- **Staged.** Changed packages run first. Their dependents run only once those pass, so a broken edit fails fast.
-- **Uses your repo's own tools.** It runs your package scripts (`test`, `test:lib`, `typecheck`, `lint`…). Upstream builds go through Nx or Turborepo in one call when the repo uses them.
+- **Answers in seconds.** The changed packages are checked first, and `verify` returns as soon as they fail: on TanStack Query, 12 s instead of 93 s for the whole graph. Their dependents are checked in the background meanwhile, and the next `verify` includes them, from cache. When the changed packages pass and the dependents are still running, it says `PENDING` (not a pass) so the agent finishes docs and changesets in the meantime. No call blocks past the 2-minute tool limit of agent harnesses.
+- **Re-runs only what your edits touched.** Per test file for vitest: a re-verify runs only the test files you edited and the ones that failed, as long as the package's other files and its upstream packages are unchanged (trpc: 34 s instead of 66 s). Vitest isolates test files, so these per-file passes add up to the full suite, and local CI reuses them. Each check (typecheck, lint, test) is cached on its own, so a failing test does not re-run a passing typecheck.
+- **Every failure, grouped by file.** All of them, one line each, the first few with their diff and source line; no "... 39 more errors" that sends an agent back for the rest. Matcher boilerplate (Testing Library's DOM dumps) is stripped.
+- **Uses your repo's own tools.** It runs your package scripts (`test`, `test:lib`, `typecheck`, `lint`…). Upstream builds go through Nx or Turborepo in one call when the repo uses them, while the changed packages are being checked.
+- **Lints what you changed.** A linter reads a package's own files, so dependents are not linted in the agent's loop; local CI lints them before the push.
+- **Slowest first.** Packages start in order of their last run time, so the run is not held up by a long suite started last.
 - **Cached** by content. A package whose inputs didn't change is not re-run.
 - **Pre-existing failures** (already red on the base branch) are reported but don't block. `--strict` makes them block.
-- **Flaky tests.** A timing-like failure is retried once alone and reported as flaky. Deterministic failures are not retried.
+- **Flaky tests.** Failed test files are re-run once alone; a failure that does not happen again is reported as flaky, not blocking.
 - **Runs in the background.** In a worktree from `start`, `verify` starts as soon as the agent's edits settle. When the agent asks, the result for those exact files is often already there.
-- **Snapshots.** `verify -u` rewrites mismatched vitest/jest snapshots when the new values are intended.
-- **Formatting is done for you.** Before checking, `verify` (and `ship`, before committing) runs each package's `fix_cmd` on the files the agent changed and lists what it formatted. `init` picks the repo's own formatter: prettier, biome, oxfmt or dprint for JS (from the root `format` script or config), gofmt for Go, ruff for Python, cargo fmt for Rust.
+- **Snapshots.** `verify -u` rewrites mismatched vitest/jest snapshots when the new values are intended, re-running only the test files that can mismatch.
+- **Formatting is done for you.** Before checking, `verify` (and `ship`, before committing) runs each package's `fix_cmd` on the files the agent changed and lists what it formatted. A reformatted file keeps its cache keys for tests and type checks, so formatting never throws away a background run. `init` picks the repo's own formatter: prettier, biome, oxfmt or dprint for JS (from the root `format` script or config), gofmt for Go, ruff for Python, cargo fmt for Rust.
 
 Every package's commands live in `.agents/monoflow.config.json` and can be changed per package: `test_cmd`, `typecheck_cmd`, `lint_cmd`, `fix_cmd` (`{files}` or `{files:.go}` stands for the changed files; `"none"` turns it off) and `prepare_cmd`. Re-running `init` keeps what you set.
 
@@ -225,14 +235,14 @@ A changed file belongs to the package with the longest matching path prefix. The
 
 ### verify
 1. **What changed:** uncommitted paths from `git status`. On a clean tree, it uses the branch's diff against `origin/main`.
-2. **Scope:** the changed packages run first, in parallel. Their dependents run only if those pass, so a broken edit fails in seconds instead of after the whole graph.
-3. **Commands:** your own scripts, typecheck → lint → test, stopping at the first failure. Go modules with default commands are scoped further: `gofmt` on the changed files, then `go vet`/`go test` only on the packages that import the change.
-4. **Cache:** the key is a SHA-256 of the package's files, its command, OS/arch, and its upstream packages' keys. A pass with the same key isn't re-run. The cache is shared across worktrees, and optionally over HTTP.
+2. **Scope:** the changed packages run first, in parallel, while the dependents' upstream builds run. The agent's `verify` answers with their failures at once (or `PENDING` when they pass) and a background run checks the dependents; local CI and `--json` runs check everything in one go. Packages start slowest first.
+3. **Commands:** your own scripts, typecheck → lint → test, stopping at the first failure; dependents skip lint in the agent's loop. Go modules with default commands are scoped further: `gofmt` on the changed files, then `go vet`/`go test` (with `-race` when CI uses it) only on the packages that import the change.
+4. **Cache:** the key is a SHA-256 of the package's files, its command, OS/arch, and its upstream packages' keys, per package and per check. A pass with the same key isn't re-run. Vitest test files are also keyed one by one (the file and its snapshot, on the package's other files and upstream sources), so a re-verify runs only the files without a pass. A file reformatted by `fix_cmd` keeps its key for tests and type checks (lint sees exact content). The cache is shared across worktrees, and optionally over HTTP.
 5. **Baseline:** a failure is re-run on the merge-base with main, in a separate checkout. If main fails the same way, the failure is reported as pre-existing and doesn't block (`--strict` makes it block).
-6. **Flaky:** a timeout or connection-reset style failure is retried once and labeled `flaky` if it then passes.
-7. **Output:** ANSI is stripped, and tsc, Go, vitest and jest output is parsed. Errors are deduplicated across packages and printed as `file:line` with the surrounding source lines.
+6. **Flaky:** failed test files are re-run once alone; a failure that passes then is labeled `flaky`. Local CI re-runs any failed package once.
+7. **Output:** ANSI is stripped, and tsc, Go, vitest and jest output is parsed. Every error is listed, deduplicated across packages and grouped by file, as `file:line`; the first few with the surrounding source lines.
 
-**In the background:** in a `start` worktree, a hook fires after each agent tool call. Once edits have been quiet for 1.5s, MonoFlow starts `verify` in the background, keyed by a hash of HEAD plus the working-tree diff. When the agent then runs `verify` on the same files, it gets the stored result, often without waiting.
+**In the background:** in a `start` worktree, a hook fires after each agent tool call. Once edits have been quiet for 1.5s, MonoFlow starts `verify` in the background, keyed by a hash of HEAD plus the working-tree diff. A background run is never cancelled by newer edits: what it checked stays cached, and the newest state runs next. When the agent then runs `verify` on the same files, it gets the stored result, waiting at most 95 s for a run in progress.
 
 ### ship
 `ship` commits and returns immediately. Before committing, it runs the test-integrity check and secret scan. A detached process then:

@@ -74,8 +74,8 @@
       <h2 class="big">Agents rarely fail at the code. They fail at the repo around it.</h2>
       <div class="ledger" role="table" aria-label="A plain monorepo compared with MonoFlow">
         <div class="lg-head" role="row"><span role="columnheader">In a plain monorepo, an agent</span><span role="columnheader">With MonoFlow, it</span></div>
-        <div class="lg-row" role="row"><span class="was" role="cell">greps the tree to guess who imports a package</span><span class="now" role="cell">asks <code>graph query</code>: every importer, in every module</span></div>
-        <div class="lg-row" role="row"><span class="was" role="cell">tests one package and misses the dependent it broke</span><span class="now" role="cell">runs <code>verify</code>: exactly what CI would run for this change</span></div>
+        <div class="lg-row" role="row"><span class="was" role="cell">greps the tree and reads pages of matches</span><span class="now" role="cell">asks <code>find</code> and <code>graph query</code>: occurrences grouped code / tests / docs, every importer</span></div>
+        <div class="lg-row" role="row"><span class="was" role="cell">tests one package and misses the dependent it broke</span><span class="now" role="cell">runs <code>verify</code>: its packages' failures in seconds, every dependent checked behind them</span></div>
         <div class="lg-row" role="row"><span class="was" role="cell">reads pages of colored logs to find one failing line</span><span class="now" role="cell">gets each break as <code>file:line</code>, with the line shown</span></div>
         <div class="lg-row" role="row"><span class="was" role="cell">pushes, then learns CI is red</span><span class="now" role="cell">ships a commit that passed CI locally, on that exact commit</span></div>
         <div class="lg-row" role="row"><span class="was" role="cell">polls <code>gh run watch</code>, paying tokens to wait</span><span class="now" role="cell">ends its turn; the result is delivered to it</span></div>
@@ -95,7 +95,7 @@
         <li>
           <span class="verb">Verify</span>
           <code>monoflow verify</code>
-          <p>Build and test the changed packages and every dependent, lint what you changed. Slowest packages first; already running in the background once edits settle.</p>
+          <p>Your packages' failures in seconds; every dependent checked in the background behind them. Re-runs only the test files your edits touched.</p>
         </li>
         <li>
           <span class="verb">Ship</span>
@@ -148,7 +148,7 @@ the PR when green. A failure is delivered to you (SHIP_FAILED / OUTER_LOOP_REGRE
       <div class="grid">
         <article class="feature f-verify">
           <h3>CI for this change, in one command</h3>
-          <p>The changed packages run first, and their dependents once those pass. Results are cached by content. Failures main already has are reported but don't block. For Go, only packages that import the change run.</p>
+          <p>The changed packages answer first, in seconds; their dependents are checked in the background and the next <code>verify</code> includes them. Cached per check and per test file, so a re-verify runs only what your edits touched. Failures main already has don't block.</p>
 <pre><code>scope: 27 of 29 packages: the changed ones and all their
 dependents (what CI runs for this change); the other 2
 cannot be affected
@@ -161,7 +161,7 @@ not affected: internal/tools, schema</code></pre>
         </article>
         <article class="feature f-map">
           <h3>A map, not a grep</h3>
-          <p><code>graph query &lt;dir&gt;</code> lists every package importing it, across all modules, in about a second.</p>
+          <p><code>find "&lt;text&gt;"</code> groups occurrences into code, tests and docs, without changelogs or generated files: 5 KB where grep prints 23 KB. <code>graph query &lt;dir&gt;</code> lists every package importing it.</p>
         </article>
         <article class="feature f-events">
           <h3>No polling</h3>
@@ -223,12 +223,12 @@ not affected: internal/tools, schema</code></pre>
         </li>
         <li class="how-step">
           <h3>Verify</h3>
-          <p>Changed packages run first, in parallel. Dependents run only once those pass. Results are keyed by a SHA-256 of files, command and upstream keys, so unchanged inputs aren't re-run. A failure is re-checked against main: if main fails the same way, it's reported as pre-existing and doesn't block. Output is stripped to <code>file:line</code> with source context.</p>
+          <p>Changed packages run first, in parallel, while the dependents' upstream builds run; the agent's <code>verify</code> answers with their failures at once, or <code>PENDING</code> when they pass, and the dependents are checked in the background. Results are keyed by a SHA-256 of files, command and upstream keys, per check and per vitest test file, so unchanged inputs aren't re-run, and a reformatted file keeps its keys. A failure is re-checked against main: if main fails the same way, it's reported as pre-existing and doesn't block. Output is stripped to <code>file:line</code> with source context.</p>
           <p class="how-io">.agents/cache/verify/</p>
         </li>
         <li class="how-step">
           <h3>Background</h3>
-          <p>A hook fires after each agent tool call. When edits have been quiet for 1.5s, <code>verify</code> starts in the background, keyed by HEAD plus the working-tree diff. When the agent asks about the same files, the result is often already there.</p>
+          <p>A hook fires after each agent tool call. When edits have been quiet for 1.5s, <code>verify</code> starts in the background, keyed by HEAD plus the working-tree diff. Runs are never cancelled by newer edits: what they checked stays cached. When the agent asks about the same files, the result is often already there.</p>
           <p class="how-io">.agents/verify/&lt;key&gt;</p>
         </li>
         <li class="how-step">
@@ -321,7 +321,8 @@ cd monoflow &amp;&amp; make build</code></pre><button class="copy" data-copy="cm
           <tbody>
             <tr class="grp"><td colspan="2">Agent path</td></tr>
             <tr><td><code>start &lt;task-id&gt; [--packages=…]</code></td><td>Worktree and branch for one task, off the latest main</td></tr>
-            <tr><td><code>verify [--package=&lt;p&gt;|--all|-u|--strict]</code></td><td>Build and test the changed packages and every dependent, lint the changed ones; <code>-u</code> rewrites snapshots</td></tr>
+            <tr><td><code>find "&lt;text&gt;" [--regex]</code></td><td>Every occurrence, grouped code / tests / docs / examples; changelogs and generated files left out</td></tr>
+            <tr><td><code>verify [--package=&lt;p&gt;|--all|-u|--strict]</code></td><td>The changed packages' failures first, then every dependent (<code>PENDING</code> while they run); <code>-u</code> rewrites snapshots</td></tr>
             <tr><td><code>ship -m "…" [--title=…]</code></td><td>Commit, run local CI on that commit, push and open the PR when green</td></tr>
 
             <tr class="grp"><td colspan="2">Setup &amp; understanding</td></tr>

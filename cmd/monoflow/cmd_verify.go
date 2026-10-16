@@ -19,6 +19,7 @@ import (
 )
 
 func handleVerify(rootDir string, metrics *telemetry.Collector) {
+	callStart := time.Now()
 	opts := verify.VerifyOptions{}
 	targetPkg := ""
 	verifyAll := false
@@ -231,15 +232,28 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 	if !verboseOut && !jsonMode() {
 		rootDirForText = rootDir
 		text := verifyText(res, out.(map[string]any))
-		fmt.Print(text)
 		if len(res.Pending) > 0 && opts.FailFast {
-			// Not the answer for this state (the dependents are unchecked): the background run
-			// produces that, and a verify on unchanged files waits for it.
+			// Not the answer for this state (the dependents are unchecked): a background run
+			// produces that, started here, and a verify on unchanged files waits for it.
 			storeResult("")
-			maybeVerifyInBackground(rootDir)
+			ensureSpecRun(rootDir)
+			if res.Status == "passed" {
+				// Nothing for the agent to fix: wait for the dependents within the call's budget
+				// (under the harness's 120 s tool limit). PENDING made an agent with nothing left
+				// to do poll it with sleep.
+				budget := 95*time.Second - time.Since(callStart)
+				if full, ok, _ := speculatedResultOrRunning(rootDir, budget); ok {
+					fmt.Print(full + fixLines(fixed))
+					if !strings.HasPrefix(full, "PASS") {
+						os.Exit(1)
+					}
+					return
+				}
+			}
 		} else {
 			storeResult(text)
 		}
+		fmt.Print(text)
 	} else {
 		printOut(out)
 	}
