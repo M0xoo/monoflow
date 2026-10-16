@@ -106,11 +106,11 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 		// killing it; the changed packages are checked meanwhile.
 		opts.FailFast = true
 		opts.BeforeDependents = func() { waitSpecRuns(rootDir, 10*time.Minute) }
-	} else if !recording {
-		// Obsolete for this verify, and they would compete with it for the CPU: a --json verify
-		// once ran every check twice, side by side with the background run (trpc: 152 s, not 65 s).
-		stopOtherSpecRuns(rootDir, "")
 	}
+	// Background runs are never killed: one stopped in the middle of a test suite that
+	// regenerates fixtures left them deleted from the agent's tree (trpc: openapi's generated
+	// clients). They run at low priority, and a package being checked by one run is waited for
+	// by another (see Runner.lockPackage), which then reuses its result.
 	storeResult := func(string) {}
 	if !recording && plain && !jsonMode() {
 		storeResult = beginForeground(rootDir)

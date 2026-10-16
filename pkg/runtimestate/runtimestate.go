@@ -17,7 +17,7 @@ var Paths = []string{
 	".agents/subset.json", ".agents/circuit_breaker.json", ".agents/checkpoints",
 	".agents/checkpoints.json", ".agents/outer_loop", ".agents/queue", ".agents/worktrees",
 	".agents/traces", ".agents/hooks", ".agents/ship", ".agents/verify",
-	".agents/deps-installing", ".agents/deps-install.log", GoWorkMarker,
+	".agents/deps-installing", ".agents/deps-install.log", ".agents/conflict", GoWorkMarker,
 }
 
 // GoWorkMarker records the hash of a sparse worktree's projected go.work (see subset.SyncGoWork).

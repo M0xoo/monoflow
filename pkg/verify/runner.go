@@ -1,6 +1,8 @@
 package verify
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -250,6 +252,19 @@ func (r *Runner) VerifyTarget(pkg *graph.PackageNode, opt VerifyOptions) TargetR
 		}
 	}
 
+	// One run at a time per package in this checkout: two runs of a suite that rewrites its
+	// fixtures (trpc's openapi tests regenerate clients) raced and left them deleted. The second
+	// run waits, then usually finds the first one's pass in the cache.
+	unlock := r.lockPackage(pkg)
+	defer unlock()
+	if r.cacheMgr != nil && !opt.NoCache && cacheKey != "" {
+		if rec, hit := r.cacheMgr.PeekVerification(cacheKey); hit && rec.Status == "passed" {
+			res.Cached = true
+			res.DurationMs = float64(time.Since(start).Microseconds()) / 1000.0
+			return res
+		}
+	}
+
 	// 3. Cache Miss: run each check in order, stopping at the first failure.
 	var out []byte
 	var err error
@@ -394,6 +409,15 @@ func keyMode(pkg *graph.PackageNode, cmdStr, mode string) string {
 		return mode + cache.ExactMode
 	}
 	return mode
+}
+
+// lockPackage takes this checkout's lock for pkg (waiting for another run holding it) and
+// returns its release.
+func (r *Runner) lockPackage(pkg *graph.PackageNode) func() {
+	h := sha256.Sum256([]byte(pkg.Name))
+	dir := filepath.Join(r.RootDir, ".agents", "verify", "locks")
+	_ = os.MkdirAll(dir, 0o755)
+	return lockFileBlocking(filepath.Join(dir, hex.EncodeToString(h[:8])+".lock"))
 }
 
 // commandKey identifies one check command's pass on the package's current inputs, so a
@@ -707,7 +731,10 @@ func (r *Runner) VerifyPackages(g *graph.DependencyGraph, names []string, opt Ve
 		}
 		// Judged per failure: a pre-existing failure in the same files (trpc: a memory test that
 		// fails on main) must not make a flaky one look persistent and block the push.
-		if remaining, ran := r.retryFailedTestFiles(&results[i], pkg.Path); ran {
+		unlock := r.lockPackage(pkg)
+		remaining, ran := r.retryFailedTestFiles(&results[i], pkg.Path)
+		unlock()
+		if ran {
 			if len(remaining) == 0 {
 				results[i].Status, results[i].Flaky = "passed", true
 				results[i].Errors, results[i].ErrorCount = []DiagnosticError{}, 0

@@ -106,8 +106,7 @@ func foregroundRunAlive(root string) bool {
 }
 
 // ensureSpecRun starts the background run for the current state now, whatever started it so
-// far: the agent's own verify answered without the dependents and promised them. Runs for other
-// (older) states are stopped: this state is the one asked about. A verify in a root checkout
+// far: the agent's own verify answered without the dependents and promised them. A verify in a root checkout
 // once answered PENDING with no run behind it (speculation there needs the root watcher), and
 // the agent polled it with sleep for a minute. Returns the state's key ("" when none).
 func ensureSpecRun(root string) string {
@@ -119,8 +118,7 @@ func ensureSpecRun(root string) string {
 	if _, err := os.Stat(filepath.Join(dir, key+".out")); err == nil || specRunAlive(dir, key) {
 		return key
 	}
-	stopOtherSpecRuns(root, key)
-	startSpecRun(root, key, 0)
+	startSpecRun(root, key, 0) // runs for older states finish (never killed: see handleVerify)
 	return key
 }
 

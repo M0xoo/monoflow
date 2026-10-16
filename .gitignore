@@ -38,3 +38,6 @@ coverage.html
 .idea/
 .vscode/
 *.swp
+/.agents/conflict
+/.agents/verify
+/.agents/ship
