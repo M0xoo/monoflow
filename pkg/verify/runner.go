@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -624,8 +625,14 @@ func (r *Runner) VerifyPackages(g *graph.DependencyGraph, names []string, opt Ve
 	// Bounded: every target at once (48 on trpc, each starting vitest/tsc with its own workers)
 	// oversubscribed the machine and made timing-sensitive tests fail (websocket reconnects).
 	limit := opt.Concurrency
+	if n, err := strconv.Atoi(os.Getenv("MONOFLOW_VERIFY_CONCURRENCY")); err == nil && n > 0 && limit <= 0 {
+		limit = n
+	}
 	if limit <= 0 {
-		limit = min(max(runtime.NumCPU()/2, 2), 8)
+		// One package per CPU: measured cold, 8 at once on 8 cores took 118 s on TanStack Query
+		// where 4 took 166 s (trpc: 60 s, 70 s), same verdicts. Load-induced test failures are
+		// handled by re-running the failed test files alone.
+		limit = min(max(runtime.NumCPU(), 2), 8)
 	}
 	// Slowest first: the run ends when its last package does (TanStack Query: vue-query's 29 s
 	// suite started last and set the end of the run).
