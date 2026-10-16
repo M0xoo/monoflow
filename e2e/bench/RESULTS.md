@@ -276,3 +276,35 @@ Fixed from these runs:
   verify_exclude from the repo's own `--exclude=<dir>/**`.
 - A-2: a previous run's watchers and remote-CI stand-in were still running -> one conflict
   watcher per repository instead of one per branch; the bench stops leftovers between runs.
+
+## Round 3 (October 2026): fail-fast and incremental verify
+
+Same tasks and prompts as above (Claude Haiku, fresh clone per run, one run at a time, quiet machine). MonoFlow builds changed between runs as the sessions showed problems; the build is named per run. "Pushed" is when the branch reached the remote: for MonoFlow that is after local CI on the exact commit. Every run below passed ground truth (the repo's tests and type checks on the pushed branch, failures main already has excluded).
+
+### TanStack Query (pnpm + Nx)
+
+| Run | Build / arm | Done | Pushed | Calls | Tokens | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| A-5 | v39 | 337 s | 417 s | 36 | 92.6k | |
+| A-6 | v40 | 470 s | 539 s | 44 | 113.6k | verify blocked past the 120 s tool limit (fixed: PENDING) |
+| A-7 | v41 | 481 s | 541 s | 49 | 114.4k | no `start`; PENDING with no background run behind it, agent polled with sleep (fixed) |
+| A-8 | v42 | 508 s | 568 s | 34 | 104.5k | iterated with `verify --package`, first full verify cold (fixed); 178 s regenerating 494 reference docs |
+| A-9 | v43 | 458 s | 533 s | 45 | 113.4k | changed-package verify slowed by the background run (fixed: background runs niced) |
+| B-4 | plain + Nx | 486 s | 489 s | 47 | 114.4k | |
+| B-5 | plain + Nx | 458 s | 458 s | 56 | 122.6k | |
+
+Means: MonoFlow 451 s done, 520 s pushed, 41.6 calls, 108k tokens; plain 472 s, 474 s, 51.5 calls, 118k tokens.
+
+### trpc (pnpm + Turborepo)
+
+| Run | Build / arm | Done | Pushed | Calls | Tokens | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| A-18 | v44 | 351 s | 490 s | 38 | 85.7k | first verify waited 95 s on a background run and got PENDING (fixed) |
+| A-19 | v46 | — | — | — | — | invalid: pnpm deleted by the OS temp cleaner mid-run; local CI's baseline broke and blocked the push |
+| A-20 | v47 | 373 s | 599 s | 35 | 84.3k | no `start`; generated test fixtures deleted by a killed/overlapping run (fixed: runs never killed, per-package lock) |
+| B-6 | plain + Turbo | 216 s | 219 s | 23 | 70.6k | one vitest run over 3 directories, then single files |
+| B-7 | plain + Turbo | 194 s | 198 s | 45 | 92.9k | |
+
+Means (clean runs): MonoFlow 362 s done, 545 s pushed, 36.5 calls, 85k tokens; plain 205 s, 209 s, 34 calls, 82k tokens. Plain git with Turbo is ahead on trpc: each MonoFlow verify does what CI does for the change (typecheck, lint, builds, every dependent's tests), the plain agents ran vitest only.
+
+Measured outside agent runs (same change, cold cache): first verify answer 93 s → 12 s on TanStack Query (fail-fast); re-verify after one test-file edit 66 s → 34 s on trpc (per-file incremental tests); full cold check with 8 packages at once instead of 4: 166 s → 118 s (TanStack Query), 70 s → 60 s (trpc), same verdicts. Running a package's checks in parallel was tried and dropped: trpc 72 s → 104 s, with a pre-existing failure misclassified.

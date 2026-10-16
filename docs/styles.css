@@ -345,6 +345,7 @@ h3 {
 /* Measured: oversized numerals */
 .stats { margin-top: 40px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 1px; background: var(--rule); border: 1px solid var(--rule); }
 @media (min-width: 900px) { .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (min-width: 1240px) { .stats { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 .stat { background: var(--ground); padding: 24px; display: flex; flex-direction: column; gap: 22px; min-width: 0; }
 .stat header { display: flex; flex-direction: column; gap: 4px; }
 .stat header b { font: 900 1.3rem var(--sans); font-variation-settings: "wdth" 118; text-transform: uppercase; letter-spacing: -0.02em; }
@@ -358,6 +359,8 @@ h3 {
   letter-spacing: -0.05em; font-variant-numeric: tabular-nums; color: var(--ink-3);
 }
 .stat dd small { font-size: 0.3em; letter-spacing: 0; margin-left: 6px; font-variation-settings: "wdth" 100; }
+/* Three cards side by side: numbers sized to their half-card. */
+@media (min-width: 1240px) { .stat dd { font-size: clamp(2.6rem, 3.5vw, 4rem); } }
 .stat .win dt { color: var(--red); }
 .stat .win dd, .stat .level dd { color: var(--ink); }
 .stat p { margin: 0; color: var(--ink-2); font-size: 0.95rem; max-width: 52ch; }
