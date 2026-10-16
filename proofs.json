@@ -1,0 +1,25 @@
+{
+  "commit": "de45452ab7ef5150f045567ba099b97c691e7c9d",
+  "platform": "darwin/arm64",
+  "created_at": "2026-10-16T22:55:57.825446Z",
+  "records": [
+    {
+      "key": "3c6bbd79c569ae415ddb60848a2f9f07fa20b0c7125d6b2545c67e92d5034981",
+      "target": "monoflow",
+      "language": "go",
+      "status": "passed",
+      "duration_ms": 117457.931,
+      "command_run": "go vet ./pkg/... ./cmd/... \u0026\u0026 go vet ./pkg/... \u0026\u0026 go test -race ./pkg/... ./cmd/...",
+      "timestamp": "2026-10-16T22:43:25.066857Z"
+    },
+    {
+      "key": "5b2f1e9b361acc197cf081712af2057c17afac936240266b79bd853e7ea4a658",
+      "target": "docs",
+      "language": "javascript",
+      "status": "passed",
+      "duration_ms": 215.228,
+      "command_run": "node -c app.js \u0026\u0026 node test.js",
+      "timestamp": "2026-10-16T22:55:56.46318Z"
+    }
+  ]
+}
