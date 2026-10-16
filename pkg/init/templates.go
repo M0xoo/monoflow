@@ -6,7 +6,8 @@ Run as ` + "`" + `./bin/monoflow` + "`" + `. Four calls take a change to a PR:
 
 1. ` + "`" + `monoflow start <task-id>` + "`" + ` first, then work in the printed ` + "`" + `path` + "`" + ` (your worktree and branch; same files).
    Forgot and edited on main? ` + "`" + `ship` + "`" + ` moves your changes onto their own branch for you.
-2. ` + "`" + `monoflow graph query <dir>` + "`" + `: every package, in every module, importing it (instead of grep). Make the change.
+2. ` + "`" + `monoflow find "<text>"` + "`" + `: every occurrence, grouped code / tests / docs, compact (instead of grep -rn);
+   ` + "`" + `monoflow graph query <dir>` + "`" + `: every package importing it. Make the change.
 3. ` + "`" + `monoflow verify` + "`" + `: answers in seconds with the changed packages' failures, every one as ` + "`" + `file:line` + "`" + ` with the
    failing line and test; their dependents are checked in the background meanwhile and the next verify includes
    them. Fix, verify, repeat until PASS (re-runs only what your edits touched). It formats your changed files

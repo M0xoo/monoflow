@@ -528,6 +528,9 @@ func resolvePackageArg(g *graph.DependencyGraph, rootDir, arg string) (*graph.Pa
 
 // fixChangedFiles runs the packages' fix_cmd on the uncommitted files (new files included).
 func fixChangedFiles(rootDir string) verify.FixResult {
+	// The formatter comes from the dependencies: during the worktree's install it took 33 s
+	// (trpc) and competed with the install itself.
+	graph.WaitForDeps(rootDir, 10*time.Minute)
 	g, err := graph.LoadOrDiscover(rootDir)
 	if err != nil {
 		return verify.FixResult{}

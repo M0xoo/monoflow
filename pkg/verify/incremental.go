@@ -135,8 +135,17 @@ type testManifest struct {
 // runTestsIncremental runs a vitest test command for pkg, narrowed to the test files without
 // a pass on their current inputs. handled=false: not applicable, run c as usual.
 func (r *Runner) runTestsIncremental(pkg *graph.PackageNode, c, absPkgPath string, opt VerifyOptions) (out []byte, err error, handled bool) {
-	if r.cacheMgr == nil || opt.NoCache || opt.UpdateSnapshots || os.Getenv("MONOFLOW_NO_INCREMENTAL_TESTS") != "" {
+	if r.cacheMgr == nil || opt.NoCache || os.Getenv("MONOFLOW_NO_INCREMENTAL_TESTS") != "" {
 		return nil, nil, false
+	}
+	// -u rewrites snapshots: only in the files without a pass on their inputs (the ones that can
+	// mismatch), and records nothing (the files change under the run; the next verify keys them).
+	update := opt.UpdateSnapshots
+	if update {
+		if !strings.HasSuffix(c, " -u") {
+			return nil, nil, false
+		}
+		c = strings.TrimSuffix(c, " -u")
 	}
 	inv, ok := parseVitest(pkg, c, r.RootDir)
 	if !ok || vitestIsolationOff(absPkgPath, r.RootDir) {
@@ -161,6 +170,12 @@ func (r *Runner) runTestsIncremental(pkg *graph.PackageNode, c, absPkgPath strin
 				full = true // a new test file, or an edited one the suite does not run (it may be imported)
 				break
 			}
+		}
+	}
+	if update {
+		inv.args = append(inv.args, "-u")
+		if full {
+			return nil, nil, false
 		}
 	}
 	var pending []string
@@ -199,6 +214,9 @@ func (r *Runner) runTestsIncremental(pkg *graph.PackageNode, c, absPkgPath strin
 		cmd = inv.command(files, report.Name())
 	}
 	out, err = r.runCheck(cmd, absPkgPath)
+	if update {
+		return out, err, true
+	}
 
 	results, rerr := readVitestReport(report.Name(), absPkgPath)
 	if rerr != nil || len(results) == 0 {

@@ -261,7 +261,7 @@ func (r *Runner) VerifyTarget(pkg *graph.PackageNode, opt VerifyOptions) TargetR
 		}
 		var o []byte
 		handled := false
-		if c == pkg.TestCmd {
+		if c == pkg.TestCmd || (opt.UpdateSnapshots && c == pkg.TestCmd+" -u") {
 			o, err, handled = r.runTestsIncremental(pkg, c, absPkgPath, opt)
 		}
 		if !handled {
