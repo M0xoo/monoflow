@@ -92,7 +92,9 @@ func maybeVerifyInBackground(root string) bool {
 		return true
 	}
 	tmp := filepath.Join(dir, key+".tmp")
-	script := fmt.Sprintf("sleep %.1f; MONOFLOW_RECORD_KEY=%s %q verify > %q 2>&1; rm -f %q",
+	// Always text: the stored result is printed to a plain verify. A watcher started under
+	// MONOFLOW_FORMAT=json (local CI's environment) stored JSON, and plain verify printed it.
+	script := fmt.Sprintf("sleep %.1f; MONOFLOW_FORMAT= MONOFLOW_RECORD_KEY=%s %q verify > %q 2>&1; rm -f %q",
 		speculateDebounce.Seconds(), key, exe, tmp, filepath.Join(dir, key+".pid"))
 	cmd := exec.Command("sh", "-c", script)
 	cmd.Dir = root
@@ -125,23 +127,30 @@ func anySpecRunAlive(dir string) bool {
 // speculatedResult returns the stored verify output for the current state, waiting (up to
 // timeout) for a background run in progress. ok=false: run verify normally.
 func speculatedResult(root string, timeout time.Duration) (string, bool) {
+	out, ok, _ := speculatedResultOrRunning(root, timeout)
+	return out, ok
+}
+
+// speculatedResultOrRunning is speculatedResult that also reports a run for this state still
+// going when timeout passed (the caller says so instead of starting the same checks again).
+func speculatedResultOrRunning(root string, timeout time.Duration) (out string, ok, running bool) {
 	key := treeStateKey(root)
 	if key == "" {
-		return "", false
+		return "", false, false
 	}
 	dir := specDir(root)
 	deadline := time.Now().Add(timeout)
 	for specRunAlive(dir, key) {
 		if time.Now().After(deadline) {
-			return "", false
+			return "", false, true
 		}
 		time.Sleep(300 * time.Millisecond)
 	}
 	data, err := os.ReadFile(filepath.Join(dir, key+".out"))
 	if err != nil || len(data) == 0 || treeStateKey(root) != key {
-		return "", false
+		return "", false, false
 	}
-	return string(data), true
+	return string(data), true, false
 }
 
 // specRunAlive reports whether a verify for key is in progress: a background run (<key>.pid)
@@ -207,6 +216,25 @@ func finishRecord(root string) {
 		_ = os.Rename(tmp, filepath.Join(specDir(root), key+".out"))
 	} else {
 		_ = os.Remove(tmp)
+	}
+}
+
+// waitSpecRuns waits (up to timeout) while a background run, for any state, is in progress.
+func waitSpecRuns(root string, timeout time.Duration) {
+	dir := specDir(root)
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		alive := false
+		marks, _ := filepath.Glob(filepath.Join(dir, "*.pid"))
+		for _, m := range marks {
+			if k := strings.TrimSuffix(filepath.Base(m), ".pid"); k != "watch" && specRunAlive(dir, k) {
+				alive = true
+			}
+		}
+		if !alive {
+			return
+		}
+		time.Sleep(300 * time.Millisecond)
 	}
 }
 

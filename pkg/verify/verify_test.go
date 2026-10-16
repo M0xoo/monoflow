@@ -408,3 +408,71 @@ func TestVerifyExcludeSkipsExampleDependents(t *testing.T) {
 		t.Fatalf("a directly changed example must be verified: %+v", res)
 	}
 }
+
+// In the agent's loop a dependent is not linted (a linter reads the package's own files, which
+// the change did not touch); local CI (LintDependents) still lints it.
+func TestDependentsAreLintedOnlyByLocalCI(t *testing.T) {
+	root, marks := t.TempDir(), t.TempDir()
+	for _, d := range []string{"core", "app"} {
+		_ = os.MkdirAll(filepath.Join(root, d), 0755)
+	}
+	g := graph.New(root)
+	g.AddPackage(&graph.PackageNode{Name: "core", Path: "core", Language: graph.LangGeneric, LintCmd: "touch " + filepath.Join(marks, "core"), TestCmd: "true"})
+	g.AddPackage(&graph.PackageNode{Name: "app", Path: "app", Language: graph.LangGeneric, Dependencies: []string{"core"}, LintCmd: "touch " + filepath.Join(marks, "app"), TestCmd: "true"})
+	g.RebuildEdges()
+	r := NewRunner(root)
+	if res := r.VerifyAffected(g, []string{"core/x"}, VerifyOptions{Strict: true, NoCache: true}); res.Status != "passed" || res.TotalTargets != 2 {
+		t.Fatalf("want both verified: %+v", res)
+	}
+	if _, err := os.Stat(filepath.Join(marks, "core")); err != nil {
+		t.Fatalf("the changed package must be linted")
+	}
+	if _, err := os.Stat(filepath.Join(marks, "app")); err == nil {
+		t.Fatalf("a dependent must not be linted in the agent's loop")
+	}
+	r.VerifyAffected(g, []string{"core/x"}, VerifyOptions{Strict: true, NoCache: true, LintDependents: true})
+	if _, err := os.Stat(filepath.Join(marks, "app")); err != nil {
+		t.Fatalf("local CI must lint dependents")
+	}
+}
+
+// A package failing its tests does not re-run the typecheck that passed on the same files.
+func TestPassedCheckNotRerunWhileAnotherFails(t *testing.T) {
+	root, marks := t.TempDir(), t.TempDir()
+	_ = os.MkdirAll(filepath.Join(root, "p"), 0755)
+	count := filepath.Join(marks, "typecheck")
+	g := graph.New(root)
+	g.AddPackage(&graph.PackageNode{Name: "p", Path: "p", Language: graph.LangGeneric, TypecheckCmd: "echo x >> " + count, TestCmd: "exit 1"})
+	g.RebuildEdges()
+	r := NewRunner(root)
+	for i := 0; i < 2; i++ {
+		if res := r.VerifyAffected(g, []string{"p/x"}, VerifyOptions{Strict: true}); res.Status != "failed" {
+			t.Fatalf("want the test failure: %+v", res)
+		}
+	}
+	if data, _ := os.ReadFile(count); strings.Count(string(data), "x") != 1 {
+		t.Fatalf("typecheck ran %d times, want 1", strings.Count(string(data), "x"))
+	}
+}
+
+func TestTimingFailureJudgesTheFailureNotTheTestName(t *testing.T) {
+	if timingFailure([]DiagnosticError{{Message: "[useQuery > refetchOnReconnect > works] AssertionError: expected 1 to be 2"}}) {
+		t.Fatalf("an assertion failure in a test named after reconnects is not a timing flake")
+	}
+	if !timingFailure([]DiagnosticError{{Message: "[ws > keeps alive] Error: Test timed out in 5000ms"}}) {
+		t.Fatalf("a timeout is a timing flake")
+	}
+}
+
+func TestSlowestPackagesStartFirst(t *testing.T) {
+	g := graph.New(t.TempDir())
+	names := []string{"fast", "slow", "new", "mid"}
+	order := slowestFirst(g.RootDir, g, names, map[string]float64{"fast": 1000, "slow": 30000, "mid": 9000})
+	var got []string
+	for _, i := range order {
+		got = append(got, names[i])
+	}
+	if strings.Join(got, ",") != "new,slow,mid,fast" {
+		t.Fatalf("order %v, want never-timed first, then slowest first", got)
+	}
+}

@@ -1,6 +1,8 @@
 package cache
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -279,5 +281,33 @@ func TestRemoteDirectoryCache(t *testing.T) {
 	}
 	if fetched.Target != "payments" {
 		t.Fatalf("unexpected target: %s", fetched.Target)
+	}
+}
+
+// A file reformatted by verify's formatter keys as before it was formatted (tests and type
+// checks see the same program), except for lint keys.
+func TestFormatAliasKeepsKeysAcrossFormatting(t *testing.T) {
+	root := t.TempDir()
+	pkg := &graph.PackageNode{Name: "p", Path: "p"}
+	file := filepath.Join(root, "p", "a.ts")
+	_ = os.MkdirAll(filepath.Dir(file), 0o755)
+	before, after := []byte("export const a=1\n"), []byte("export const a = 1;\n")
+	_ = os.WriteFile(file, before, 0o644)
+	key := func(mode string) string {
+		k, _ := NewManager(root, DefaultConfig(root)).ComputePackageKey(pkg, nil, "test", mode)
+		return k
+	}
+	unformatted, unformattedExact := key("source"), key("lint"+ExactMode)
+	_ = os.WriteFile(file, after, 0o644)
+	if key("source") == unformatted {
+		t.Fatalf("without an alias the formatted file is a different input")
+	}
+	hb, ha := sha256.Sum256(before), sha256.Sum256(after)
+	RecordFormatAliases(root, map[string]string{hex.EncodeToString(ha[:]): hex.EncodeToString(hb[:])})
+	if key("source") != unformatted {
+		t.Fatalf("after the alias the formatted file keys as the unformatted one")
+	}
+	if key("lint"+ExactMode) == unformattedExact {
+		t.Fatalf("lint keys must see the exact content")
 	}
 }

@@ -95,7 +95,7 @@
         <li>
           <span class="verb">Verify</span>
           <code>monoflow verify</code>
-          <p>Build, lint and test the changed packages and every dependent. Already running in the background once edits settle.</p>
+          <p>Build and test the changed packages and every dependent, lint what you changed. Slowest packages first; already running in the background once edits settle.</p>
         </li>
         <li>
           <span class="verb">Ship</span>
@@ -321,7 +321,7 @@ cd monoflow &amp;&amp; make build</code></pre><button class="copy" data-copy="cm
           <tbody>
             <tr class="grp"><td colspan="2">Agent path</td></tr>
             <tr><td><code>start &lt;task-id&gt; [--packages=…]</code></td><td>Worktree and branch for one task, off the latest main</td></tr>
-            <tr><td><code>verify [--package=&lt;p&gt;|--all|-u|--strict]</code></td><td>Build, lint and test the changed packages and every dependent; <code>-u</code> rewrites snapshots</td></tr>
+            <tr><td><code>verify [--package=&lt;p&gt;|--all|-u|--strict]</code></td><td>Build and test the changed packages and every dependent, lint the changed ones; <code>-u</code> rewrites snapshots</td></tr>
             <tr><td><code>ship -m "…" [--title=…]</code></td><td>Commit, run local CI on that commit, push and open the PR when green</td></tr>
 
             <tr class="grp"><td colspan="2">Setup &amp; understanding</td></tr>

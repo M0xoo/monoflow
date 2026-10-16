@@ -12,7 +12,9 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
@@ -84,7 +86,68 @@ type Manager struct {
 	// files, once per each of 27 dependents, ~2 s per cached target).
 	sourceKeys sync.Map
 	memoOn     atomic.Bool
+	// aliases maps the hash of a file as the formatter left it to the hash it had before (see
+	// RecordFormatAliases); loaded once.
+	aliasOnce sync.Once
+	aliases   map[string]string
 }
+
+// formatAliasesFile is shared by the repository's worktrees, like the verification cache.
+func formatAliasesFile(root string) string {
+	return filepath.Join(SharedCacheDir(root), "format-aliases.json")
+}
+
+// RecordFormatAliases records that verify's formatter turned content with hash before into
+// content with hash after (hex sha256, as hashFile). Keys then treat the two as the same file:
+// formatting changes no test or type check result, and a background run that checked the
+// unformatted file had its results thrown away (TanStack Query: prettier reformatted one
+// query-core file, every dependent's key changed, 23 packages ran again: 105 s).
+func RecordFormatAliases(root string, afterToBefore map[string]string) {
+	if len(afterToBefore) == 0 {
+		return
+	}
+	p := formatAliasesFile(root)
+	all := map[string]string{}
+	if data, err := os.ReadFile(p); err == nil {
+		_ = json.Unmarshal(data, &all)
+	}
+	for after, before := range afterToBefore {
+		if c, ok := all[before]; ok {
+			before = c // keep chains one step long: always to the first version seen
+		}
+		if after != before {
+			all[after] = before
+		}
+	}
+	if len(all) > 20000 { // bounded: drop all and start over (only a lost reuse)
+		all = afterToBefore
+	}
+	if data, err := json.Marshal(all); err == nil {
+		_ = os.MkdirAll(filepath.Dir(p), 0o755)
+		tmp := fmt.Sprintf("%s.%d", p, os.Getpid())
+		if os.WriteFile(tmp, data, 0o644) == nil {
+			_ = os.Rename(tmp, p)
+		}
+	}
+}
+
+// Canonical returns the hash a file hash stands for in keys (its pre-formatting hash, if any).
+func (m *Manager) Canonical(hash string) string {
+	m.aliasOnce.Do(func() {
+		m.aliases = map[string]string{}
+		if data, err := os.ReadFile(formatAliasesFile(m.RootDir)); err == nil {
+			_ = json.Unmarshal(data, &m.aliases)
+		}
+	})
+	if c, ok := m.aliases[hash]; ok {
+		return c
+	}
+	return hash
+}
+
+// ExactMode marks a key mode whose commands must see files exactly as they are (lint: a
+// formatter can fix what a linter reports), so formatting aliases do not apply.
+const ExactMode = "+exact"
 
 // BeginRun enables upstream-key memoisation until EndRun (sources do not change mid-run).
 func (m *Manager) BeginRun() { m.memoOn.Store(true) }
@@ -292,8 +355,16 @@ func (m *Manager) ComputePackageKey(pkg *graph.PackageNode, upstreamKeys map[str
 				if mode == "source" && isTestOnlyFile(relPath) {
 					continue
 				}
+				// Incremental tests key each test file (and its snapshot) on its own: exactly
+				// those, so an edit to any other file (a helper, a fixture) still counts here.
+				if mode == "test-sources" && IsTrackedTestFile(relPath) {
+					continue
+				}
 				fullPath := filepath.Join(absPkgPath, relPath)
 				fileHash, err := hashFile(fullPath)
+				if err == nil && !strings.HasSuffix(mode, ExactMode) {
+					fileHash = m.Canonical(fileHash)
+				}
 				if err == nil {
 					fmt.Fprintf(hasher, "file:%s=%s\n", relPath, fileHash)
 				}
@@ -940,6 +1011,28 @@ func isPackageRoot(dir string) bool {
 }
 
 // isTestOnlyFile reports test files and snapshots, which no other package imports.
+// jsTestFileRe matches the JS/TS test files vitest and jest run.
+var jsTestFileRe = regexp.MustCompile(`\.(test|spec)\.[cm]?[jt]sx?$`)
+
+// IsTrackedTestFile reports a JS/TS test file or a snapshot file next to one (__snapshots__/).
+func IsTrackedTestFile(rel string) bool {
+	rel = filepath.ToSlash(rel)
+	if jsTestFileRe.MatchString(rel) {
+		return true
+	}
+	if strings.HasSuffix(rel, ".snap") && path.Base(path.Dir(rel)) == "__snapshots__" {
+		return jsTestFileRe.MatchString(strings.TrimSuffix(path.Base(rel), ".snap"))
+	}
+	return false
+}
+
+// SourceFiles lists dir's files as the cache keys see them (what git would commit, nested
+// packages left out), relative to dir.
+func SourceFiles(dir string) []string {
+	files, _ := collectSourceFiles(dir)
+	return files
+}
+
 func isTestOnlyFile(rel string) bool {
 	rel = filepath.ToSlash(rel)
 	if strings.Contains("/"+rel, "/__snapshots__/") || strings.HasSuffix(rel, ".snap") {

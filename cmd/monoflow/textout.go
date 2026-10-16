@@ -37,6 +37,8 @@ func verifyText(res verify.SuiteResult, c map[string]any) string {
 	status := "PASS"
 	if res.Status != "passed" {
 		status = "FAIL"
+	} else if len(res.Pending) > 0 {
+		status = "PENDING" // the changed packages pass; the dependents are not checked yet
 	}
 	fmt.Fprintf(&b, "%s %d/%d packages passed", status, res.PassedTargets, res.TotalTargets)
 	if res.CachedTargets > 0 {
@@ -58,7 +60,7 @@ func verifyText(res verify.SuiteResult, c map[string]any) string {
 	if f, ok := c["fix_failed"].([]string); ok {
 		b.WriteString(fixLines(verify.FixResult{Failed: f}))
 	}
-	if len(res.Pending) > 0 {
+	if len(res.Pending) > 0 && !strings.Contains(fmt.Sprint(c["scope"]), "background") {
 		fmt.Fprintf(&b, "pending: %d dependents run once the changed packages pass\n", len(res.Pending))
 	}
 	if failed, ok := c["failed"].(map[string]int); ok && len(failed) > 0 {
@@ -70,36 +72,15 @@ func verifyText(res verify.SuiteResult, c map[string]any) string {
 		b.WriteString("failed: " + strings.Join(names, ", ") + "\n")
 	}
 	errs, _ := c["errors"].([]verify.SharedError) // deduplicated by compactSuite
-	shown, snapshots := 0, 0
+	b.WriteString(failureList(errs))
+	snapshots := 0
 	for _, e := range errs {
-		loc := e.File
-		if e.Line > 0 {
-			loc = fmt.Sprintf("%s:%d", e.File, e.Line)
-		}
-		msg := strings.TrimSpace(e.Message)
-		if i := strings.Index(msg, "\n"); i >= 0 { // diff lines go below, indented
-			msg = msg[:i] + "\n  " + strings.ReplaceAll(strings.TrimSpace(msg[i+1:]), "\n", "\n  ")
-		}
-		fmt.Fprintf(&b, "%s %s\n", loc, msg)
-		if e.Breaks > 2 {
-			fmt.Fprintf(&b, "  (same error in %d packages)\n", e.Breaks)
-		}
-		// The failing line in context: agents otherwise spend a call reading the file around it.
-		if shown < 8 && e.Line > 0 {
-			if ctx := sourceContext(rootDirForText, e.File, e.Line, 1); ctx != "" {
-				b.WriteString(ctx)
-				shown++
-			}
-		}
 		if strings.Contains(e.Message, "Snapshot") && strings.Contains(e.Message, "mismatched") {
 			snapshots++
 		}
 	}
 	if snapshots > 0 {
 		fmt.Fprintf(&b, "snapshots: %d mismatched; if the new values are what you intend, 'monoflow verify --update-snapshots' rewrites them\n", snapshots)
-	}
-	if n, ok := c["errors_omitted"].(int); ok && n > 0 {
-		fmt.Fprintf(&b, "... %d more errors (fix these first, or --verbose)\n", n)
 	}
 	for _, k := range []string{"preexisting", "note", "hint"} {
 		if s, ok := c[k].(string); ok {
@@ -113,6 +94,106 @@ func verifyText(res verify.SuiteResult, c map[string]any) string {
 		b.WriteString("next: " + s + "\n")
 	}
 	return b.String()
+}
+
+// failureList prints every failure, grouped by file, one line each (the first few with their
+// diff and source line). All of them: a list cut at 30 ("... 39 more errors") sent agents to
+// verify --verbose and their own vitest runs to see the rest (TanStack Query: 100-210 s a run).
+func failureList(errs []verify.SharedError) string {
+	if len(errs) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	// A runner may report a failed test twice: once located, once by name only. Keep the first.
+	located := map[string]bool{}
+	for _, e := range errs {
+		if e.Line > 0 {
+			located[e.File+"\x00"+testNameOf(e.Message)] = true
+		}
+	}
+	var files []string
+	byFile := map[string][]verify.SharedError{}
+	for _, e := range errs {
+		if name := testNameOf(e.Message); e.Line == 0 && name != "" && located[e.File+"\x00"+name] {
+			continue
+		}
+		if _, ok := byFile[e.File]; !ok {
+			files = append(files, e.File)
+		}
+		byFile[e.File] = append(byFile[e.File], e)
+	}
+	if len(errs) > 1 {
+		fmt.Fprintf(&b, "%d failures in %d files:\n", len(errs), len(files))
+	}
+	detailed := 0
+	for _, f := range files {
+		list := byFile[f]
+		sort.SliceStable(list, func(i, j int) bool { return list[i].Line < list[j].Line })
+		if len(list) > 1 {
+			fmt.Fprintf(&b, "%s (%d)\n", f, len(list))
+		}
+		for _, e := range list {
+			loc := e.File
+			if len(list) > 1 {
+				loc = " "
+			}
+			if e.Line > 0 {
+				loc += fmt.Sprintf(":%d", e.Line)
+			}
+			msg := cleanFailure(e.Message)
+			first, rest, _ := strings.Cut(msg, "\n")
+			if len(first) > 300 {
+				first = first[:300] + "…"
+			}
+			fmt.Fprintf(&b, "%s %s\n", loc, first)
+			if e.Breaks > 2 {
+				fmt.Fprintf(&b, "  (same error in %d packages)\n", e.Breaks)
+			}
+			// The first failures in full (diff, failing line): agents otherwise spend a call
+			// reading the file around them; the rest one line each, to keep the list short.
+			if detailed < 8 {
+				if rest = strings.TrimSpace(rest); rest != "" {
+					b.WriteString("  " + strings.ReplaceAll(rest, "\n", "\n  ") + "\n")
+				}
+				if e.Line > 0 {
+					b.WriteString(sourceContext(rootDirForText, e.File, e.Line, 1))
+				}
+				detailed++
+			}
+		}
+	}
+	return b.String()
+}
+
+// testNameOf is the "[suite > test]" prefix of a test failure ("" if none).
+func testNameOf(msg string) string {
+	if strings.HasPrefix(msg, "[") {
+		if i := strings.Index(msg, "]"); i > 0 {
+			return msg[1:i]
+		}
+	}
+	return ""
+}
+
+// matcherBoilerplate is advice testing libraries append to every failure of a kind; it says
+// nothing about the failure and cost TanStack Query runs 25-60k tokens of context.
+var matcherBoilerplate = []string{
+	" This could be because the text is broken up by multiple elements. In this case, you can provide a function for your text matcher to make your matcher more flexible.",
+	"This could be because the text is broken up by multiple elements. In this case, you can provide a function for your text matcher to make your matcher more flexible.",
+}
+
+func cleanFailure(msg string) string {
+	msg = strings.TrimSpace(msg)
+	for _, p := range matcherBoilerplate {
+		msg = strings.ReplaceAll(msg, p, "")
+	}
+	// Testing Library dumps the whole rendered DOM after its message.
+	for _, cut := range []string{"\n\nIgnored nodes:", "\n<body>", "; <body>", " <body>"} {
+		if i := strings.Index(msg, cut); i > 0 {
+			msg = strings.TrimSpace(msg[:i])
+		}
+	}
+	return msg
 }
 
 // kvText renders a flat result as "key: value" lines, skipping empty values; lists are joined.

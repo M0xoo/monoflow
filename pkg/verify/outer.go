@@ -279,7 +279,7 @@ func (om *OuterLoopManager) executeJobInternal(job *OuterJob) error {
 	// global-cache hit, so only what differs in the committed state is re-run.
 	runner := NewRunner(workDir)
 	runner.SetGraph(g)
-	suite := runner.VerifyAffected(g, changedFiles, VerifyOptions{RetryAllFailures: true})
+	suite := runner.VerifyAffected(g, changedFiles, VerifyOptions{RetryAllFailures: true, LintDependents: true})
 	results := suite.Results
 	if len(results) == 0 && len(packagesToVerify) > 0 {
 		results = make([]TargetResult, 0)

@@ -2,6 +2,7 @@ package verify
 
 import (
 	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -29,6 +30,8 @@ var filesPlaceholder = regexp.MustCompile(`\{files(?::([^}]*))?\}`)
 type FixResult struct {
 	Fixed  []string // repo-relative files whose content the fix commands changed
 	Failed []string // "<package>: <first line of output>" for fix commands that failed
+	// Aliases maps each changed file's new content hash to its old one (cache.RecordFormatAliases).
+	Aliases map[string]string
 }
 
 // FixChanged runs the fix_cmd of every package owning one of changed (repo-relative, existing
@@ -71,6 +74,11 @@ func FixChanged(root string, g *graph.DependencyGraph, changed []string) FixResu
 		for _, f := range files {
 			if before[f] != after[f] {
 				res.Fixed = append(res.Fixed, f)
+				if res.Aliases == nil {
+					res.Aliases = map[string]string{}
+				}
+				a, b := after[f], before[f]
+				res.Aliases[hex.EncodeToString(a[:])] = hex.EncodeToString(b[:])
 			}
 		}
 	}

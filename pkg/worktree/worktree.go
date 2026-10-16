@@ -1177,7 +1177,10 @@ func startBackgroundPnpmInstall(wt string) {
 	marker := filepath.Join(wt, graph.DepsMarker)
 	_ = os.MkdirAll(filepath.Dir(marker), 0755)
 	install := graph.PnpmInstallCmd(wt)
-	script := fmt.Sprintf("%s > .agents/deps-install.log 2>&1; rm -f %q", shellJoin(install.Args), marker)
+	// Retried once: a postinstall failing midway (esbuild's binary check, under load) left the
+	// worktree half-installed and the dependency build failing; a second install completes it.
+	in := shellJoin(install.Args)
+	script := fmt.Sprintf("%s > .agents/deps-install.log 2>&1 || %s >> .agents/deps-install.log 2>&1; rm -f %q", in, in, marker)
 	cmd := exec.Command("sh", "-c", script)
 	cmd.Dir = wt
 	cmd.Env = install.Env

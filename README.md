@@ -72,7 +72,7 @@ Three commands take a change to a PR:
 ```bash
 monoflow start fix-tax-rounding     # worktree + branch agent/fix-tax-rounding; cd into the printed path
 # ... edit ...
-monoflow verify                     # build + lint + test every package the change can affect
+monoflow verify                     # build + test every package the change can affect, lint the changed ones
 monoflow ship -m "fix: tax rounding" # commit, local CI on that commit, push, open the PR
 ```
 

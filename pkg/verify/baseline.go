@@ -24,7 +24,10 @@ import (
 func (r *Runner) classifyPreexisting(g *graph.DependencyGraph, results []TargetResult, opt VerifyOptions) {
 	var failed []int
 	for i, res := range results {
-		if res.Status == "failed" && res.CommandRun != "" && len(res.Errors) > 0 && res.Errors[0].Code != "package_not_projected" {
+		// A failed dependency build is never "preexisting": when main's build fails too (a broken
+		// install), every check after it fails on both sides and the change looked like a PASS
+		// (trpc: "PASS 10/10", nothing had run; the agent spent 110 s finding out).
+		if res.Status == "failed" && res.CommandRun != "" && len(res.Errors) > 0 && res.Errors[0].Code != "package_not_projected" && res.Target != PrepareTarget {
 			failed = append(failed, i)
 		}
 	}

@@ -60,6 +60,9 @@ func main() {
 	case "graph":
 		handleGraph(rootDir)
 
+	case "find":
+		handleFind(rootDir)
+
 	case "checkpoint":
 		handleCheckpoint(rootDir)
 
@@ -155,7 +158,8 @@ func printUsage() {
 func printShortUsage() {
 	fmt.Println(`MonoFlow. Agent path (4 calls):
   monoflow start <task-id>      worktree + branch; cd into the printed path
-  monoflow verify               build+lint+test changed packages and every dependent (= CI for this change)
+  monoflow find "<text>"        every occurrence, grouped code / tests / docs (instead of grep -rn)
+  monoflow verify               the changed packages' failures in seconds, then every dependent (= CI for this change)
   monoflow ship -m "<msg>"      commit, local CI on that commit, push, open the PR
 
 More: graph (query|impact) · checkpoint · commit · push · sync · events · ci · outer · worktree ·
@@ -168,7 +172,8 @@ func usageText(w io.Writer) {
 
 Agent path (4 calls):
   monoflow start <task-id>            Isolated worktree on branch agent/<task-id>; then cd into its path
-  monoflow verify                     Build+lint+test changed packages and every dependent (= CI for this change)
+  monoflow find "<text>"              Every occurrence, grouped code / tests / docs (instead of grep -rn)
+  monoflow verify                     Build+test changed packages and every dependent, lint changed (= CI for this change)
   monoflow ship -m "<msg>" [--title=] Commit, local CI on that commit, push, open the PR
 
 Usage:
@@ -226,6 +231,8 @@ Then cd into the printed path and work there.`,
 	"ship": `  ship -m "<commit message>"          Commit uncommitted work, run local CI on that commit, push, open the PR
   ship -m "<msg>" --title="<PR title>" --body="<text>" | --body-file=<path>
 One call replaces commit + pr create. Afterwards end your turn: CI results are delivered to you.`,
+	"find": `  find "<text>" [--regex]             Where it occurs: source lines with text; tests, docs, examples as file:lines
+Changelogs, build output and generated reference docs left out. Use instead of grep -rn.`,
 	"graph": `  graph query <package|path>          Upstream deps, direct & transitive dependents (name or directory path)
   graph impact <file>                 Owning package and dependents affected by editing <file>
   graph affected                      Packages affected by the current uncommitted changes`,
