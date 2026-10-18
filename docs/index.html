@@ -247,10 +247,18 @@ not affected: internal/tools, schema</code></pre>
 
     <section id="measured" class="measured">
       <div class="head-row">
-        <h2 class="big">Measured. Losses included.</h2>
-        <p>The same agent (Claude Haiku) does the same task with MonoFlow and with plain git, from a fresh copy, one run at a time. Every number is in <a href="https://github.com/M0xoo/monoflow/blob/main/e2e/bench/RESULTS.md">e2e/bench</a>.</p>
+        <h2 class="big">Measured on real monorepos.</h2>
+        <p>The same agent (Claude Haiku) does the same task with MonoFlow and with plain git plus the repo's own tooling, from a fresh copy, one run at a time. Every number is in <a href="https://github.com/M0xoo/monoflow/blob/main/e2e/bench/RESULTS.md">e2e/bench</a>.</p>
       </div>
       <div class="stats">
+        <article class="stat">
+          <header><b>TanStack Query</b><span>pnpm and Nx, ~100 projects; a default changed across every framework package</span></header>
+          <dl>
+            <div><dt>Plain git + Nx</dt><dd>472<small>s</small></dd></div>
+            <div class="win"><dt>MonoFlow</dt><dd>407<small>s</small></dd></div>
+          </dl>
+          <p>14% sooner, with 24% fewer tool calls (39 against 52) and 8% fewer tokens (109k against 118k). Latest build, 1 run; plain git + Nx, mean of 2.</p>
+        </article>
         <article class="stat">
           <header><b>opentelemetry-go</b><span>29 Go modules; a break only another module's tests catch</span></header>
           <dl>
@@ -259,24 +267,8 @@ not affected: internal/tools, schema</code></pre>
           </dl>
           <p>Median time. MonoFlow runs stayed between 90 and 112 s; plain runs spread from 109 to 338 s. Tokens about equal (60k against 55k).</p>
         </article>
-        <article class="stat">
-          <header><b>trpc</b><span>pnpm and Turborepo; 400 to 422 across packages</span></header>
-          <dl>
-            <div class="win"><dt>Plain git + Turbo</dt><dd>205<small>s</small></dd></div>
-            <div><dt>MonoFlow</dt><dd>362<small>s</small></dd></div>
-          </dl>
-          <p>Mean of the latest clean runs (2 each). Plain git with Turbo is ahead: its agents ran one vitest command over three directories, where each MonoFlow verify runs everything CI runs for the change. Tokens 82k against 85k.</p>
-        </article>
-        <article class="stat">
-          <header><b>TanStack Query</b><span>pnpm and Nx; a default changed across framework packages</span></header>
-          <dl>
-            <div><dt>Plain git + Nx</dt><dd>472<small>s</small></dd></div>
-            <div class="win"><dt>MonoFlow</dt><dd>451<small>s</small></dd></div>
-          </dl>
-          <p>Mean time to done (MonoFlow 5 runs, plain 2): about even. MonoFlow used 9% fewer tokens (108k against 118k) and 19% fewer tool calls. Its branch reaches the remote later (520 s against 474 s): it pushes only after local CI passes on the exact commit.</p>
-        </article>
       </div>
-      <p class="note">Every change, in both arms, passed the repo's tests and type checks on the pushed branch. Every MonoFlow push was gated on local CI; plain pushes were not.</p>
+      <p class="note">Every change in both arms passed the repo's tests and type checks on the pushed branch; only MonoFlow's pushes were checked by CI first. Not ahead yet: trpc (Turborepo, 11 packages), where plain agents running one vitest command finished first (205 s against 318 s).</p>
     </section>
 
     <section id="install" class="install">

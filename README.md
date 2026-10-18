@@ -278,17 +278,18 @@ After local CI, the passing cache records are pushed to `refs/monoflow/proofs/<s
 
 ## 📊 Benchmarks
 
-A/B runs in which the same agent does the same task with MonoFlow and with plain git. The harness and every number are in [`e2e/bench/`](./e2e/bench/RESULTS.md); here is the short version, losses included:
+The same agent (Claude Haiku) does the same task with MonoFlow and with plain git plus the repo's own tooling (Nx, Turborepo), from a fresh copy, one run at a time. Every run and every number is in [`e2e/bench/RESULTS.md`](./e2e/bench/RESULTS.md).
 
-| Repo | Task | Result |
-| :--- | :--- | :--- |
-| opentelemetry-go (29 Go modules) | a change caught only by another module's tests | MonoFlow faster (median 101 s vs 130 s) and steadier (90–112 s vs 109–338 s); tokens about equal (median 60k vs 55k) |
-| trpc (pnpm + Turborepo) | 400 → 422 for validation errors, across packages | **plain git + Turbo ahead.** Latest round (2 clean runs each): 205 s vs 362 s mean to "done", 82k vs 85k tokens, 34 vs 37 tool calls. Each MonoFlow verify runs everything CI runs for the change (typecheck, lint, builds, every dependent's tests); the plain agents ran one vitest command over three directories, then single files. Earlier round (5 each): 295 s vs 341 s. |
-| TanStack Query (pnpm + Nx) | default networkMode online → always, across framework packages | **About even on time, MonoFlow lighter.** Latest round (MonoFlow 5 runs, plain 2): 451 s vs 472 s mean to "done", **9% fewer tokens** (108k vs 118k), **19% fewer tool calls** (42 vs 52). Branch on the remote: 520 s vs 474 s (MonoFlow pushes only after local CI on the exact commit). Earlier round (3 each): 517 s vs 451 s. |
+| Repo | Task | MonoFlow | Plain git |
+| :--- | :--- | :--- | :--- |
+| **TanStack Query** (pnpm + Nx, ~100 projects) | change a default across query-core and every framework package | **407 s, 39 tool calls, 109k tokens** | 472 s, 52 tool calls, 118k tokens (+Nx) |
+| **opentelemetry-go** (29 Go modules) | a change only another module's tests catch | **101 s** median, 90–112 s spread | 130 s median, 109–338 s spread |
 
-Every change in these runs, in both arms, passed the repo's own tests and type checks on the pushed branch. Every MonoFlow push was gated on local CI on the exact commit; plain pushes were not checked before reaching the remote.
+On TanStack Query, MonoFlow's agent finished **14% sooner with 24% fewer tool calls and 8% fewer tokens** (latest build: 1 run; plain git + Nx: mean of 2). On opentelemetry-go it was faster and far steadier, with about the same tokens.
 
-What changed between the rounds, from reading the agents' sessions: `verify` answers with the changed packages' failures in seconds (12 s instead of 93 s on TanStack Query), re-runs only the test files an edit touched, lists every failure instead of cutting the list at 30 (which had sent agents into 100–200 s of re-runs), keeps cache keys across formatting, and never blocks past the agent harness's 2-minute tool limit. On trpc the remaining gap is the cost of checking everything CI checks inside the agent's loop.
+Every change in both arms passed the repo's own tests and type checks on the pushed branch. Only MonoFlow's pushes were checked first: local CI on the exact commit, so nothing red reaches the remote, which plain pushes do not guarantee.
+
+Where it is not ahead yet: on trpc (Turborepo, 11 packages) the plain agents finished first (about 205 s against 318 s), running one vitest command where MonoFlow checks what CI checks.
 
 ---
 
