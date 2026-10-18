@@ -67,6 +67,12 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 	}
 
 	recording := os.Getenv("MONOFLOW_RECORD_KEY") != ""
+	if !recording && targetPkg == "" && !verifyAll && verifyBase == "" {
+		if msg := strayWork(rootDir, "verify"); msg != "" {
+			fmt.Println("NOTHING TO VERIFY: " + msg)
+			exit(1)
+		}
+	}
 	opts.KeepUntracked = recording
 	unshareVenv(rootDir)
 	// Format the agent's changed files first (each package's fix_cmd), so lint never fails on
@@ -95,7 +101,7 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 		if out, ok, _ := speculatedResultOrRunning(rootDir, wait); ok {
 			fmt.Print(out + fixLines(fixed) + reusedNote)
 			if !strings.HasPrefix(out, "PASS") {
-				os.Exit(1)
+				exit(1)
 			}
 			return
 		}
@@ -126,7 +132,7 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 	g, err := graph.LoadOrDiscover(rootDir)
 	if err != nil {
 		printRaw(fmt.Sprintf(`{"status": "failed", "error": %q}`, err))
-		os.Exit(1)
+		exit(1)
 	}
 
 	runner := verify.NewRunner(rootDir)
@@ -139,7 +145,7 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 		pkg, exists := resolvePackageArg(g, rootDir, targetPkg)
 		if !exists {
 			printRaw(fmt.Sprintf(`{"status": "failed", "error": "package '%s' not found (use a name from 'monoflow graph list' or a path inside one)"}`, targetPkg))
-			os.Exit(1)
+			exit(1)
 		}
 		opts.ChangedFiles, opts.AllPackages = getGitChangedFiles(rootDir), true
 		res = runner.VerifyPackages(g, []string{pkg.Name}, opts)
@@ -227,6 +233,8 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 			} else {
 				c["next"] = "fix the errors listed (file:line), then monoflow verify"
 			}
+		} else if targetPkg == "" && !verifyAll && res.TotalTargets == 0 && len(uncommittedFiles(rootDir)) > 0 {
+			c["next"] = `no package to test for these files (docs/config): monoflow ship -m "<msg>"`
 		}
 		out = c
 	}
@@ -261,7 +269,7 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 				if full, ok, _ := speculatedResultOrRunning(rootDir, wait); ok {
 					fmt.Print(full + fixLines(fixed))
 					if !strings.HasPrefix(full, "PASS") {
-						os.Exit(1)
+						exit(1)
 					}
 					return
 				}
@@ -299,7 +307,7 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 	}
 
 	if res.Status == "passed" && len(res.Pending) > 0 {
-		os.Exit(1) // not a pass yet: the dependents are unchecked
+		exit(1) // not a pass yet: the dependents are unchecked
 	}
 
 	cb := guard.NewCircuitBreaker(rootDir, 5)
@@ -316,7 +324,7 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 				"reason":          fmt.Sprintf("Target '%s' failed %d consecutive times without passing", targetKey, st.Attempts),
 			})
 		}
-		os.Exit(1)
+		exit(1)
 	} else {
 		cb.Reset("active_task", targetKey)
 	}
@@ -327,7 +335,7 @@ func handleProofVerification(rootDir, taskID string) {
 	receipt, err := proof.LoadReceipt(rootDir, taskID)
 	if err != nil {
 		printRaw(fmt.Sprintf(`{"status": "failed", "error": %q}`, err))
-		os.Exit(1)
+		exit(1)
 	}
 
 	durMs := float64(time.Since(start).Microseconds()) / 1000.0

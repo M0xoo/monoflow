@@ -21,7 +21,7 @@ import (
 func handleStart(rootDir string) {
 	if len(os.Args) < 3 || strings.HasPrefix(os.Args[2], "-") {
 		printRaw(`{"error": "usage: monoflow start <task-id>"}`)
-		os.Exit(1)
+		exit(1)
 	}
 	id := os.Args[2]
 	os.Args = append([]string{os.Args[0], "worktree", "create"}, os.Args[2:]...)
@@ -54,13 +54,13 @@ func handleShip(rootDir string) {
 			deliver = true
 		default:
 			printRaw(fmt.Sprintf(`{"error": "unknown flag %q: usage: monoflow ship -m \"<commit message>\" [--title=...] [--body=...]"}`, a))
-			os.Exit(1)
+			exit(1)
 		}
 	}
 	exe, err := os.Executable()
 	if err != nil {
 		printRaw(fmt.Sprintf(`{"error": %q}`, err.Error()))
-		os.Exit(1)
+		exit(1)
 	}
 	if deliver {
 		shipDeliver(exe, rootDir, title, prArgs)
@@ -73,20 +73,24 @@ func handleShip(rootDir string) {
 	if b := currentBranch(rootDir); (b == "main" || b == "master") && len(uncommittedFiles(rootDir)) > 0 {
 		if msg == "" {
 			printRaw(`{"error": "uncommitted changes: pass -m \"<commit message>\""}`)
-			os.Exit(1)
+			exit(1)
 		}
 		wt, err := moveWorkToWorktree(exe, rootDir, msg)
 		if err != nil {
 			printRaw(fmt.Sprintf(`{"error": %q}`, "could not move your changes off "+b+": "+err.Error()))
-			os.Exit(1)
+			exit(1)
 		}
 		rootDir = wt
 		out["moved_to"] = wt
 	}
+	if msg := strayWork(rootDir, "ship"); msg != "" {
+		printOut(map[string]any{"status": "nothing_to_ship", "error": msg})
+		exit(1)
+	}
 	if len(uncommittedFiles(rootDir)) > 0 {
 		if msg == "" {
 			printRaw(`{"error": "uncommitted changes: pass -m \"<commit message>\""}`)
-			os.Exit(1)
+			exit(1)
 		}
 		// The repo's formatter on the changed files, so nothing unformatted is committed even
 		// when the agent shipped without a final verify.
@@ -97,7 +101,7 @@ func handleShip(rootDir string) {
 		if !ok {
 			res["step"] = "commit"
 			printOut(res)
-			os.Exit(1)
+			exit(1)
 		}
 		if c, ok := res["commit"].(map[string]any); ok {
 			out["commit"] = c["commit_sha"]
@@ -112,7 +116,7 @@ func handleShip(rootDir string) {
 		out["conflicts"] = files
 		out["next"] = conflictNext(base, files)
 		printOut(out)
-		os.Exit(1)
+		exit(1)
 	}
 	if title == "" {
 		title = strings.SplitN(strings.TrimSpace(msg), "\n", 2)[0]
@@ -128,7 +132,7 @@ func handleShip(rootDir string) {
 		// ~25 s on otel while local CI ran). Failures arrive as a SHIP_FAILED event.
 		if err := spawnShipDeliver(exe, rootDir, title, prArgs); err == nil {
 			out["status"] = "shipping"
-			out["next"] = "Done: end your turn. Local CI is running on this commit; it pushes and opens the PR when green. A failure is delivered to you (SHIP_FAILED / OUTER_LOOP_REGRESSION)."
+			out["next"] = lastStep(rootDir, "Shipped. Local CI is running on this commit; it pushes and opens the PR when green, and a failure is delivered to you (SHIP_FAILED / OUTER_LOOP_REGRESSION).")
 			printOut(out)
 			return
 		}
@@ -140,9 +144,9 @@ func handleShip(rootDir string) {
 	if !ok {
 		out["step"] = "pr create"
 		printOut(out)
-		os.Exit(1)
+		exit(1)
 	}
-	out["next"] = "Done: end your turn. CI results are delivered to you; act on CI_FAILED if it arrives."
+	out["next"] = lastStep(rootDir, "Shipped. CI results are delivered to you; act on CI_FAILED if it arrives.")
 	printOut(out)
 }
 

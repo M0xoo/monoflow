@@ -28,7 +28,7 @@ func handleFind(rootDir string) {
 	}
 	if pattern == "" {
 		fmt.Println(`usage: monoflow find "<text>" [--regex]`)
-		os.Exit(2)
+		exit(2)
 	}
 	args := []string{"-C", rootDir, "grep", "-n", "-I", "--untracked", "--no-color"}
 	if fixed {
@@ -59,7 +59,7 @@ func findKind(file string) string {
 		strings.Contains(file, "/node_modules/"), strings.HasSuffix(base, ".lock"), base == "pnpm-lock.yaml", base == "package-lock.json",
 		strings.Contains(file, "/reference/") && strings.HasSuffix(base, ".md"), strings.HasSuffix(base, ".min.js"), strings.HasSuffix(base, ".map"):
 		return "skip"
-	case cache.IsTrackedTestFile(file), strings.HasSuffix(base, "_test.go"), strings.Contains("/"+file, "/__tests__/"), strings.Contains("/"+file, "/test/"), strings.Contains("/"+file, "/tests/"):
+	case cache.IsTrackedTestFile(file), strings.HasSuffix(base, "_test.go"), testFileName(base), strings.Contains("/"+file, "/__tests__/"), strings.Contains("/"+file, "/test/"), strings.Contains("/"+file, "/tests/"):
 		return "tests"
 	case strings.HasSuffix(base, ".md"), strings.HasSuffix(base, ".mdx"), strings.HasSuffix(base, ".rst"), strings.HasSuffix(base, ".txt"):
 		return "docs"
@@ -120,8 +120,9 @@ func findText(pattern, grepOut string) string {
 		for _, f := range names {
 			hits := files[f]
 			// Source lines with their text (what the change must touch); tests and docs as line
-			// numbers (verify names the tests that break; read a file when editing it).
-			if k == "code" && shownText < 60 {
+			// numbers (verify names the tests that break; read a file when editing it). With
+			// few matches, test lines get their text too: it saves reading each test file.
+			if (k == "code" && shownText < 60) || (k == "tests" && total <= 20) {
 				for _, h := range hits {
 					t := strings.TrimSpace(h.text)
 					if len(t) > 140 {
@@ -143,4 +144,12 @@ func findText(pattern, grepOut string) string {
 		}
 	}
 	return b.String()
+}
+
+// testFileName matches test files named by convention rather than location: test.js,
+// test_x.py, x_test.py, x.spec.rb, x_spec.rb.
+func testFileName(base string) bool {
+	stem := strings.TrimSuffix(base, path.Ext(base))
+	return stem == "test" || stem == "tests" || strings.HasPrefix(stem, "test_") || strings.HasSuffix(stem, "_test") ||
+		strings.HasSuffix(stem, "_spec") || strings.HasSuffix(stem, ".spec") || strings.HasSuffix(stem, ".test")
 }

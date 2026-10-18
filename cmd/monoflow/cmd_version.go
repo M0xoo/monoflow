@@ -24,7 +24,7 @@ func handleVersion(rootDir string) {
 		rep, err := version.ListPackageVersions(rootDir)
 		if err != nil {
 			printRaw(fmt.Sprintf(`{"status": "error", "error": %q}`, err.Error()))
-			os.Exit(1)
+			exit(1)
 		}
 		printOut(rep)
 
@@ -32,7 +32,7 @@ func handleVersion(rootDir string) {
 		refuseSharedRoot(rootDir, "version bump")
 		if len(os.Args) < 5 {
 			printRaw(`{"error": "usage: monoflow version bump <pkg> <patch|minor|major> [--cascade]"}`)
-			os.Exit(1)
+			exit(1)
 		}
 		pkgName := os.Args[3]
 		bumpType := os.Args[4]
@@ -45,7 +45,7 @@ func handleVersion(rootDir string) {
 		res, err := version.BumpPackageVersion(rootDir, pkgName, bumpType, cascade)
 		if err != nil {
 			printRaw(fmt.Sprintf(`{"status": "error", "error": %q}`, err.Error()))
-			os.Exit(1)
+			exit(1)
 		}
 		printOut(res)
 
@@ -56,7 +56,7 @@ func handleVersion(rootDir string) {
 		res, err := version.ApplyChangesets(rootDir)
 		if err != nil {
 			printRaw(fmt.Sprintf(`{"status": "error", "error": %q}`, err.Error()))
-			os.Exit(1)
+			exit(1)
 		}
 		printOut(res)
 
@@ -64,11 +64,11 @@ func handleVersion(rootDir string) {
 		rep, err := version.CheckVersionConsistency(rootDir)
 		if err != nil {
 			printRaw(fmt.Sprintf(`{"status": "error", "error": %q}`, err.Error()))
-			os.Exit(1)
+			exit(1)
 		}
 		printOut(rep)
 		if rep.Status == "error" {
-			os.Exit(1)
+			exit(1)
 		}
 
 	default:
@@ -86,7 +86,7 @@ func handleReleases(rootDir, sub string) {
 	g, err := graph.LoadOrDiscover(rootDir)
 	if err != nil {
 		printRaw(fmt.Sprintf(`{"status": "error", "error": %q}`, err.Error()))
-		os.Exit(1)
+		exit(1)
 	}
 	args := os.Args[3:]
 	flag := func(name string) string {
@@ -108,12 +108,12 @@ func handleReleases(rootDir, sub string) {
 	}
 	fail := func(err error) {
 		printRaw(fmt.Sprintf(`{"status": "error", "error": %q}`, err.Error()))
-		os.Exit(1)
+		exit(1)
 	}
 	need := func(n int, usage string) {
 		if len(pos) < n {
 			printRaw(fmt.Sprintf(`{"error": "usage: monoflow version %s"}`, usage))
-			os.Exit(1)
+			exit(1)
 		}
 	}
 
@@ -128,7 +128,7 @@ func handleReleases(rootDir, sub string) {
 		}
 		out(map[string]any{"edges": edges, "problems": problems})
 		if problems > 0 {
-			os.Exit(1)
+			exit(1)
 		}
 
 	case "releases":
@@ -223,7 +223,7 @@ func handleReleases(rootDir, sub string) {
 		out(map[string]any{"status": "upgraded", "consumer": pos[0], "dependency": pos[1], "to": to, "verify": res.Status, "results": failedResults(res),
 			"next": "fix any failures, then monoflow commit"})
 		if res.Status != "passed" {
-			os.Exit(1)
+			exit(1)
 		}
 
 	case "suggest":

@@ -14,7 +14,7 @@ func handleGraph(rootDir string) {
 	g, err := graph.LoadOrDiscover(rootDir)
 	if err != nil {
 		printRaw(fmt.Sprintf(`{"error": %q}`, err))
-		os.Exit(1)
+		exit(1)
 	}
 
 	if len(os.Args) == 2 {
@@ -55,20 +55,20 @@ func handleGraph(rootDir string) {
 	case "query":
 		if len(os.Args) < 4 {
 			printRaw(`{"error": "missing package name for query"}`)
-			os.Exit(1)
+			exit(1)
 		}
 		pkgName := os.Args[3]
 		pkg, exists := resolvePackageArg(g, rootDir, pkgName)
 		if !exists {
 			printRaw(fmt.Sprintf(`{"error": "package '%s' not found (use a name from 'monoflow graph' or a path inside a package)"}`, pkgName))
-			os.Exit(1)
+			exit(1)
 		}
 		out := map[string]any{
 			"package":           pkg.Name,
 			"path":              pkg.Path,
 			"depends_on":        g.GetUpstream(pkg.Name),
 			"dependents":        len(g.GetTransitiveDownstream(pkg.Name)),
-			"direct_dependents": g.GetDownstream(pkg.Name),
+			"direct_dependents": withPaths(g, g.GetDownstream(pkg.Name)),
 		}
 		if len(pkg.PinnedDependencies) > 0 {
 			out["pinned_dependencies"] = pkg.PinnedDependencies
@@ -99,7 +99,7 @@ func handleGraph(rootDir string) {
 	case "impact":
 		if len(os.Args) < 4 {
 			printRaw(`{"error": "missing file path for impact analysis"}`)
-			os.Exit(1)
+			exit(1)
 		}
 		filePath := os.Args[3]
 		pkg := g.MapFileToPackage(filePath)
@@ -141,6 +141,19 @@ func pinnedDependents(g *graph.DependencyGraph, pkg string) []string {
 		if containsStr(p.PinnedDependencies, pkg) {
 			out = append(out, p.Name)
 		}
+	}
+	return out
+}
+
+// withPaths names packages as "name (dir)" when the name is not their directory (JS
+// workspaces: "@acme/web (apps/web)"), so nobody has to look the directory up.
+func withPaths(g *graph.DependencyGraph, names []string) []string {
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		if p, ok := g.GetPackage(n); ok && p.Path != "" && p.Path != n {
+			n += " (" + p.Path + ")"
+		}
+		out = append(out, n)
 	}
 	return out
 }

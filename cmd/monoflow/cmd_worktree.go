@@ -17,7 +17,7 @@ func handleCheckpoint(rootDir string) {
 	mgr := checkpoint.NewManager(rootDir)
 	if len(os.Args) < 3 {
 		printRaw(`{"error": "missing checkpoint subcommand: save | revert | list"}`)
-		os.Exit(1)
+		exit(1)
 	}
 
 	sub := os.Args[2]
@@ -32,7 +32,7 @@ func handleCheckpoint(rootDir string) {
 		durMs := float64(time.Since(start).Microseconds()) / 1000.0
 		if err != nil {
 			printRaw(fmt.Sprintf(`{"error": %q}`, err))
-			os.Exit(1)
+			exit(1)
 		}
 		printOut(map[string]any{
 			"status":      "saved",
@@ -53,7 +53,7 @@ func handleCheckpoint(rootDir string) {
 		durMs := float64(time.Since(start).Microseconds()) / 1000.0
 		if err != nil {
 			printRaw(fmt.Sprintf(`{"error": %q}`, err))
-			os.Exit(1)
+			exit(1)
 		}
 		printOut(map[string]any{
 			"status":      "reverted",
@@ -73,7 +73,7 @@ func handleWorktree(rootDir string) {
 	mgr := worktree.NewManager(rootDir)
 	if len(os.Args) < 3 {
 		printRaw(`{"error": "usage: monoflow worktree create <agent-id> | list | sync --to=X --from=Y | finish <agent-id> | prune"}`)
-		os.Exit(1)
+		exit(1)
 	}
 
 	sub := os.Args[2]
@@ -81,12 +81,12 @@ func handleWorktree(rootDir string) {
 	case "create":
 		if len(os.Args) < 4 {
 			printRaw(`{"error": "missing agent-id for worktree create"}`)
-			os.Exit(1)
+			exit(1)
 		}
 		agentID := os.Args[3]
 		if !worktree.ValidAgentID(agentID) {
 			printRaw(fmt.Sprintf(`{"error": "invalid agent-id %q (letters, digits, . _ -): usage: monoflow worktree create <agent-id> --packages=<p1,p2>"}`, agentID))
-			os.Exit(1)
+			exit(1)
 		}
 		isolated := false
 		fromLocal := false
@@ -132,13 +132,13 @@ func handleWorktree(rootDir string) {
 		durMs := float64(time.Since(start).Microseconds()) / 1000.0
 		if err != nil {
 			printRaw(fmt.Sprintf(`{"error": %q}`, err))
-			os.Exit(1)
+			exit(1)
 		}
 		resMap := map[string]any{
 			"status": "created",
 			"path":   info.Path,
 			"branch": info.Branch,
-			"next":   "cd " + info.Path + " and work only there (same files as the repo root); edit, then monoflow verify",
+			"next":   "cd " + info.Path + " and work only there (same files as the repo root; ./bin/monoflow works there too). Shell calls may start in the repo root: cd there in each one. Edit, then monoflow verify",
 		}
 		if info.BaseRef != "" {
 			resMap["base"] = info.BaseRef
@@ -163,7 +163,7 @@ func handleWorktree(rootDir string) {
 	case "focus":
 		if len(os.Args) < 5 {
 			printRaw(`{"error": "usage: monoflow worktree focus <agent-id> <package> [--deps=source|contracts|none]"}`)
-			os.Exit(1)
+			exit(1)
 		}
 		agentID := os.Args[3]
 		pkg := os.Args[4]
@@ -176,14 +176,14 @@ func handleWorktree(rootDir string) {
 		info, err := mgr.Focus(agentID, pkg, strategy)
 		if err != nil {
 			printRaw(fmt.Sprintf(`{"status": "error", "error": %q}`, err.Error()))
-			os.Exit(1)
+			exit(1)
 		}
 		printOut(info)
 
 	case "add", "add-package":
 		if len(os.Args) < 5 {
 			printRaw(`{"error": "usage: monoflow worktree add <agent-id> <pkg1,pkg2,...> [--deps=source|contracts|none]"}`)
-			os.Exit(1)
+			exit(1)
 		}
 		agentID := os.Args[3]
 		pkgs := strings.Split(os.Args[4], ",")
@@ -196,14 +196,14 @@ func handleWorktree(rootDir string) {
 		info, err := mgr.AddPackage(agentID, pkgs, strategy)
 		if err != nil {
 			printRaw(fmt.Sprintf(`{"status": "error", "error": %q}`, err.Error()))
-			os.Exit(1)
+			exit(1)
 		}
 		printOut(info)
 
 	case "remove", "remove-package":
 		if len(os.Args) < 5 {
 			printRaw(`{"error": "usage: monoflow worktree remove <agent-id> <pkg1,pkg2,...> [--force]"}`)
-			os.Exit(1)
+			exit(1)
 		}
 		agentID := os.Args[3]
 		pkgs := strings.Split(os.Args[4], ",")
@@ -216,14 +216,14 @@ func handleWorktree(rootDir string) {
 		info, err := mgr.RemovePackage(agentID, pkgs, force)
 		if err != nil {
 			printRaw(fmt.Sprintf(`{"status": "error", "error": %q}`, err.Error()))
-			os.Exit(1)
+			exit(1)
 		}
 		printOut(info)
 
 	case "update":
 		if len(os.Args) < 4 {
 			printRaw(`{"error": "usage: monoflow worktree update <agent-id> [pkg1,pkg2,...] [--remote=origin] [--branch=main]"}`)
-			os.Exit(1)
+			exit(1)
 		}
 		agentID := os.Args[3]
 		var pkgs []string
@@ -241,20 +241,20 @@ func handleWorktree(rootDir string) {
 		res, err := mgr.UpdateFromRemote(agentID, pkgs, remote, branch)
 		if err != nil {
 			printRaw(fmt.Sprintf(`{"status": "error", "error": %q}`, err.Error()))
-			os.Exit(1)
+			exit(1)
 		}
 		printOut(res)
 
 	case "isolate":
 		if len(os.Args) < 4 {
 			printRaw(`{"error": "missing agent-id for worktree isolate"}`)
-			os.Exit(1)
+			exit(1)
 		}
 		agentID := os.Args[3]
 		res, err := mgr.Isolate(agentID)
 		if err != nil {
 			printRaw(fmt.Sprintf(`{"error": %q}`, err))
-			os.Exit(1)
+			exit(1)
 		}
 		printOut(res)
 
@@ -262,7 +262,7 @@ func handleWorktree(rootDir string) {
 		list, err := mgr.List()
 		if err != nil {
 			printRaw(fmt.Sprintf(`{"error": %q}`, err))
-			os.Exit(1)
+			exit(1)
 		}
 		printOut(list)
 
@@ -279,14 +279,14 @@ func handleWorktree(rootDir string) {
 		}
 		if toID == "" || fromID == "" {
 			printRaw(`{"error": "usage: monoflow worktree sync --to=<target-agent> --from=<source-agent>"}`)
-			os.Exit(1)
+			exit(1)
 		}
 		start := time.Now()
 		synced, err := mgr.Sync(toID, fromID)
 		durMs := float64(time.Since(start).Microseconds()) / 1000.0
 		if err != nil {
 			printRaw(fmt.Sprintf(`{"error": %q}`, err))
-			os.Exit(1)
+			exit(1)
 		}
 		printOut(map[string]any{
 			"status":       "synced",
@@ -299,7 +299,7 @@ func handleWorktree(rootDir string) {
 	case "finish":
 		if len(os.Args) < 4 {
 			printRaw(`{"error": "missing agent-id for worktree finish"}`)
-			os.Exit(1)
+			exit(1)
 		}
 		agentID := os.Args[3]
 		force := false
@@ -313,7 +313,7 @@ func handleWorktree(rootDir string) {
 		durMs := float64(time.Since(start).Microseconds()) / 1000.0
 		if err != nil {
 			printRaw(fmt.Sprintf(`{"error": %q}`, err))
-			os.Exit(1)
+			exit(1)
 		}
 		printOut(map[string]any{
 			"status":      "finished",
@@ -326,7 +326,7 @@ func handleWorktree(rootDir string) {
 		pruned, err := mgr.PruneStale(ttl)
 		if err != nil {
 			printRaw(fmt.Sprintf(`{"error": %q}`, err))
-			os.Exit(1)
+			exit(1)
 		}
 		printOut(map[string]any{
 			"status":         "pruned",
@@ -343,7 +343,7 @@ func handleBranch(rootDir string) {
 		out, err := cmdList.CombinedOutput()
 		if err != nil {
 			printRaw(fmt.Sprintf(`{"status": "error", "error": %q}`, err.Error()))
-			os.Exit(1)
+			exit(1)
 		}
 		lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 		var current string
@@ -390,7 +390,7 @@ func handleBranch(rootDir string) {
 
 	if err != nil {
 		printRaw(fmt.Sprintf(`{"status": "error", "error": %q, "output": %q}`, err.Error(), strings.TrimSpace(string(out))))
-		os.Exit(1)
+		exit(1)
 	}
 
 	printOut(map[string]any{
@@ -403,7 +403,7 @@ func handleBranch(rootDir string) {
 func handleClone() {
 	if len(os.Args) < 3 {
 		printRaw(`{"error": "usage: monoflow clone <repo-url> [dest-dir] --packages=<pkg1,pkg2,...> [--include-deps=true|false] [--branch=<name>]"}`)
-		os.Exit(1)
+		exit(1)
 	}
 
 	remoteURL := os.Args[2]
@@ -432,7 +432,7 @@ func handleClone() {
 
 	if packagesArg == "" {
 		printRaw(`{"error": "missing required --packages flag. Specify a subset of packages, e.g. --packages=pkgA,pkgB"}`)
-		os.Exit(1)
+		exit(1)
 	}
 
 	pkgs := strings.Split(packagesArg, ",")
@@ -449,7 +449,7 @@ func handleClone() {
 	res, err := subset.Clone(remoteURL, destDir, pkgs, opts)
 	if err != nil {
 		printRaw(fmt.Sprintf(`{"status": "error", "error": %q}`, err.Error()))
-		os.Exit(1)
+		exit(1)
 	}
 
 	printOut(res)
@@ -458,7 +458,7 @@ func handleClone() {
 func handleSubset(rootDir string) {
 	if len(os.Args) < 3 {
 		printRaw(`{"error": "usage: monoflow subset set --packages=<p1,p2> | add <p1,p2> | remove <p1,p2> [--force] | update [p1,p2] | deps <pkg> | list | reset"}`)
-		os.Exit(1)
+		exit(1)
 	}
 
 	sub := os.Args[2]
@@ -489,21 +489,21 @@ func handleSubset(rootDir string) {
 
 		if packagesArg == "" {
 			printRaw(`{"error": "missing required --packages flag"}`)
-			os.Exit(1)
+			exit(1)
 		}
 
 		pkgs := strings.Split(packagesArg, ",")
 		res, err := subset.ApplyWithOptions(rootDir, pkgs, strategy)
 		if err != nil {
 			printRaw(fmt.Sprintf(`{"status": "error", "error": %q}`, err.Error()))
-			os.Exit(1)
+			exit(1)
 		}
 		printOut(res)
 
 	case "add":
 		if len(os.Args) < 4 {
 			printRaw(`{"error": "usage: monoflow subset add <pkg1,pkg2,...> [--deps=source|contracts|none]"}`)
-			os.Exit(1)
+			exit(1)
 		}
 		pkgs := strings.Split(os.Args[3], ",")
 		strategy := subset.DepStrategySource
@@ -515,14 +515,14 @@ func handleSubset(rootDir string) {
 		res, err := subset.Add(rootDir, pkgs, strategy)
 		if err != nil {
 			printRaw(fmt.Sprintf(`{"status": "error", "error": %q}`, err.Error()))
-			os.Exit(1)
+			exit(1)
 		}
 		printOut(res)
 
 	case "remove":
 		if len(os.Args) < 4 {
 			printRaw(`{"error": "usage: monoflow subset remove <pkg1,pkg2,...> [--force]"}`)
-			os.Exit(1)
+			exit(1)
 		}
 		pkgs := strings.Split(os.Args[3], ",")
 		force := false
@@ -534,7 +534,7 @@ func handleSubset(rootDir string) {
 		res, err := subset.Remove(rootDir, pkgs, force)
 		if err != nil {
 			printRaw(fmt.Sprintf(`{"status": "error", "error": %q}`, err.Error()))
-			os.Exit(1)
+			exit(1)
 		}
 		printOut(res)
 
@@ -555,25 +555,25 @@ func handleSubset(rootDir string) {
 		res, err := subset.Update(rootDir, pkgs, remote, branch)
 		if err != nil {
 			printRaw(fmt.Sprintf(`{"status": "error", "error": %q}`, err.Error()))
-			os.Exit(1)
+			exit(1)
 		}
 		printOut(res)
 
 	case "deps", "inspect":
 		if len(os.Args) < 4 {
 			printRaw(`{"error": "usage: monoflow subset deps <pkg-name>"}`)
-			os.Exit(1)
+			exit(1)
 		}
 		target := os.Args[3]
 		g, err := graph.LoadOrDiscover(rootDir)
 		if err != nil {
 			printRaw(fmt.Sprintf(`{"status": "error", "error": %q}`, err.Error()))
-			os.Exit(1)
+			exit(1)
 		}
 		report, err := subset.InspectDeps(g, target, rootDir)
 		if err != nil {
 			printRaw(fmt.Sprintf(`{"status": "error", "error": %q}`, err.Error()))
-			os.Exit(1)
+			exit(1)
 		}
 		printOut(report)
 
@@ -581,7 +581,7 @@ func handleSubset(rootDir string) {
 		st, err := subset.Status(rootDir)
 		if err != nil {
 			printRaw(fmt.Sprintf(`{"status": "error", "error": %q}`, err.Error()))
-			os.Exit(1)
+			exit(1)
 		}
 		printOut(st)
 
@@ -589,23 +589,23 @@ func handleSubset(rootDir string) {
 		res, err := subset.CheckSubsetHealth(rootDir)
 		if err != nil {
 			printRaw(fmt.Sprintf(`{"status": "error", "error": %q}`, err.Error()))
-			os.Exit(1)
+			exit(1)
 		}
 		printOut(res)
 		if res.Status == "error" {
-			os.Exit(1)
+			exit(1)
 		}
 
 	case "reset":
 		err := subset.Reset(rootDir)
 		if err != nil {
 			printRaw(fmt.Sprintf(`{"status": "error", "error": %q}`, err.Error()))
-			os.Exit(1)
+			exit(1)
 		}
 		printRaw(`{"status": "reset", "message": "Sparse checkout disabled. Full monorepo restored."}`)
 
 	default:
 		printRaw(fmt.Sprintf(`{"error": "unknown subset subcommand '%s' (use set | add | remove | update | deps | check | list | reset)"}`, sub))
-		os.Exit(1)
+		exit(1)
 	}
 }

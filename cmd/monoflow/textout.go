@@ -42,9 +42,21 @@ func verifyText(res verify.SuiteResult, c map[string]any) string {
 	}
 	fmt.Fprintf(&b, "%s %d/%d packages passed", status, res.PassedTargets, res.TotalTargets)
 	if res.CachedTargets > 0 {
-		fmt.Fprintf(&b, " (%d cached)", res.CachedTargets)
+		fmt.Fprintf(&b, " (%d cached: same inputs passed before)", res.CachedTargets)
 	}
 	fmt.Fprintf(&b, " in %.1fs\n", res.DurationMs/1000)
+	if n := len(res.Results); n > 0 && n <= 8 {
+		// Name what was checked: "3/3 (2 cached)" after editing 2 packages read as a stale cache.
+		var names []string
+		for _, r := range res.Results {
+			name := r.Target
+			if r.Cached {
+				name += " (cached)"
+			}
+			names = append(names, name)
+		}
+		b.WriteString("checked: " + strings.Join(names, ", ") + "\n")
+	}
 	if s, ok := c["scope"].(string); ok {
 		b.WriteString("scope: " + s + "\n")
 	}

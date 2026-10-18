@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -26,7 +27,15 @@ func handleHook() {
 	}
 	switch sub {
 	case "pretooluse":
-		if out := agenthooks.ClaudePreToolUse(os.Stdin, hookStateDir()); out != nil {
+		data, _ := io.ReadAll(os.Stdin)
+		if out := agenthooks.ClaudePreToolUse(bytes.NewReader(data), hookStateDir()); out != nil {
+			var p struct {
+				ToolInput struct {
+					Command string `json:"command"`
+				} `json:"tool_input"`
+			}
+			_ = json.Unmarshal(data, &p)
+			journalRedirect(p.ToolInput.Command)
 			fmt.Println(string(out))
 		}
 	case "deliver":
@@ -36,12 +45,13 @@ func handleHook() {
 	case "check":
 		data, _ := io.ReadAll(os.Stdin)
 		if r := agenthooks.Decide(hookStateDir(), string(data)); r != nil {
+			journalRedirect(string(data))
 			fmt.Println(r.Reason())
-			os.Exit(2)
+			exit(2)
 		}
 	default:
 		printRaw(`{"error": "usage: monoflow hook pretooluse | check | deliver | stop"}`)
-		os.Exit(1)
+		exit(1)
 	}
 }
 
@@ -132,7 +142,16 @@ func hookStop(root string) {
 		}
 	}
 	if len(act) == 0 {
-		return // nothing needs the agent: let it stop
+		// Nothing needs the agent. Before it leaves, ask once for a retro on MonoFlow.
+		if text := retroNudge(root); text != "" {
+			if hookFlag("format") == "text" {
+				fmt.Print(text)
+				return
+			}
+			out, _ := json.Marshal(map[string]any{"decision": "block", "reason": text})
+			fmt.Println(string(out))
+		}
+		return
 	}
 	_ = em.MarkDelivered(branch, act)
 	reason := events.Render(act) + "Handle these before finishing (they block your change from landing)."

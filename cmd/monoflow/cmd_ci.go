@@ -37,7 +37,7 @@ func handleQuarantine(rootDir string) {
 func handleReview(rootDir string) {
 	if len(os.Args) < 3 {
 		printRaw(`{"error": "usage: monoflow review risk | audit --title=... --desc=... | throttle"}`)
-		os.Exit(1)
+		exit(1)
 	}
 
 	sub := os.Args[2]
@@ -49,7 +49,7 @@ func handleReview(rootDir string) {
 		res, err := review.EvaluateRisk(rootDir, g, changedFiles)
 		if err != nil {
 			printRaw(fmt.Sprintf(`{"error": %q}`, err))
-			os.Exit(1)
+			exit(1)
 		}
 		printOut(res)
 
@@ -67,18 +67,18 @@ func handleReview(rootDir string) {
 		res := review.AuditPRDossier(title, desc, changedFiles)
 		printOut(res)
 		if !res.Valid {
-			os.Exit(1)
+			exit(1)
 		}
 
 	case "throttle":
 		status, err := review.CheckBackpressure(rootDir, 3)
 		if err != nil {
 			printRaw(fmt.Sprintf(`{"error": %q}`, err))
-			os.Exit(1)
+			exit(1)
 		}
 		printOut(status)
 		if status.Throttled {
-			os.Exit(1)
+			exit(1)
 		}
 	}
 }
@@ -86,7 +86,7 @@ func handleReview(rootDir string) {
 func handleQueue(rootDir string) {
 	if len(os.Args) < 3 {
 		printRaw(`{"error": "usage: monoflow queue spec [task-id] | verify <sha>"}`)
-		os.Exit(1)
+		exit(1)
 	}
 
 	qm := queue.NewQueueManager(rootDir)
@@ -107,14 +107,14 @@ func handleQueue(rootDir string) {
 		})
 		if err != nil {
 			printRaw(fmt.Sprintf(`{"status": "failed", "error": %q}`, err))
-			os.Exit(1)
+			exit(1)
 		}
 		printOut(receipt)
 
 	case "verify":
 		if len(os.Args) < 4 {
 			printRaw(`{"error": "missing commit sha for queue verify"}`)
-			os.Exit(1)
+			exit(1)
 		}
 		sha := os.Args[3]
 		eligible, receipt, reason := qm.VerifyCIGate(sha)
@@ -124,7 +124,7 @@ func handleQueue(rootDir string) {
 			"reason":             reason,
 		})
 		if !eligible {
-			os.Exit(1)
+			exit(1)
 		}
 	}
 }
@@ -155,7 +155,7 @@ func handleCI(rootDir string) {
 		job, err := cw.StartWatch(opts)
 		if err != nil {
 			printRaw(fmt.Sprintf(`{"error": %q}`, err))
-			os.Exit(1)
+			exit(1)
 		}
 		printOut(job)
 		return
@@ -221,11 +221,18 @@ func handleCIHealth(rootDir string) {
 		}
 	}
 
+	if url, err := exec.Command("git", "-C", rootDir, "remote", "get-url", "origin").Output(); err != nil || !strings.Contains(string(url), "github") {
+		// Not an error the agent can fix: say what exists instead of a gh API failure.
+		printOut(map[string]any{"status": "unavailable",
+			"reason": "ci health reads GitHub Actions history, and origin is not a GitHub remote",
+			"next":   "local CI results of your commits are events: monoflow events list (or monoflow outer status)"})
+		return
+	}
 	src := cihealth.NewGHSource(rootDir)
 	data, warnings, err := cihealth.Collect(src, collectOpts)
 	if err != nil {
 		printOut(map[string]string{"error": err.Error(), "branch": collectOpts.Branch})
-		os.Exit(1)
+		exit(1)
 	}
 	rep := cihealth.Analyze(data, cihealth.Options{Branch: collectOpts.Branch, CheckFilter: checkFilter})
 	rep.Warnings = append(warnings, rep.Warnings...)
@@ -246,7 +253,7 @@ func handleGuard(rootDir string) {
 			"violations": allViolations,
 			"verdict":    "Integrity or security violation detected. Commits or PRs with weakened tests or secrets are blocked.",
 		})
-		os.Exit(1)
+		exit(1)
 	}
 
 	printOut(map[string]any{
@@ -261,7 +268,7 @@ func handleOuter(rootDir string) {
 	om := verify.NewOuterLoopManager(rootDir)
 	if len(os.Args) < 3 {
 		printRaw(`{"error": "usage: monoflow outer start [opts] | status <id> | wait <id> | list"}`)
-		os.Exit(1)
+		exit(1)
 	}
 
 	sub := os.Args[2]
@@ -271,12 +278,12 @@ func handleOuter(rootDir string) {
 		for _, a := range os.Args[3:] {
 			if strings.HasPrefix(a, "--job=") {
 				if err := om.ExecuteJobByID(strings.TrimPrefix(a, "--job=")); err != nil {
-					os.Exit(1)
+					exit(1)
 				}
 				return
 			}
 		}
-		os.Exit(2)
+		exit(2)
 
 	case "start", "run", "check":
 		opts := verify.OuterLoopOptions{
@@ -310,11 +317,11 @@ func handleOuter(rootDir string) {
 		job, err := om.StartJob(opts)
 		if err != nil && job == nil {
 			printRaw(fmt.Sprintf(`{"status": "failed", "error": %q}`, err))
-			os.Exit(1)
+			exit(1)
 		}
 		printOut(job)
 		if job.Status == verify.JobRegressed {
-			os.Exit(1)
+			exit(1)
 		}
 
 	case "status":
@@ -322,7 +329,7 @@ func handleOuter(rootDir string) {
 		job, err := om.GetJob(jobID)
 		if err != nil {
 			printRaw(fmt.Sprintf(`{"error": %q}`, err))
-			os.Exit(1)
+			exit(1)
 		}
 		printOuterJob(job)
 
@@ -340,24 +347,24 @@ func handleOuter(rootDir string) {
 		job, err := om.WaitJob(jobID, timeout)
 		if err != nil {
 			printRaw(fmt.Sprintf(`{"error": %q}`, err))
-			os.Exit(1)
+			exit(1)
 		}
 		printOuterJob(job)
 		if job.Status == verify.JobRegressed {
-			os.Exit(1)
+			exit(1)
 		}
 
 	case "list":
 		jobs, err := om.ListJobs()
 		if err != nil {
 			printRaw(fmt.Sprintf(`{"error": %q}`, err))
-			os.Exit(1)
+			exit(1)
 		}
 		printOut(jobs)
 
 	default:
 		printRaw(fmt.Sprintf(`{"error": "unknown outer subcommand: %s"}`, sub))
-		os.Exit(1)
+		exit(1)
 	}
 }
 
@@ -392,17 +399,17 @@ func handleCIProofs(rootDir, sub string) {
 		job := verify.NewOuterLoopManager(rootDir).LatestForCommit(sha)
 		if job == nil || (job.Status != verify.JobPassed && job.Status != verify.JobPromoted) {
 			printRaw(`{"status": "refused", "reason": "only a green outer loop for this commit can be published"}`)
-			os.Exit(1)
+			exit(1)
 		}
 		n, err := proofs.Publish(rootDir, remote, sha, mgr, verify.PassedKeys(job.TargetResults))
 		if err != nil {
 			printRaw(fmt.Sprintf(`{"status": "error", "error": %q}`, err.Error()))
-			os.Exit(1)
+			exit(1)
 		}
 		printRaw(fmt.Sprintf(`{"status": "published", "commit": %q, "records": %d}`, sha, n))
 	default:
 		printRaw(`{"error": "usage: monoflow ci proofs import|publish [--commit=<sha>] [--remote=<r>]"}`)
-		os.Exit(1)
+		exit(1)
 	}
 }
 
@@ -417,7 +424,7 @@ func outerJobArg(rootDir string, om *verify.OuterLoopManager) string {
 		return job.ID
 	}
 	printRaw(`{"error": "no outer-loop job for HEAD; 'monoflow commit' starts one (or pass a job id)"}`)
-	os.Exit(1)
+	exit(1)
 	return ""
 }
 

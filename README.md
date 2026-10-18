@@ -199,6 +199,22 @@ monoflow version upgrade ledger money         # moves the pin and runs ledger's 
 - **Many agents, one release**: agents record the bump a change needs as a changeset (`task changeset`); `version apply` applies the highest bump per package.
 - Pinned edges are left out of the graph `verify` and the cache use, so editing `money` does not re-test a consumer pinned to an older release.
 
+### 8. 🔁 `improve`: agents tell MonoFlow what to fix
+
+At the end of every session the agent does a short retro on MonoFlow itself. `monoflow improve` shows what the session ran: commands, non-zero exits, raw commands the hooks redirected, and slow calls. The agent files each problem as one suggestion, or closes the retro with `none`.
+
+```bash
+monoflow improve                                   # what this session ran + how to file
+monoflow improve add "verify should name the pending dependents" --area=verify --kind=friction \
+  --severity=medium --evidence="monoflow verify -> PENDING 2/2 ..."
+monoflow improve done                              # or: monoflow improve none
+```
+
+- **After every session.** In Claude Code, the Stop hook asks once per session that did MonoFlow work (`start`, `verify`, `ship`…) and hasn't closed a retro. `ship` names the retro as the last step. Turn both off with `"improve": {"after_session": false}` in `.agents/monoflow.config.json`.
+- **Local files.** `.agents/improve/` in the main checkout, shared by all worktrees and never committed: `journal.jsonl` (every agent-run command, with exit code and duration), `suggestions.jsonl`, `retros.jsonl`, `triage.json`. Set `MONOFLOW_IMPROVE_DIR` to collect several repos in one place.
+- **Triage.** `monoflow improve triage` groups duplicates (shared wording, or `--same-as=<id>`), ranks each group by sessions × severity, and writes `TRIAGE.md`. `improve mark <id> fixed|wontfix|accepted|invalid --note=…` records a verdict for the whole group. If a fixed problem is reported again, its group reopens.
+- **The loop.** [`e2e/improve/run.sh`](./e2e/improve/RESULTS.md) has concurrent agents do real tasks on a sim repo, makes sure each one closes a retro, then triages. You fix what triage finds and run the next round, until a round reports nothing new.
+
 ---
 
 ## ⚙️ How it works
@@ -318,6 +334,7 @@ Where it is not ahead yet: on trpc (Turborepo, 11 packages) the plain agents fin
 | 🚢 **Ship** | `pr create\|status\|test\|local\|review\|merge` · `outer status\|wait` · `queue spec` · `ci check` |
 | 📬 **Events & CI** | `events unread\|wait\|ack` · `ci health [--check=<name>] [--logs]` |
 | 🛡️ **Guardrails** | `guard check` · `task check\|prove\|slice` · `review risk\|audit\|throttle` |
+| 🔁 **Retro** | `improve` · `improve add\|done\|none` · `improve list\|triage\|mark` |
 | 📦 **Versions & releases** | `version edges\|suggest\|bump\|release\|pin\|unpin\|upgrades\|upgrade\|apply\|check` · `deliver` |
 
 `monoflow help` prints the short list; `monoflow help <command>` shows one command's flags, and `monoflow help --all` shows everything.
