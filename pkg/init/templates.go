@@ -9,7 +9,7 @@ Run as ` + "`" + `./bin/monoflow` + "`" + `. Four calls take a change to a PR:
 2. ` + "`" + `monoflow find "<text>"` + "`" + `: every occurrence, grouped code / tests / docs, compact (instead of grep -rn);
    ` + "`" + `monoflow graph query <dir>` + "`" + `: every package importing it. Make the change.
 3. ` + "`" + `monoflow verify` + "`" + `: answers in seconds with the changed packages' failures, every one as ` + "`" + `file:line` + "`" + ` with the
-   failing line and test; their dependents are checked in the background meanwhile and the next verify includes
+   failing line and test; their dependents' tests run in the background meanwhile and the next verify includes
    them. Fix, verify, repeat until PASS (re-runs only what your edits touched). PENDING = your packages pass and
    the dependents are still running: do the remaining work (docs, changeset) meanwhile, then verify again. It formats your changed files
    and bounds itself: no ` + "`" + `timeout` + "`" + `, no ` + "`" + `| tail` + "`" + `, nothing else to run (not vitest / jest / go test / tsc / prettier /

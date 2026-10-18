@@ -297,6 +297,12 @@ func stopOtherSpecRuns(root, keep string) {
 }
 
 func pruneSpecResults(dir string, keep int) {
+	marks, _ := filepath.Glob(filepath.Join(dir, "*.pending"))
+	for _, m := range marks {
+		if fi, err := os.Stat(m); err == nil && time.Since(fi.ModTime()) > time.Hour {
+			_ = os.Remove(m)
+		}
+	}
 	outs, _ := filepath.Glob(filepath.Join(dir, "*.out"))
 	if len(outs) <= keep {
 		return

@@ -476,3 +476,28 @@ func TestSlowestPackagesStartFirst(t *testing.T) {
 		t.Fatalf("order %v, want never-timed first, then slowest first", got)
 	}
 }
+
+// In the agent's loop a dependent runs its tests only; local CI also typechecks it.
+func TestDependentsTestsOnlyInTheLoop(t *testing.T) {
+	root, marks := t.TempDir(), t.TempDir()
+	for _, d := range []string{"core", "app"} {
+		_ = os.MkdirAll(filepath.Join(root, d), 0755)
+	}
+	g := graph.New(root)
+	g.AddPackage(&graph.PackageNode{Name: "core", Path: "core", Language: graph.LangGeneric, TypecheckCmd: "touch " + filepath.Join(marks, "core-types"), TestCmd: "true"})
+	g.AddPackage(&graph.PackageNode{Name: "app", Path: "app", Language: graph.LangGeneric, Dependencies: []string{"core"}, TypecheckCmd: "touch " + filepath.Join(marks, "app-types"), TestCmd: "touch " + filepath.Join(marks, "app-test")})
+	g.RebuildEdges()
+	r := NewRunner(root)
+	if res := r.VerifyAffected(g, []string{"core/x"}, VerifyOptions{Strict: true, NoCache: true, DependentsTestsOnly: true}); res.Status != "passed" {
+		t.Fatalf("want a pass: %+v", res)
+	}
+	for f, want := range map[string]bool{"core-types": true, "app-test": true, "app-types": false} {
+		if _, err := os.Stat(filepath.Join(marks, f)); (err == nil) != want {
+			t.Fatalf("%s ran=%v, want %v", f, err == nil, want)
+		}
+	}
+	r.VerifyAffected(g, []string{"core/x"}, VerifyOptions{Strict: true, NoCache: true, LintDependents: true})
+	if _, err := os.Stat(filepath.Join(marks, "app-types")); err != nil {
+		t.Fatalf("local CI must typecheck dependents")
+	}
+}
