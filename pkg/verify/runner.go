@@ -1,9 +1,11 @@
 package verify
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -152,7 +154,8 @@ func (r *Runner) runCheck(c, dir string) ([]byte, error) {
 	if !strings.HasPrefix(c, repoRootPrefix) {
 		cmd := exec.Command("sh", "-c", c)
 		cmd.Dir = dir
-		return cmd.CombinedOutput()
+		out, err := cmd.CombinedOutput()
+		return out, noTestsIsPass(c, out, err)
 	}
 	r.rootMu.Lock()
 	if r.rootRuns == nil {
@@ -168,8 +171,47 @@ func (r *Runner) runCheck(c, dir string) ([]byte, error) {
 		cmd := exec.Command("sh", "-c", c)
 		cmd.Dir = dir
 		rr.out, rr.err = cmd.CombinedOutput()
+		rr.err = noTestsIsPass(c, rr.out, rr.err)
 	})
 	return rr.out, rr.err
+}
+
+// noTestsIsPass clears pytest's exit status 5 ("no tests ran"): a package without tests (yet)
+// has nothing failing, as with vitest's --passWithNoTests.
+func noTestsIsPass(c string, out []byte, err error) error {
+	var ee *exec.ExitError
+	if errors.As(err, &ee) && ee.ExitCode() == 5 && strings.Contains(c, "pytest") && bytes.Contains(out, []byte("no tests ran")) {
+		return nil
+	}
+	return err
+}
+
+// toolMissing matches the output of a check that could not start: its tool is not installed
+// (sh, dash, uv run, python -m) rather than a check that ran and failed.
+var toolMissing = regexp.MustCompile(`(?i)command not found|: not found\b|exit status 127|failed to spawn|no module named '?(pytest|ruff|mypy|black|flake8)\b|is not recognized as an internal or external command`)
+
+// ToolMissing reports output of a check whose tool is not installed.
+func ToolMissing(out string) bool { return toolMissing.MatchString(out) }
+
+// EnvironmentFailure reports errors of a check that could not run at all (a missing tool), as
+// opposed to one that ran and failed: such a failure says nothing about the change, and main
+// failing the same way does not make it "preexisting" (a uv repo without python/ruff on PATH
+// printed PASS while nothing had run).
+func EnvironmentFailure(errs []DiagnosticError) bool {
+	for _, e := range errs {
+		if e.Code == "execution_failure" && ToolMissing(e.Message) {
+			return true
+		}
+	}
+	return false
+}
+
+func toolMissingHint(c string) string {
+	h := "monoflow: this check could not start (a tool it runs is not installed): install it, or set this package's test_cmd/lint_cmd/typecheck_cmd in .agents/monoflow.config.json"
+	if strings.Contains(c, "uv run") {
+		h += " (uv: declare the tool in a dependency group, e.g. uv add --dev pytest ruff)"
+	}
+	return h
 }
 
 // NewRunner creates an inner-loop runner.
@@ -334,11 +376,15 @@ func (r *Runner) VerifyTarget(pkg *graph.PackageNode, opt VerifyOptions) TargetR
 		} else {
 			// Failed without structured line diagnostics (e.g. exit 1 general error)
 			res.Status = "failed"
+			msg := CompactFailure(StripANSI(rawOutput))
+			if ToolMissing(msg) {
+				msg += "\n" + toolMissingHint(res.CommandRun)
+			}
 			res.Errors = append(res.Errors, DiagnosticError{
 				File:    pkg.Path,
 				Line:    1,
 				Code:    "execution_failure",
-				Message: CompactFailure(StripANSI(rawOutput)),
+				Message: msg,
 			})
 		}
 	} else {

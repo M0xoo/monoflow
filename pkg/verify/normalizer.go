@@ -1,7 +1,6 @@
 package verify
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -71,8 +70,24 @@ func ParseDiagnostics(rawOutput string) []DiagnosticError {
 	pyRegex := regexp.MustCompile(`^(.+?\.py):(\d+):(\d+):\s*([A-Za-z0-9]+)\s*(.+)`)
 	pyMypyRegex := regexp.MustCompile(`^(.+?\.py):(\d+):\s*error:\s*(.+)`)
 
-	// 5. Pytest failure line: FAILED test_foo.py::test_bar - AssertionError: message
-	pytestRegex := regexp.MustCompile(`^FAILED\s+(.+?)::(.+?)\s*-\s*([A-Za-z0-9_]+Error):\s*(.+)`)
+	// Ruff's default ("full") output: "F401 [*] `os` imported but unused", then " --> a.py:1:8".
+	ruffHeadRegex := regexp.MustCompile(`^([A-Z]{1,4}[0-9]{1,4}|invalid-syntax):?\s+(?:\[\*\]\s+)?(.+)`)
+	pyLocRegex := regexp.MustCompile(`^-->\s*(.+?\.pyi?):(\d+):(\d+)`)
+	var ruffCode, ruffMsg string
+
+	// 5. Pytest: each failure ends with its location ("tests/test_a.py:5: AssertionError",
+	// after the "E   assert 4 == 3" lines); the summary then names the tests, in the same order:
+	// "FAILED tests/test_a.py::test_add - assert 4 == 3", "ERROR tests/test_b.py - ImportError…".
+	pytestLocRegex := regexp.MustCompile(`^(\S+\.py):(\d+):\s+([A-Za-z_][A-Za-z0-9_.]*)$`)
+	pytestSummaryRegex := regexp.MustCompile(`^(FAILED|ERROR)\s+(\S+?\.py)(?:::(\S+))?(?:\s+-\s+(.+))?$`)
+	var pytestE string   // first "E   ..." line of the failure being printed
+	var pytestLocs []int // failures located but not yet named by the summary
+	// A module that fails to import: "___ ERROR collecting tests/test_a.py ___", its traceback
+	// ("src/a/__init__.py:1: in <module>"), "E   ImportError: …"; the summary repeats only the file.
+	pytestCollectRegex := regexp.MustCompile(`^_+ ERROR collecting (\S+) _+$`)
+	pytestFrameRegex := regexp.MustCompile(`^(\S+\.py):(\d+): in `)
+	pytestCollecting := -1
+	pytestCollected := map[string]bool{}
 
 	// 6. Generic path:line:col or path:line error
 	genericRegex := regexp.MustCompile(`^([a-zA-Z0-9_./\-]+):(\d+)(?::(\d+))?:\s*(?:error:?\s*)?(.+)`)
@@ -268,6 +283,91 @@ func ParseDiagnostics(rawOutput string) []DiagnosticError {
 			continue
 		}
 
+		// Ruff full output: header, then its location.
+		if ruffCode != "" {
+			if m := pyLocRegex.FindStringSubmatch(trimmed); m != nil {
+				lineNum, _ := strconv.Atoi(m[2])
+				colNum, _ := strconv.Atoi(m[3])
+				errors = append(errors, DiagnosticError{File: m[1], Line: lineNum, Col: colNum, Code: ruffCode, Message: ruffMsg})
+				ruffCode, ruffMsg = "", ""
+				continue
+			}
+			ruffCode, ruffMsg = "", ""
+		}
+		if m := ruffHeadRegex.FindStringSubmatch(trimmed); m != nil && !strings.Contains(trimmed, ".py:") {
+			ruffCode, ruffMsg = m[1], strings.TrimSpace(m[2])
+			continue
+		}
+
+		// Pytest
+		if m := pytestCollectRegex.FindStringSubmatch(trimmed); m != nil {
+			errors = append(errors, DiagnosticError{File: m[1], Line: 1, Code: "test-error", Message: "[" + m[1] + "] "})
+			pytestCollecting, pytestCollected[m[1]], pytestE = len(errors)-1, true, ""
+			continue
+		}
+		if strings.HasPrefix(line, "E  ") {
+			if pytestE == "" {
+				pytestE = strings.TrimSpace(trimmed[1:])
+				if pytestCollecting >= 0 {
+					errors[pytestCollecting].Message += pytestE
+				}
+			}
+			continue
+		}
+		if strings.HasPrefix(trimmed, "___") || strings.HasPrefix(trimmed, "===") {
+			pytestE, pytestCollecting = "", -1
+			continue
+		}
+		if pytestCollecting >= 0 {
+			// The innermost frame in the project (not the interpreter's importlib) is the culprit.
+			if m := pytestFrameRegex.FindStringSubmatch(trimmed); m != nil && !filepath.IsAbs(m[1]) && !strings.Contains(m[1], "site-packages") {
+				errors[pytestCollecting].File = m[1]
+				errors[pytestCollecting].Line, _ = strconv.Atoi(m[2])
+			}
+			continue
+		}
+		if m := pytestLocRegex.FindStringSubmatch(trimmed); m != nil {
+			lineNum, _ := strconv.Atoi(m[2])
+			msg := m[3]
+			if pytestE != "" {
+				msg = pytestE
+			}
+			errors = append(errors, DiagnosticError{File: m[1], Line: lineNum, Code: "test-failure", Message: msg})
+			pytestLocs = append(pytestLocs, len(errors)-1)
+			pytestE = ""
+			continue
+		}
+		if m := pytestSummaryRegex.FindStringSubmatch(trimmed); m != nil {
+			if m[1] == "ERROR" && m[3] == "" && pytestCollected[m[2]] {
+				continue // reported from its "ERROR collecting" section
+			}
+			test, msg := m[3], m[4]
+			if test == "" {
+				test = m[2]
+			}
+			if m[1] == "FAILED" && len(pytestLocs) > 0 {
+				d := &errors[pytestLocs[0]]
+				pytestLocs = pytestLocs[1:]
+				if msg != "" {
+					d.Message = msg
+				}
+				d.Message = "[" + test + "] " + d.Message
+				continue
+			}
+			if msg == "" {
+				msg = pytestE
+			}
+			if msg == "" {
+				msg = strings.ToLower(m[1])
+			}
+			code := "test-failure"
+			if m[1] == "ERROR" {
+				code = "test-error"
+			}
+			errors = append(errors, DiagnosticError{File: m[2], Line: 1, Code: code, Message: "[" + test + "] " + msg})
+			continue
+		}
+
 		// Try Python (Ruff / Flake8)
 		if matches := pyRegex.FindStringSubmatch(trimmed); matches != nil {
 			lineNum, _ := strconv.Atoi(matches[2])
@@ -277,7 +377,7 @@ func ParseDiagnostics(rawOutput string) []DiagnosticError {
 				Line:    lineNum,
 				Col:     colNum,
 				Code:    matches[4],
-				Message: strings.TrimSpace(matches[5]),
+				Message: strings.TrimPrefix(strings.TrimSpace(matches[5]), "[*] "),
 			})
 			continue
 		}
@@ -290,17 +390,6 @@ func ParseDiagnostics(rawOutput string) []DiagnosticError {
 				Line:    lineNum,
 				Code:    "type-error",
 				Message: strings.TrimSpace(matches[3]),
-			})
-			continue
-		}
-
-		// Try Pytest
-		if matches := pytestRegex.FindStringSubmatch(trimmed); matches != nil {
-			errors = append(errors, DiagnosticError{
-				File:    strings.TrimSpace(matches[1]),
-				Line:    1,
-				Code:    matches[3],
-				Message: fmt.Sprintf("[%s] %s", matches[2], matches[4]),
 			})
 			continue
 		}

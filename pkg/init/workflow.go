@@ -49,6 +49,23 @@ func GitHubWorkflow(g *graph.DependencyGraph) string {
 		setup = append(setup, `      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"`)
+		// The checks run through the project manager (uv run, poetry run): CI needs it too.
+		var uv, poetry, pdm bool
+		for _, p := range g.GetAllPackages() {
+			cmds := p.TestCmd + " " + p.LintCmd + " " + p.TypecheckCmd
+			uv = uv || strings.Contains(cmds, "uv run ") || strings.Contains(cmds, "uvx ")
+			poetry = poetry || strings.Contains(cmds, "poetry run ")
+			pdm = pdm || strings.Contains(cmds, "pdm run ")
+		}
+		if uv {
+			setup = append(setup, `      - uses: astral-sh/setup-uv@v6`)
+		}
+		if poetry {
+			setup = append(setup, `      - run: pipx install poetry`)
+		}
+		if pdm {
+			setup = append(setup, `      - run: pipx install pdm`)
+		}
 	}
 	if langs[graph.LangRust] {
 		setup = append(setup, `      - uses: dtolnay/rust-toolchain@stable`)

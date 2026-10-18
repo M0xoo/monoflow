@@ -93,6 +93,7 @@ func LoadOrDiscover(rootDir string) (*DependencyGraph, error) {
 				var unresolvedGo []*PackageNode
 				for _, p := range cfg.Packages {
 					pCopy := p
+					UpgradeLegacyPythonCommands(rootDir, &pCopy)
 					// Configs written before Go dependency discovery store null deps for
 					// Go modules; derive them from go.mod rather than trusting an empty graph.
 					if pCopy.Language == LangGo && pCopy.Dependencies == nil {
@@ -456,7 +457,7 @@ func toSortedList(m map[string]bool) []string {
 	return res
 }
 
-var globalFilePattern = regexp.MustCompile(`^(go\.work(\.sum)?|package\.json|package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|yarn\.lock|bun\.lockb?|tsconfig[^/]*\.json|turbo\.json|nx\.json|Cargo\.(toml|lock)|Makefile|\.tool-versions|\.nvmrc|\.go-version|ci/.+|\.github/workflows/.+|\.agents/monoflow\.config\.json)$`)
+var globalFilePattern = regexp.MustCompile(`^(go\.work(\.sum)?|package\.json|package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|yarn\.lock|bun\.lockb?|tsconfig[^/]*\.json|turbo\.json|nx\.json|Cargo\.(toml|lock)|uv\.lock|poetry\.lock|pdm\.lock|pyproject\.toml|\.python-version|Makefile|\.tool-versions|\.nvmrc|\.go-version|ci/.+|\.github/workflows/.+|\.agents/monoflow\.config\.json)$`)
 
 // IsGlobalFile reports whether a repo-relative path is workspace-wide configuration
 // whose change can affect every package.

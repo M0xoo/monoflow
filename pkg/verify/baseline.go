@@ -27,7 +27,9 @@ func (r *Runner) classifyPreexisting(g *graph.DependencyGraph, results []TargetR
 		// A failed dependency build is never "preexisting": when main's build fails too (a broken
 		// install), every check after it fails on both sides and the change looked like a PASS
 		// (trpc: "PASS 10/10", nothing had run; the agent spent 110 s finding out).
-		if res.Status == "failed" && res.CommandRun != "" && len(res.Errors) > 0 && res.Errors[0].Code != "package_not_projected" && res.Target != PrepareTarget {
+		// Nor is a check that could not start (a missing tool): main "failing" the same way
+		// does not make the change pass.
+		if res.Status == "failed" && res.CommandRun != "" && len(res.Errors) > 0 && res.Errors[0].Code != "package_not_projected" && res.Target != PrepareTarget && !EnvironmentFailure(res.Errors) {
 			failed = append(failed, i)
 		}
 	}
@@ -105,6 +107,10 @@ func (r *Runner) runRemaining(res *TargetResult, baseDir, basePkgDir string) {
 		ResolveGoTestFiles(errs, res.dir)
 		if len(errs) == 0 {
 			errs = []DiagnosticError{{File: ".", Line: 1, Code: "execution_failure", Message: CompactFailure(StripANSI(string(out)))}}
+		}
+		if EnvironmentFailure(errs) {
+			res.Status, res.Errors, res.CommandRun = "failed", errs, c
+			return
 		}
 		baseOut, baseFailed := runBaselineCheck(baseDir, basePkgDir, c)
 		base := unroot(unroot(baseOut, baseDir), r.RootDir) // its dependencies link into the root

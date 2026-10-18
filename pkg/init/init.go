@@ -76,7 +76,7 @@ func InitRepo(targetDir string, binarySrcPath string) (*InitResult, error) {
 	if data, err := os.ReadFile(configPath); err == nil {
 		var old graph.Config
 		if json.Unmarshal(data, &old) == nil {
-			pkgNodes = mergeConfiguredCommands(pkgNodes, old.Packages)
+			pkgNodes = mergeConfiguredCommands(absTarget, pkgNodes, old.Packages)
 			if old.VerifyExclude != nil {
 				verifyExclude = old.VerifyExclude
 			}
@@ -388,9 +388,10 @@ func linkRootBinary(root string) {
 
 // mergeConfiguredCommands keeps the commands an existing config sets for a package (matched by
 // name) over the discovered ones; dependencies and paths come from discovery.
-func mergeConfiguredCommands(discovered, configured []graph.PackageNode) []graph.PackageNode {
+func mergeConfiguredCommands(root string, discovered, configured []graph.PackageNode) []graph.PackageNode {
 	byName := make(map[string]graph.PackageNode, len(configured))
 	for _, p := range configured {
+		graph.UpgradeLegacyPythonCommands(root, &p)
 		byName[p.Name] = p
 	}
 	for i, p := range discovered {
