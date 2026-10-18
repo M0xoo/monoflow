@@ -27,7 +27,7 @@ func handleEvents(rootDir string) {
 		list, err := em.List(true)
 		if err != nil {
 			printRaw(fmt.Sprintf(`{"error": %q}`, err))
-			os.Exit(1)
+			exit(1)
 		}
 		showAll := false
 		for _, a := range os.Args[3:] {
@@ -73,13 +73,14 @@ func handleEvents(rootDir string) {
 			"unread_count":         len(list),
 			"other_branches_count": others,
 			"events":               shown,
+			"hint":                 otherBranchesHint(others),
 		})
 
 	case "list", "all":
 		list, err := em.List(false)
 		if err != nil {
 			printRaw(fmt.Sprintf(`{"error": %q}`, err))
-			os.Exit(1)
+			exit(1)
 		}
 		printOut(map[string]any{
 			"total_count": len(list),
@@ -89,12 +90,12 @@ func handleEvents(rootDir string) {
 	case "ack":
 		if len(os.Args) < 4 {
 			printRaw(`{"error": "missing event-id for ack"}`)
-			os.Exit(1)
+			exit(1)
 		}
 		evtID := os.Args[3]
 		if err := em.Ack(evtID); err != nil {
 			printRaw(fmt.Sprintf(`{"error": %q}`, err))
-			os.Exit(1)
+			exit(1)
 		}
 		printRaw(fmt.Sprintf(`{"status": "acknowledged", "event_id": %q}`, evtID))
 
@@ -145,16 +146,16 @@ func handleEvents(rootDir string) {
 		}
 		if err != nil {
 			printRaw(fmt.Sprintf(`{"status": "error", "error": %q}`, err.Error()))
-			os.Exit(1)
+			exit(1)
 		}
 		printOut(job)
 		if job.Status == events.WatchStatusCompletedFailed || job.Status == events.WatchStatusTimedOut {
-			os.Exit(1)
+			exit(1)
 		}
 
 	default:
 		printRaw(fmt.Sprintf(`{"error": "unknown events subcommand: %s (use unread | list | watch <sha> | ack <id> | clear)"}`, sub))
-		os.Exit(1)
+		exit(1)
 	}
 }
 
@@ -203,7 +204,7 @@ func handleEventsWait(rootDir string, em *events.EventManager) {
 	}
 	if len(sha) < 7 {
 		printRaw(`{"error": "usage: monoflow events wait [<commit-sha>] [--timeout=<minutes>]"}`)
-		os.Exit(2)
+		exit(2)
 	}
 	// Make sure something is watching this commit (idempotent: reuses an active watcher).
 	// Without a remote there is no remote CI to watch; just wait on the inbox.
@@ -223,14 +224,14 @@ func handleEventsWait(rootDir string, em *events.EventManager) {
 			_ = em.Ack(e.ID)
 			printOut(e)
 			if e.Type == events.EventCIFailed || e.Type == events.EventOuterRegression {
-				os.Exit(1)
+				exit(1)
 			}
-			os.Exit(0)
+			exit(0)
 		}
 		time.Sleep(3 * time.Second)
 	}
 	printRaw(fmt.Sprintf(`{"status": "timeout", "commit": %q, "hint": "no CI result after %d minutes; check 'monoflow events list' and 'monoflow ci health'"}`, sha, timeoutMin))
-	os.Exit(2)
+	exit(2)
 }
 
 // compactEvents keeps what an agent acts on (type, commit, summary, the suggested fix and any
@@ -256,4 +257,11 @@ func compactEvents(list []*events.Event) []map[string]any {
 		out = append(out, m)
 	}
 	return out
+}
+
+func otherBranchesHint(others int) string {
+	if others == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d events are for other branches (yours in other worktrees, or other agents'): monoflow events unread --all shows them", others)
 }

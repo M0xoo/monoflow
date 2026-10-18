@@ -33,7 +33,7 @@ func handleCommit(rootDir string) {
 	res, err := guard.FastAgentCommit(rootDir, msg)
 	if err != nil {
 		printOut(res)
-		os.Exit(1)
+		exit(1)
 	}
 
 	out := map[string]any{"commit": res}
@@ -70,7 +70,7 @@ func handlePush(rootDir string) {
 			"violations": allViolations,
 			"verdict":    "Pre-push integrity check failed. Cannot push weakened tests or credentials to remote.",
 		})
-		os.Exit(1)
+		exit(1)
 	}
 
 	remote := "origin"
@@ -119,7 +119,7 @@ func handlePush(rootDir string) {
 			"status":  "blocked",
 			"verdict": fmt.Sprintf("Direct push to protected branch '%s' blocked. MonoFlow requires proposing changes via Pull Request to guarantee zero remote CI breakage. Use 'monoflow pr create' instead (or pass --force to bypass).", branch),
 		})
-		os.Exit(1)
+		exit(1)
 	}
 
 	headSHA := ""
@@ -135,7 +135,7 @@ func handlePush(rootDir string) {
 		if dirty := uncommittedFiles(rootDir); len(dirty) > 0 && !onlyNonCode(dirty) {
 			printOut(map[string]any{"status": "blocked",
 				"verdict": "Uncommitted changes: commit them with 'monoflow commit' (which starts the outer loop) before pushing."})
-			os.Exit(1)
+			exit(1)
 		}
 		om := verify.NewOuterLoopManager(rootDir)
 		job := om.LatestForCommit(headSHA)
@@ -154,7 +154,7 @@ func handlePush(rootDir string) {
 				"verdict":    "Outer loop is red for this commit: remote CI would fail. Fix, 'monoflow commit', then push again.",
 				"outer_loop": map[string]any{"job": job.ID, "failures": compactSummary(job.ErrorSummary)},
 			})
-			os.Exit(1)
+			exit(1)
 		}
 		// passed / promoted: push below
 	}
@@ -172,7 +172,7 @@ func handlePush(rootDir string) {
 	// 3. Perform push: never with conflicts against the base.
 	if err := conflict.GuardPush(rootDir, branch, "HEAD"); err != nil {
 		printOut(map[string]any{"status": "conflict", "error": err.Error()})
-		os.Exit(1)
+		exit(1)
 	}
 	start := time.Now()
 	pushArgs := []string{"push", "-u", remote, branch}
@@ -186,7 +186,7 @@ func handlePush(rootDir string) {
 
 	if err != nil {
 		printRaw(fmt.Sprintf(`{"status": "push_failed", "error": %q, "output": %q}`, err, strings.TrimSpace(string(out))))
-		os.Exit(1)
+		exit(1)
 	}
 
 	conflict.StartWatch(rootDir, branch) // tell the agent if the base moves into a conflict later
@@ -287,7 +287,7 @@ func handleSync(rootDir string) {
 	cmdFetch.Dir = rootDir
 	if out, err := cmdFetch.CombinedOutput(); err != nil {
 		printRaw(fmt.Sprintf(`{"status": "sync_failed", "step": "fetch", "error": %q, "output": %q}`, err.Error(), strings.TrimSpace(string(out))))
-		os.Exit(1)
+		exit(1)
 	}
 
 	// 2. Fast-forward or Rebase
@@ -322,7 +322,7 @@ func handleSync(rootDir string) {
 			res["status"] = "conflicts"
 			res["hint"] = "Resolve the <<<<<<< markers in conflicting_files (keep both sides' intent), run 'monoflow verify --affected', then 'monoflow commit -m \"merge " + branch + "\"' to finish the merge."
 			printOut(res)
-			os.Exit(1)
+			exit(1)
 		}
 		if rebase {
 			// Never leave the worktree mid-rebase: report the conflicts and restore the branch.
@@ -332,7 +332,7 @@ func handleSync(rootDir string) {
 			res["hint"] = "Branches have diverged; run 'monoflow sync' from your agent branch (rebases onto the base) or pass --rebase."
 		}
 		printOut(res)
-		os.Exit(1)
+		exit(1)
 	}
 
 	// 3. Get new HEAD SHA
@@ -402,7 +402,7 @@ func refuseSharedRoot(rootDir, action string) {
 		"error":  fmt.Sprintf("'%s' edits files, and this is the shared repository root used by agent worktrees (%s)", action, strings.Join(ids, ", ")),
 		"hint":   "run it inside your worktree (.agents/worktrees/<agent-id>), or pass --allow-root if you really mean the root",
 	})
-	os.Exit(1)
+	exit(1)
 }
 
 func printQueued(job *verify.OuterJob, sha, branch string) {
@@ -445,4 +445,42 @@ func compactSummary(s string) string {
 func gitOut(dir string, args ...string) string {
 	out, _ := exec.Command("git", append([]string{"-C", dir}, args...)...).Output()
 	return string(out)
+}
+
+// strayWork explains a command run in the clean main checkout while the work is in agent
+// worktrees (agents ran `start`, edited the worktree's files, then ran verify/ship from the
+// repo root: verify "passed" nothing and ship failed later on an empty branch). It returns ""
+// unless rootDir is the main checkout, on its base branch, with nothing changed or committed.
+func strayWork(rootDir, cmd string) string {
+	if b := currentBranch(rootDir); b != "main" && b != "master" {
+		return ""
+	}
+	gitDir, _ := exec.Command("git", "-C", rootDir, "rev-parse", "--git-dir").Output()
+	common, _ := exec.Command("git", "-C", rootDir, "rev-parse", "--git-common-dir").Output()
+	if gd := strings.TrimSpace(string(gitDir)); gd == "" || gd != strings.TrimSpace(string(common)) {
+		return "" // a linked worktree
+	}
+	if len(uncommittedFiles(rootDir)) > 0 {
+		return ""
+	}
+	if ahead, err := exec.Command("git", "-C", rootDir, "rev-list", "--count", "origin/"+currentBranch(rootDir)+"..HEAD").Output(); err != nil || strings.TrimSpace(string(ahead)) != "0" {
+		return "" // local commits to verify/ship (or no remote to compare with)
+	}
+	entries, _ := os.ReadDir(filepath.Join(rootDir, ".agents", "worktrees"))
+	var dirty []string
+	for _, e := range entries {
+		wt := filepath.Join(rootDir, ".agents", "worktrees", e.Name())
+		if !e.IsDir() {
+			continue
+		}
+		if n := len(uncommittedFiles(wt)); n > 0 {
+			dirty = append(dirty, fmt.Sprintf("%s (%d changed files)", wt, n))
+		}
+	}
+	msg := fmt.Sprintf("nothing to %s here: %s is the shared main checkout and has no changes", cmd, rootDir)
+	if len(dirty) == 0 {
+		return msg + ". Edit files (in your worktree from 'monoflow start'), then " + cmd + " there."
+	}
+	return msg + ". Uncommitted work is in: " + strings.Join(dirty, ", ") +
+		". Run it from your worktree: cd <that path> && ./bin/monoflow " + cmd + " (every shell call: cd there first, or use its absolute path)."
 }

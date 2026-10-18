@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 
@@ -22,7 +23,7 @@ func handlePR(rootDir string) {
   monoflow pr test <id> [--against-master] [--base=main]
   monoflow pr local <id> [--worktree=<id>] [--deps=contracts|source|none]
   monoflow pr merge <id> [--strategy=squash|merge|rebase] [--queue] [--delete-branch]`)
-		os.Exit(1)
+		exit(1)
 	}
 
 	mgr := pr.NewManager(rootDir)
@@ -44,7 +45,7 @@ func handlePR(rootDir string) {
 				b, err := os.ReadFile(strings.TrimPrefix(arg, "--body-file="))
 				if err != nil {
 					printOut(map[string]any{"error": "cannot read --body-file: " + err.Error()})
-					os.Exit(2)
+					exit(2)
 				}
 				opts.Body = string(b)
 			} else if strings.HasPrefix(arg, "--base=") {
@@ -64,21 +65,25 @@ func handlePR(rootDir string) {
 			} else if strings.HasPrefix(arg, "-") {
 				// A silently ignored flag (e.g. --body-file before it existed) loses the agent's input.
 				printOut(map[string]any{"error": "unknown flag for pr create: " + arg + " (see 'monoflow pr create --help')"})
-				os.Exit(2)
+				exit(2)
 			}
 		}
 
 		// A PR is outward-facing: never open one under an invented title (an agent's
 		// "pr create --help" on an old binary opened PR #23 as "feat(...): agent changes on ...").
+		// The branch's own commit message is the agent's words, not an invented title.
 		if strings.TrimSpace(opts.Title) == "" {
-			printOut(map[string]any{"error": `pr create needs --title="<PR title>" (and --body=... or --body-file=...); nothing was created. Usually 'monoflow ship -m "<msg>"' does commit, push and PR in one call`})
-			os.Exit(2)
+			opts.Title = ownCommitSubject(rootDir, opts.BaseBranch)
+		}
+		if strings.TrimSpace(opts.Title) == "" {
+			printOut(map[string]any{"error": `pr create needs --title="<PR title>" (no commit on this branch to take it from); nothing was created. Usually 'monoflow ship -m "<msg>"' does commit, push and PR in one call`})
+			exit(2)
 		}
 
 		if base, files, checked := baseConflicts(rootDir); checked && len(files) > 0 {
 			emitConflict(rootDir, base, files)
 			printOut(map[string]any{"status": "blocked", "error": fmt.Sprintf("your branch conflicts with origin/%s; nothing was pushed or opened", base), "conflicts": files, "next": conflictNext(base, files)})
-			os.Exit(1)
+			exit(1)
 		}
 
 		res, err := mgr.Create(opts)
@@ -92,10 +97,10 @@ func handlePR(rootDir string) {
 					"failed_checks": gateErr.FailedChecks,
 					"audit":         gateErr.Audit,
 				})
-				os.Exit(1)
+				exit(1)
 			}
 			printRaw(fmt.Sprintf(`{"status": "error", "error": %q}`, err.Error()))
-			os.Exit(1)
+			exit(1)
 		}
 		var out any = res
 		if !verbose {
@@ -120,20 +125,20 @@ func handlePR(rootDir string) {
 		list, err := mgr.List(opts)
 		if err != nil {
 			printRaw(fmt.Sprintf(`{"status": "error", "error": %q}`, err))
-			os.Exit(1)
+			exit(1)
 		}
 		printOut(list)
 
 	case "view":
 		if len(os.Args) < 4 {
 			printRaw(`{"error": "missing pr-id for monoflow pr view"}`)
-			os.Exit(1)
+			exit(1)
 		}
 		prID := os.Args[3]
 		meta, err := mgr.View(prID)
 		if err != nil {
 			printRaw(fmt.Sprintf(`{"status": "error", "error": %q}`, err))
-			os.Exit(1)
+			exit(1)
 		}
 		printOut(meta)
 
@@ -155,7 +160,7 @@ func handlePR(rootDir string) {
 			} else {
 				fmt.Printf("❌ Failed to get PR status: %v\n", err)
 			}
-			os.Exit(1)
+			exit(1)
 		}
 
 		switch {
@@ -172,7 +177,7 @@ func handlePR(rootDir string) {
 	case "review":
 		if len(os.Args) < 4 {
 			printRaw(`{"error": "missing pr-id for monoflow pr review"}`)
-			os.Exit(1)
+			exit(1)
 		}
 		prID := os.Args[3]
 		opts := pr.ReviewOptions{}
@@ -189,14 +194,14 @@ func handlePR(rootDir string) {
 		res, err := mgr.Review(prID, opts)
 		if err != nil {
 			printRaw(fmt.Sprintf(`{"status": "error", "error": %q}`, err))
-			os.Exit(1)
+			exit(1)
 		}
 		printOut(res)
 
 	case "test":
 		if len(os.Args) < 4 {
 			printRaw(`{"error": "missing pr-id for monoflow pr test"}`)
-			os.Exit(1)
+			exit(1)
 		}
 		prID := os.Args[3]
 		opts := pr.TestOptions{
@@ -213,14 +218,14 @@ func handlePR(rootDir string) {
 		res, err := mgr.Test(prID, opts)
 		if err != nil {
 			printRaw(fmt.Sprintf(`{"status": "error", "error": %q}`, err))
-			os.Exit(1)
+			exit(1)
 		}
 		printOut(res)
 
 	case "local":
 		if len(os.Args) < 4 {
 			printRaw(`{"error": "usage: monoflow pr local <pr-id> [--worktree=<id>] [--deps=contracts|source|none]"}`)
-			os.Exit(1)
+			exit(1)
 		}
 		prID := os.Args[3]
 		opts := pr.LocalOptions{
@@ -241,14 +246,14 @@ func handlePR(rootDir string) {
 		res, err := mgr.Local(prID, opts)
 		if err != nil {
 			printRaw(fmt.Sprintf(`{"status": "error", "error": %q}`, err))
-			os.Exit(1)
+			exit(1)
 		}
 		printOut(res)
 
 	case "merge":
 		if len(os.Args) < 4 {
 			printRaw(`{"error": "missing pr-id for monoflow pr merge"}`)
-			os.Exit(1)
+			exit(1)
 		}
 		prID := os.Args[3]
 		opts := pr.MergeOptions{
@@ -267,7 +272,7 @@ func handlePR(rootDir string) {
 		res, err := mgr.Merge(prID, opts)
 		if err != nil {
 			printRaw(fmt.Sprintf(`{"status": "error", "error": %q}`, err))
-			os.Exit(1)
+			exit(1)
 		}
 		printOut(res)
 
@@ -277,7 +282,7 @@ func handlePR(rootDir string) {
 		res, err := mgr.Test(sub, opts)
 		if err != nil {
 			printRaw(fmt.Sprintf(`{"error": "unknown pr subcommand '%s'; usage: monoflow pr [create|list|view|status|review|test|local|merge]"}`, sub))
-			os.Exit(1)
+			exit(1)
 		}
 		printOut(res)
 	}
@@ -361,4 +366,18 @@ func compactPRStatus(res *pr.PRStatusResult) map[string]any {
 func stdoutIsTerminal() bool {
 	fi, err := os.Stdout.Stat()
 	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+}
+
+// ownCommitSubject is the subject of the branch's latest commit when the branch has commits
+// of its own (ahead of origin/<base>), else "".
+func ownCommitSubject(rootDir, base string) string {
+	b := currentBranch(rootDir)
+	if b == "" || b == base || b == "HEAD" {
+		return ""
+	}
+	out, err := exec.Command("git", "-C", rootDir, "log", "-1", "--format=%s", "origin/"+base+"..HEAD").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }

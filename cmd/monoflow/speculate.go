@@ -241,7 +241,7 @@ func beginForeground(root string) (done func(out string)) {
 }
 
 // reusedNote ends a stored result printed again.
-const reusedNote = "reused: same files as the verify that produced this; nothing was re-run\n"
+const reusedNote = "reused: a verify (the background one started when your edits settled, or your last one) already checked exactly these files; nothing was re-run\n"
 
 // finishRecord, in a background run, files its output (written to <key>.tmp) under the state
 // key, but only if the tree is still in that state: a result for files that changed mid-run

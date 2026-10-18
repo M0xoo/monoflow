@@ -12,12 +12,15 @@ import (
 )
 
 func main() {
+	internal := os.Getenv("MONOFLOW_INTERNAL") == "1"
 	_ = os.Setenv("MONOFLOW_INTERNAL", "1")
 	takeJSONFlag()
+	startJournal(internal)
+	defer finishJournal(0)
 
 	if len(os.Args) < 2 {
 		printUsage()
-		os.Exit(0)
+		exit(0)
 	}
 
 	cmd := os.Args[1]
@@ -31,13 +34,13 @@ func main() {
 		default:
 			printShortUsage()
 		}
-		os.Exit(0)
+		exit(0)
 	}
 	// A help flag anywhere after the command must never execute it: agents probe
 	// `monoflow pr create --help` and would otherwise create PRs, branches or worktrees.
 	if len(os.Args) > 2 && hasHelpArg(os.Args[2:]) {
 		printCommandUsage(cmd)
-		os.Exit(0)
+		exit(0)
 	}
 
 	rootDir, err := findRepoRoot()
@@ -143,10 +146,13 @@ func main() {
 	case "hook":
 		handleHook()
 
+	case "improve", "retro":
+		handleImprove(rootDir)
+
 	default:
 		fmt.Printf("Unknown command: %s\n\n", cmd)
 		printUsage()
-		os.Exit(1)
+		exit(1)
 	}
 }
 
@@ -162,6 +168,7 @@ func printShortUsage() {
   monoflow find "<text>"        every occurrence, grouped code / tests / docs (instead of grep -rn)
   monoflow verify               the changed packages' failures in seconds, then every dependent (= CI for this change)
   monoflow ship -m "<msg>"      commit, local CI on that commit, push, open the PR
+  monoflow improve              before you finish: retro on MonoFlow (what got in your way)
 
 More: graph (query|impact) · checkpoint · commit · push · sync · events · ci · outer · worktree ·
 pr · review · queue · quarantine · version · task · guard · subset · cache · deliver · init · hook
@@ -176,6 +183,7 @@ Agent path (4 calls):
   monoflow find "<text>"              Every occurrence, grouped code / tests / docs (instead of grep -rn)
   monoflow verify                     Build+test changed packages and every dependent, lint changed (= CI for this change)
   monoflow ship -m "<msg>" [--title=] Commit, local CI on that commit, push, open the PR
+  monoflow improve                    Before you finish: retro on MonoFlow; file what it should do better
 
 Usage:
   monoflow init [dir] [--setup-gh-actions]  Install MonoFlow (+ economical affected-only GitHub Actions CI)
@@ -287,6 +295,16 @@ In a worktree from 'start', verify already runs in the background once your edit
   version unpin <consumer> <dep>      Back to the live code
   version upgrades [consumer]         Newer releases for pinned edges, with the API changes the consumer uses
   version upgrade <consumer> <dep> [--to=<v>]    Move the pin and run the consumer's verify`,
+	"improve": `  improve                             Retro: what this session ran with MonoFlow (failures, redirects, slow calls)
+  improve add "<what MonoFlow should do>" [--area=<verify|ship|...|docs>] [--kind=bug|friction|missing|docs]
+        [--severity=high|medium|low] [--evidence="<command + output>"] [--detail="..."] [--same-as=<id>]
+  improve done | improve none         Close the retro (none: nothing worth improving)
+  improve list [--all] [--since=<2h|date>]   Suggestions (open ones unless --all)
+  improve triage [--since=<2h|date>]  Group duplicates, rank by sessions × severity; also writes TRIAGE.md
+  improve mark <id>... <accepted|fixed|wontfix|duplicate|invalid|new> [--note=] [--exact]
+                                      Record a verdict for the ids and their duplicates (--exact: only the ids)
+  improve path                        Where suggestions are stored (MONOFLOW_IMPROVE_DIR overrides)
+Stored as local JSONL under .agents/improve of the main checkout; never committed.`,
 	"commit": `  commit -m "<msg>"                   Verified commit of all changes in the current worktree`,
 	"cache":  `  cache status | cache clean | cache serve [--port=<n>] [--dir=<d>] [--token=<t>]`,
 	"task":   `  task check | task slice | task prove [task-id] | task changeset`,

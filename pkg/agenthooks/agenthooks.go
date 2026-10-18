@@ -168,15 +168,28 @@ const OpencodePlugin = `// Installed by monoflow init (managed: re-running init 
 // - when the session goes idle, waits for in-flight outer-loop/CI results and prompts the
 //   session with anything that needs action, so the agent resumes without running a command
 import { execFile, execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 export const MonoflowGuard = async ({ client, directory }) => {
   const bin = join(directory, ".agents", "bin", "monoflow");
   let idleWatch = null;
+  // The agent's worktree, once it ran 'monoflow start' or cd'd into one: events are delivered
+  // for that branch, not for the shared checkout opencode was opened in (which is on main).
+  let worktree = null;
+  const commands = new Map();
+  const track = (text) => {
+    const m = /\.agents\/worktrees\/([A-Za-z0-9._-]+)/.exec(text || "");
+    const p = m && join(directory, ".agents", "worktrees", m[1]);
+    if (p && existsSync(p)) worktree = p;
+  };
   return {
     "tool.execute.before": async (input, output) => {
       if (input.tool !== "bash") return;
       const command = output.args?.command ?? "";
+      commands.set(input.callID, command);
+      track(output.args?.workdir);
+      track(command);
       try {
         execFileSync(bin, ["hook", "check"], { input: command, stdio: ["pipe", "pipe", "pipe"] });
       } catch (e) {
@@ -184,8 +197,11 @@ export const MonoflowGuard = async ({ client, directory }) => {
       }
     },
     "tool.execute.after": async (input, output) => {
+      const command = commands.get(input.callID) ?? "";
+      commands.delete(input.callID);
+      if (/monoflow\S*\s+start\s/.test(command)) track(String(output.output ?? ""));
       try {
-        const text = execFileSync(bin, ["hook", "deliver", "--format=text"], { cwd: directory, encoding: "utf8", input: "" });
+        const text = execFileSync(bin, ["hook", "deliver", "--format=text"], { cwd: worktree ?? directory, encoding: "utf8", input: "" });
         if (text.trim()) output.output = (output.output ?? "") + "\n\n" + text;
       } catch {}
     },
@@ -195,7 +211,7 @@ export const MonoflowGuard = async ({ client, directory }) => {
       if (process.argv.includes("run")) return;
       if (event.type !== "session.idle" || idleWatch) return;
       const sessionID = event.properties?.sessionID;
-      idleWatch = execFile(bin, ["hook", "stop", "--format=text"], { cwd: directory, encoding: "utf8" }, async (err, stdout) => {
+      idleWatch = execFile(bin, ["hook", "stop", "--format=text"], { cwd: worktree ?? directory, encoding: "utf8" }, async (err, stdout) => {
         idleWatch = null;
         if (stdout && stdout.trim() && sessionID) {
           await client.session.prompt({ path: { id: sessionID }, body: { parts: [{ type: "text", text: stdout }] } });

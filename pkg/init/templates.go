@@ -2,7 +2,7 @@ package initialize
 
 const AgentRuleTemplate = `# MonoFlow (for coding agents)
 
-Run as ` + "`" + `./bin/monoflow` + "`" + `. Four calls take a change to a PR:
+Run as ` + "`" + `./bin/monoflow` + "`" + ` from your worktree (every worktree has it). Four calls take a change to a PR:
 
 1. ` + "`" + `monoflow start <task-id>` + "`" + ` first, then work in the printed ` + "`" + `path` + "`" + ` (your worktree and branch; same files).
    Forgot and edited on main? ` + "`" + `ship` + "`" + ` moves your changes onto their own branch for you.
@@ -16,6 +16,8 @@ Run as ` + "`" + `./bin/monoflow` + "`" + `. Four calls take a change to a PR:
    ` + "`" + `verify --all` + "`" + `). Never poll a log: ` + "`" + `verify` + "`" + ` again waits for a run in progress or prints the last result.
 4. ` + "`" + `monoflow ship -m "<msg>"` + "`" + `: commits and returns; once local CI is green it pushes and opens the PR (task
    boundaries are checked there; no ` + "`" + `task check` + "`" + ` needed). Then end your turn: results are delivered to you (on SHIP_FAILED / OUTER_LOOP_REGRESSION: fix, verify, ship).
+5. ` + "`" + `monoflow improve` + "`" + ` before you finish: a short retro on MonoFlow itself. It shows what your session ran and the exact
+   ` + "`" + `improve add` + "`" + ` call to file what got in your way; then ` + "`" + `improve done` + "`" + ` (or ` + "`" + `improve none` + "`" + `).
 
 More (each ` + "`" + `--help` + "`" + ` explains, never executes): ` + "`" + `checkpoint save|revert` + "`" + ` · ` + "`" + `commit` + "`" + ` / ` + "`" + `push` + "`" + ` / ` + "`" + `sync` + "`" + ` ·
 ` + "`" + `events unread` + "`" + ` (once, never poll) · ` + "`" + `ci health` + "`" + ` · ` + "`" + `quarantine add` + "`" + ` · ` + "`" + `outer status` + "`" + ` · ` + "`" + `worktree list|finish` + "`" + ` ·
@@ -37,7 +39,8 @@ Run as ` + "`" + `./bin/monoflow` + "`" + `. Full guide: ` + "`" + `AGENTS.md` +
 1. ` + "`" + `monoflow start <task-id>` + "`" + ` → cd into the printed path
 2. ` + "`" + `monoflow graph query <dir>` + "`" + ` → every package, any module, importing it (instead of grep)
 3. make the change → ` + "`" + `monoflow verify` + "`" + ` right away (lists every break, any package, as ` + "`" + `file:line` + "`" + `) → fix those → repeat
-4. ` + "`" + `monoflow ship -m "<msg>"` + "`" + ` → commit, local CI, push, PR; end your turn
+4. ` + "`" + `monoflow ship -m "<msg>"` + "`" + ` → commit, local CI, push, PR
+5. ` + "`" + `monoflow improve` + "`" + ` → retro on MonoFlow: ` + "`" + `improve add "<what it should do>"` + "`" + ` per problem, then ` + "`" + `improve done` + "`" + ` (or ` + "`" + `none` + "`" + `); end your turn
 `
 
 const TaskTemplate = `{

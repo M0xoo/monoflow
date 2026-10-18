@@ -33,13 +33,13 @@ func handleInit(rootDir string) {
 	res, err := initialize.InitRepo(targetDir, selfBin)
 	if err != nil {
 		fmt.Printf("Error initializing repo: %v\n", err)
-		os.Exit(1)
+		exit(1)
 	}
 	workflowPath := ""
 	if setupGH {
 		if workflowPath, err = initialize.WriteGitHubWorkflow(res.RepoRoot); err != nil {
 			fmt.Printf("Error writing GitHub Actions workflow: %v\n", err)
-			os.Exit(1)
+			exit(1)
 		}
 	}
 
@@ -58,7 +58,7 @@ func handleInit(rootDir string) {
 func handleTask(rootDir string) {
 	if len(os.Args) < 3 {
 		printRaw(`{"error": "missing task subcommand: check | prove | slice | changeset"}`)
-		os.Exit(1)
+		exit(1)
 	}
 
 	sub := os.Args[2]
@@ -74,7 +74,7 @@ func handleTask(rootDir string) {
 		res := task.CheckBoundaries(&bundle, changedFiles)
 		printOut(res)
 		if !res.Valid {
-			os.Exit(1)
+			exit(1)
 		}
 
 	case "slice":
@@ -90,7 +90,7 @@ func handleTask(rootDir string) {
 		receipt, dossier, err := proof.ProveTask(rootDir, taskID, g, changedFiles)
 		if err != nil {
 			printRaw(fmt.Sprintf(`{"status": "failed", "error": %q}`, err))
-			os.Exit(1)
+			exit(1)
 		}
 		printOut(map[string]any{
 			"status":              receipt.Status,
@@ -101,7 +101,7 @@ func handleTask(rootDir string) {
 	case "changeset":
 		if len(os.Args) < 5 {
 			printRaw(`{"error": "usage: monoflow task changeset <pkg> <patch|minor|major> <summary>"}`)
-			os.Exit(1)
+			exit(1)
 		}
 		cs := task.Changeset{
 			Package:   os.Args[3],
@@ -150,7 +150,7 @@ func handleApp(rootDir string) {
 	overlayPath, err := deliver.AssembleFullAppOverlay(rootDir, g, affected.AllAffected)
 	if err != nil {
 		printRaw(fmt.Sprintf(`{"error": %q}`, err))
-		os.Exit(1)
+		exit(1)
 	}
 
 	durMs := float64(time.Since(start).Microseconds()) / 1000.0
@@ -170,7 +170,7 @@ func handleCache(rootDir string) {
   monoflow cache status    Show local and remote cache efficiency, hit ratio, and disk usage
   monoflow cache clean     Purge local cache storage
   monoflow cache serve     Launch built-in HTTP Remote Cache server (--port=8080 --token=... --dir=...)`)
-		os.Exit(0)
+		exit(0)
 	}
 
 	sub := os.Args[2]
@@ -184,7 +184,7 @@ func handleCache(rootDir string) {
 	case "clean", "purge":
 		if err := mgr.Clean(); err != nil {
 			printRaw(fmt.Sprintf(`{"status": "error", "error": %q}`, err))
-			os.Exit(1)
+			exit(1)
 		}
 		printRaw(`{"status": "cleaned", "message": "Local verification and artifact cache purged"}`)
 
@@ -207,12 +207,12 @@ func handleCache(rootDir string) {
 		printRaw(fmt.Sprintf(`{"status": "running", "addr": %q, "storage_dir": %q, "token_protected": %t}`, addr, storageDir, token != ""))
 		if err := cache.StartServer(addr, storageDir, token); err != nil {
 			printRaw(fmt.Sprintf(`{"status": "error", "error": %q}`, err.Error()))
-			os.Exit(1)
+			exit(1)
 		}
 
 	default:
 		printRaw(fmt.Sprintf(`{"error": "unknown cache subcommand: %s (use status | clean | serve)"}`, sub))
-		os.Exit(1)
+		exit(1)
 	}
 }
 
@@ -239,7 +239,7 @@ func handleScenario(rootDir string) {
 		} else {
 			fmt.Printf("❌ Scenario Execution Failed: %v\n", err)
 		}
-		os.Exit(1)
+		exit(1)
 	}
 
 	if asJSON {
