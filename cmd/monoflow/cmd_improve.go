@@ -4,8 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"runtime"
+	"runtime/debug"
+	"sort"
 	"strings"
 	"time"
+
+	"github.com/antigravity/monoflow/pkg/graph"
 
 	"github.com/antigravity/monoflow/pkg/improve"
 )
@@ -133,19 +138,64 @@ func handleImprove(rootDir string) {
 		fmt.Printf("filed %s: %s\nnext: file the next one, or close the retro: monoflow improve done\n", sg.ID, sg.Title)
 
 	case "done", "none":
+		filed := store.Current(rootDir).Filed
 		r, err := store.Close(rootDir, currentBranch(rootDir), improveAgent(rootDir), flags["note"], sub == "none")
 		if err != nil {
 			fail(err.Error())
 		}
 		if sub == "none" && r.Suggestions > 0 {
 			fmt.Printf("retro closed with the %d suggestion(s) you filed. Thanks.\n", r.Suggestions)
+		} else {
+			fmt.Printf("retro closed: %d suggestion(s). Thanks.\n", r.Suggestions)
+		}
+		// Triage what this session filed (and retry what could not be filed before).
+		only := map[string]bool{}
+		for _, sg := range filed {
+			only[sg.ID] = true
+		}
+		for id, p := range store.Publications() {
+			if !p.Done() {
+				only[id] = true
+			}
+		}
+		if len(only) > 0 {
+			printOutcomes(publishSuggestions(rootDir, store, only, false))
+		}
+
+	case "publish":
+		_, dry := flags["dry-run"]
+		var only map[string]bool
+		if len(pos) > 0 {
+			only = map[string]bool{}
+			for _, id := range pos {
+				only[id] = true
+			}
+		}
+		outs := publishSuggestions(rootDir, store, only, dry)
+		if len(outs) == 0 {
+			fmt.Println("nothing to triage: every suggestion was handled")
 			return
 		}
-		fmt.Printf("retro closed: %d suggestion(s). Thanks.\n", r.Suggestions)
+		if dry {
+			fmt.Println("dry run: nothing was filed. Would file:")
+			for _, o := range outs {
+				switch o.Action {
+				case "created":
+					fmt.Printf("\n--- %s: new issue\n%s\n\n%s", o.Suggestion.ID, o.Title, o.Body)
+				case "commented":
+					fmt.Printf("\n--- %s: comment on #%d\n%s", o.Suggestion.ID, o.Issue, o.Body)
+				default:
+					fmt.Printf("\n--- %s: not filed: %s\n", o.Suggestion.ID, o.Reason)
+				}
+			}
+			return
+		}
+		printOutcomes(outs)
 
 	case "list":
 		since := parseSince(flags["since"])
 		dec := store.Decisions()
+		pubs := store.Publications()
 		n := 0
 		for _, s := range store.Suggestions() {
 			if !s.TS.After(since) {
@@ -159,7 +209,11 @@ func handleImprove(rootDir string) {
 				continue
 			}
 			n++
-			fmt.Printf("%s [%s] %s · %s · %s · %s\n", s.ID, st, s.Title, firstNonEmpty(s.Area, "-"), firstNonEmpty(s.Kind, "-"), firstNonEmpty(s.Agent, "-"))
+			issue := ""
+			if p := pubs[s.ID]; p.URL != "" {
+				issue = " · " + p.URL
+			}
+			fmt.Printf("%s [%s] %s · %s · %s · %s%s\n", s.ID, st, s.Title, firstNonEmpty(s.Area, "-"), firstNonEmpty(s.Kind, "-"), firstNonEmpty(s.Agent, "-"), issue)
 		}
 		if n == 0 {
 			fmt.Println("no suggestions")
@@ -227,20 +281,126 @@ func retroNudge(root string) string {
 		improve.RetroText(sess, store.Triage(time.Time{}).Open)
 }
 
-func improveAfterSession(root string) bool {
-	data, err := os.ReadFile(root + "/.agents/monoflow.config.json")
-	if err != nil {
-		return true
-	}
+type improveConfig struct {
+	AfterSession *bool  `json:"after_session"`
+	Issues       *bool  `json:"issues"`
+	IssuesRepo   string `json:"issues_repo"`
+}
+
+func readImproveConfig(root string) improveConfig {
 	var cfg struct {
-		Improve *struct {
-			AfterSession *bool `json:"after_session"`
-		} `json:"improve"`
+		Improve *improveConfig `json:"improve"`
 	}
-	if json.Unmarshal(data, &cfg) == nil && cfg.Improve != nil && cfg.Improve.AfterSession != nil {
-		return *cfg.Improve.AfterSession
+	if data, err := os.ReadFile(root + "/.agents/monoflow.config.json"); err == nil {
+		_ = json.Unmarshal(data, &cfg)
+	}
+	if cfg.Improve == nil {
+		return improveConfig{}
+	}
+	return *cfg.Improve
+}
+
+func improveAfterSession(root string) bool {
+	if c := readImproveConfig(root); c.AfterSession != nil {
+		return *c.AfterSession
 	}
 	return true
+}
+
+// issueTracker is where valid suggestions are filed: MonoFlow's GitHub repository unless
+// "improve": {"issues": false} (or MONOFLOW_IMPROVE_ISSUES=0) turns it off; nil when off.
+func issueTracker(root string) improve.Tracker {
+	c := readImproveConfig(root)
+	if os.Getenv("MONOFLOW_IMPROVE_ISSUES") == "0" || (c.Issues != nil && !*c.Issues) {
+		return nil
+	}
+	repo := firstNonEmpty(os.Getenv("MONOFLOW_IMPROVE_ISSUES_REPO"), c.IssuesRepo, improve.DefaultIssueRepo)
+	return improve.GHTracker{Repo: repo}
+}
+
+func publishSuggestions(root string, store *improve.Store, only map[string]bool, dry bool) []improve.Outcome {
+	tr := issueTracker(root)
+	if tr == nil && !dry {
+		return nil // issues are off: local triage only
+	}
+	outs, err := store.Publish(improve.PublishOptions{Tracker: tr, Version: monoflowBuild(), Context: issueContext(root),
+		Redact: improve.Redactor(improve.MainRoot(root)), DryRun: dry, Only: only})
+	if err != nil {
+		fmt.Println("triage: could not save results: " + err.Error())
+	}
+	return outs
+}
+
+func printOutcomes(outs []improve.Outcome) {
+	if len(outs) == 0 {
+		return
+	}
+	fmt.Println("triage:")
+	for _, o := range outs {
+		id := o.Suggestion.ID
+		switch o.Action {
+		case "created":
+			fmt.Printf("  %s → issue #%d opened in MonoFlow's repo: %s\n", id, o.Issue, firstNonEmpty(o.URL, "(dry run)"))
+		case "commented":
+			fmt.Printf("  %s → same problem as issue #%d: your evidence was added there %s\n", id, o.Issue, o.URL)
+		case "rejected":
+			fmt.Printf("  %s → not filed: %s\n       (to file it properly: monoflow improve add \"<title>\" --same-as=%s --evidence=\"<command + output>\", then improve done)\n", id, o.Reason, id)
+		case "pending":
+			fmt.Printf("  %s → queued, retried at the next retro (%s)\n", id, o.Reason)
+		}
+	}
+}
+
+// monoflowBuild names the running MonoFlow build (module version or VCS revision).
+func monoflowBuild() string {
+	bi, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "unknown"
+	}
+	rev, dirty := "", false
+	for _, st := range bi.Settings {
+		switch st.Key {
+		case "vcs.revision":
+			rev = st.Value
+		case "vcs.modified":
+			dirty = st.Value == "true"
+		}
+	}
+	if len(rev) > 7 {
+		rev = rev[:7]
+	}
+	if rev == "" {
+		return firstNonEmpty(bi.Main.Version, "unknown")
+	}
+	if dirty {
+		rev += "+dirty"
+	}
+	return rev
+}
+
+// issueContext is what an issue says about where the problem was seen (no names or paths).
+func issueContext(root string) string {
+	langs := map[string]bool{}
+	if g, err := graph.LoadOrDiscover(root); err == nil {
+		for _, p := range g.GetAllPackages() {
+			if p.Language != "" {
+				langs[string(p.Language)] = true
+			}
+		}
+	}
+	var ls []string
+	for l := range langs {
+		ls = append(ls, l)
+	}
+	sort.Strings(ls)
+	ctx := runtime.GOOS + "/" + runtime.GOARCH
+	if len(ls) > 0 {
+		ctx = strings.Join(ls, ", ") + " repo · " + ctx
+	}
+	if os.Getenv("CLAUDECODE") == "1" {
+		ctx += " · Claude Code"
+	}
+	return ctx
 }
 
 // lastStep is the "you are done" next step: the retro (unless turned off), then end the turn.

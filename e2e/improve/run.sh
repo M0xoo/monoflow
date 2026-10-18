@@ -12,6 +12,9 @@ HERE=$(cd "$(dirname "$0")" && pwd); SIM="$HERE/../sim"; BENCH="$HERE/../bench"
 WORK=${1:?workdir}; BIN=${2:?monoflow binary}; OUT=${3:?out}; MODEL=${4:-opencode/nemotron-3-ultra-free}; shift 4 || shift $#
 AGENTS=("$@"); [ ${#AGENTS[@]} -eq 0 ] && AGENTS=(agent-billing agent-money agent-ui agent-ledger agent-api)
 export MONOFLOW_IMPROVE_DIR=${MONOFLOW_IMPROVE_DIR:-$WORK.store}
+# Sim sessions never file issues in MonoFlow's repo unless asked (MONOFLOW_IMPROVE_ISSUES=1,
+# ideally with MONOFLOW_IMPROVE_ISSUES_REPO=<sandbox repo>).
+[ "${MONOFLOW_IMPROVE_ISSUES:-0}" = 1 ] && unset MONOFLOW_IMPROVE_ISSUES || export MONOFLOW_IMPROVE_ISSUES=0
 mkdir -p "$OUT" "$MONOFLOW_IMPROVE_DIR"
 since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 REPO=$(bash "$SIM/setup.sh" "$WORK" "$BIN" | tail -1)

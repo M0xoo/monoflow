@@ -85,6 +85,8 @@ File each problem (one call each; the title says what MonoFlow should do):
     --kind=bug|friction|missing|docs --severity=high|medium|low \
     --evidence="<exact command + output snippet>" [--detail="<why, what you did instead>"]
   (--area: the top-level monoflow command involved, or docs for AGENTS.md / help text; all flags optional)
+  Suggestions with evidence of a MonoFlow command become issues in MonoFlow's public GitHub repo
+  (paths, remotes, e-mails and secrets are redacted): describe MonoFlow's behaviour, not your code.
 `)
 	if len(known) > 0 {
 		b.WriteString("Already reported by other sessions (if it is one of these: improve add --same-as=<id> --evidence=\"...\"):\n")
