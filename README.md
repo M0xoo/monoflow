@@ -213,6 +213,7 @@ monoflow improve done                              # or: monoflow improve none
 - **After every session.** In Claude Code, the Stop hook asks once per session that did MonoFlow work (`start`, `verify`, `ship`…) and hasn't closed a retro. `ship` names the retro as the last step. Turn both off with `"improve": {"after_session": false}` in `.agents/monoflow.config.json`.
 - **Local files.** `.agents/improve/` in the main checkout, shared by all worktrees and never committed: `journal.jsonl` (every agent-run command, with exit code and duration), `suggestions.jsonl`, `retros.jsonl`, `triage.json`. Set `MONOFLOW_IMPROVE_DIR` to collect several repos in one place.
 - **Triage.** `monoflow improve triage` groups duplicates (shared wording, or `--same-as=<id>`), ranks each group by sessions × severity, and writes `TRIAGE.md`. `improve mark <id> fixed|wontfix|accepted|invalid --note=…` records a verdict for the whole group. If a fixed problem is reported again, its group reopens.
+- **Issues.** When the retro closes, MonoFlow triages what the session filed. A suggestion is valid if it has a specific title and evidence showing a MonoFlow command, and doesn't match a problem a maintainer marked wontfix or invalid. A valid suggestion becomes an issue in [M0xoo/monoflow](https://github.com/M0xoo/monoflow/issues). If an issue for the same problem already exists, from any user, the evidence is added there as a comment. Invalid ones are marked invalid, and the agent is told why. Repo paths, remotes, e-mails and anything shaped like a credential are redacted. `improve publish --dry-run` shows exactly what would be sent. Without `gh` auth, suggestions wait and are retried at the next retro. `"improve": {"issues": false}` (or `MONOFLOW_IMPROVE_ISSUES=0`) keeps everything local, and `"issues_repo"` files them elsewhere.
 - **The loop.** [`e2e/improve/run.sh`](./e2e/improve/RESULTS.md) has concurrent agents do real tasks on a sim repo, makes sure each one closes a retro, then triages. You fix what triage finds and run the next round, until a round reports nothing new.
 
 ---
@@ -334,7 +335,7 @@ Where it is not ahead yet: on trpc (Turborepo, 11 packages) the plain agents fin
 | 🚢 **Ship** | `pr create\|status\|test\|local\|review\|merge` · `outer status\|wait` · `queue spec` · `ci check` |
 | 📬 **Events & CI** | `events unread\|wait\|ack` · `ci health [--check=<name>] [--logs]` |
 | 🛡️ **Guardrails** | `guard check` · `task check\|prove\|slice` · `review risk\|audit\|throttle` |
-| 🔁 **Retro** | `improve` · `improve add\|done\|none` · `improve list\|triage\|mark` |
+| 🔁 **Retro** | `improve` · `improve add\|done\|none` · `improve list\|triage\|mark\|publish` |
 | 📦 **Versions & releases** | `version edges\|suggest\|bump\|release\|pin\|unpin\|upgrades\|upgrade\|apply\|check` · `deliver` |
 
 `monoflow help` prints the short list; `monoflow help <command>` shows one command's flags, and `monoflow help --all` shows everything.

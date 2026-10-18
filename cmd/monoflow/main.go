@@ -298,13 +298,18 @@ In a worktree from 'start', verify already runs in the background once your edit
 	"improve": `  improve                             Retro: what this session ran with MonoFlow (failures, redirects, slow calls)
   improve add "<what MonoFlow should do>" [--area=<verify|ship|...|docs>] [--kind=bug|friction|missing|docs]
         [--severity=high|medium|low] [--evidence="<command + output>"] [--detail="..."] [--same-as=<id>]
-  improve done | improve none         Close the retro (none: nothing worth improving)
+  improve done | improve none         Close the retro (none: nothing worth improving), then triage what it filed:
+                                      valid ones become an issue in MonoFlow's repo (or a comment on the
+                                      issue for the same problem); others are marked invalid, with why
+  improve publish [<id>...] [--dry-run]   Run that triage now (--dry-run: show what would be filed)
   improve list [--all] [--since=<2h|date>]   Suggestions (open ones unless --all)
   improve triage [--since=<2h|date>]  Group duplicates, rank by sessions × severity; also writes TRIAGE.md
   improve mark <id>... <accepted|fixed|wontfix|duplicate|invalid|new> [--note=] [--exact]
                                       Record a verdict for the ids and their duplicates (--exact: only the ids)
   improve path                        Where suggestions are stored (MONOFLOW_IMPROVE_DIR overrides)
-Stored as local JSONL under .agents/improve of the main checkout; never committed.`,
+Stored as local JSONL under .agents/improve of the main checkout; never committed. Issues go to
+M0xoo/monoflow through gh, paths/remotes/e-mails/secrets redacted; "improve": {"issues": false}
+(or MONOFLOW_IMPROVE_ISSUES=0) keeps everything local, "issues_repo" files elsewhere.`,
 	"commit": `  commit -m "<msg>"                   Verified commit of all changes in the current worktree`,
 	"cache":  `  cache status | cache clean | cache serve [--port=<n>] [--dir=<d>] [--token=<t>]`,
 	"task":   `  task check | task slice | task prove [task-id] | task changeset`,

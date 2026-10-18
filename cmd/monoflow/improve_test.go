@@ -27,7 +27,7 @@ func TestImproveRetroAfterSession(t *testing.T) {
 	run := func(stdin string, args ...string) (string, int) {
 		cmd := exec.Command(bin, args...)
 		cmd.Dir = repo
-		cmd.Env = append(os.Environ(), "MONOFLOW_INTERNAL=", "MONOFLOW_FORMAT=", "MONOFLOW_IMPROVE_DIR=")
+		cmd.Env = append(os.Environ(), "MONOFLOW_INTERNAL=", "MONOFLOW_FORMAT=", "MONOFLOW_IMPROVE_DIR=", "MONOFLOW_IMPROVE_ISSUES=0")
 		cmd.Stdin = strings.NewReader(stdin)
 		out, err := cmd.CombinedOutput()
 		code := 0
@@ -128,5 +128,56 @@ func TestStrayWorkInMainCheckout(t *testing.T) {
 	}
 	if out, _ := run("branch"); strings.Contains(out, "feat/pr-") {
 		t.Fatalf("ship must not create a branch: %s", out)
+	}
+}
+
+// improve done triages what the session filed: a valid suggestion becomes an issue (through
+// gh, redacted), an invalid one is explained and not filed.
+func TestImproveDoneFilesValidSuggestionsAsIssues(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "monoflow")
+	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
+		t.Fatalf("build: %v %s", err, out)
+	}
+	repo, fake := t.TempDir(), t.TempDir()
+	for _, args := range [][]string{{"init", "-q", "-b", "agent/x"}, {"config", "user.email", "t@t"}, {"config", "user.name", "t"}, {"commit", "-q", "--allow-empty", "-m", "x"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	calls := filepath.Join(fake, "calls")
+	gh := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> " + calls + "\ncase \"$2\" in list) echo '[]';; create) echo https://github.com/o/r/issues/42;; esac\n"
+	if err := os.WriteFile(filepath.Join(fake, "gh"), []byte(gh), 0755); err != nil {
+		t.Fatal(err)
+	}
+	run := func(args ...string) string {
+		cmd := exec.Command(bin, args...)
+		cmd.Dir = repo
+		cmd.Env = append(os.Environ(), "MONOFLOW_INTERNAL=", "MONOFLOW_FORMAT=", "MONOFLOW_IMPROVE_DIR=", "MONOFLOW_IMPROVE_ISSUES=",
+			"MONOFLOW_IMPROVE_ISSUES_REPO=o/r", "PATH="+fake+":"+os.Getenv("PATH"))
+		out, _ := cmd.CombinedOutput()
+		return string(out)
+	}
+	run("find", "x")
+	run("improve", "add", "find should group test.js under tests", "--area=find", "--kind=bug", "--evidence=monoflow find x -> code: "+repo+"/test.js:1")
+	run("improve", "add", "it was slow")
+	out := run("improve", "done")
+	if !strings.Contains(out, "issue #42 opened") || !strings.Contains(out, "not filed: title too vague") {
+		t.Fatalf("improve done must report the triage:\n%s", out)
+	}
+	data, _ := os.ReadFile(calls)
+	log := string(data)
+	if !strings.Contains(log, "issue create") || !strings.Contains(log, "-R o/r") || !strings.Contains(log, "improve(find): find should group") {
+		t.Fatalf("gh calls: %s", log)
+	}
+	if strings.Contains(log, repo) {
+		t.Fatalf("the issue must not contain the repo path:\n%s", log)
+	}
+	if out := run("improve", "publish"); !strings.Contains(out, "nothing to triage") {
+		t.Fatalf("handled suggestions are not filed again: %s", out)
+	}
+	if out := run("improve", "list", "--all"); !strings.Contains(out, "https://github.com/o/r/issues/42") || !strings.Contains(out, "[invalid]") {
+		t.Fatalf("list shows the issue and the rejection: %s", out)
 	}
 }
