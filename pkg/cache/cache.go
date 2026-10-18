@@ -379,7 +379,37 @@ func (m *Manager) ComputePackageKey(pkg *graph.PackageNode, upstreamKeys map[str
 		}
 	}
 
+	// 5. A Python project's environment is also defined above its directory: the workspace's
+	// lockfile (a dependency bump lives only there) and the root pyproject (shared dev tools,
+	// [tool.pytest]/[tool.ruff] config). Without them a uv.lock bump reused every cached pass.
+	if pkg.Language == graph.LangPython {
+		for _, relPath := range pythonEnvFiles(m.RootDir, pkg.Path) {
+			if fileHash, err := hashFile(filepath.Join(m.RootDir, relPath)); err == nil {
+				fmt.Fprintf(hasher, "env:%s=%s\n", relPath, fileHash)
+			}
+		}
+	}
+
 	return hex.EncodeToString(hasher.Sum(nil)), nil
+}
+
+var pythonEnvNames = []string{"uv.lock", "poetry.lock", "pdm.lock", "pyproject.toml", "ruff.toml", ".ruff.toml", "mypy.ini", ".python-version"}
+
+// pythonEnvFiles lists the environment files in the directories above a Python package
+// (repo-relative), up to the repository root.
+func pythonEnvFiles(root, pkgPath string) []string {
+	var out []string
+	d := filepath.ToSlash(filepath.Clean(pkgPath))
+	for d != "." && d != "/" && d != "" {
+		d = filepath.ToSlash(filepath.Dir(d))
+		for _, n := range pythonEnvNames {
+			rel := filepath.ToSlash(filepath.Join(d, n))
+			if fi, err := os.Stat(filepath.Join(root, rel)); err == nil && !fi.IsDir() {
+				out = append(out, rel)
+			}
+		}
+	}
+	return out
 }
 
 // collectSourceFiles returns sorted relative paths of all relevant source files: what git would

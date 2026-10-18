@@ -153,7 +153,10 @@ func (m *Manager) CreateWithOpts(agentID string, opts CreateOptions) (*WorktreeI
 
 	// 2. Symlink or Clone dependencies (go.work is tracked and handled by subset.SyncGoWork)
 	// node_modules is not linked wholesale: its workspace-package links would resolve to the
-	// root checkout's (unedited) packages. See overlayNodeModules.
+	// root checkout's (unedited) packages. See overlayNodeModules. A Python .venv is not linked
+	// either, for the same reason: its editable installs point at one checkout's sources, and
+	// `uv run` in a worktree re-pointed the shared venv at that worktree, so the root and every
+	// other agent tested its code. uv creates a worktree's own venv from its cache in a second.
 	sharedTargets := []string{
 		".pnpm-store",
 		"target",
@@ -161,7 +164,9 @@ func (m *Manager) CreateWithOpts(agentID string, opts CreateOptions) (*WorktreeI
 		".agents/prs",
 		".agents/proofs",
 		".agents/events",
-		".venv",
+	}
+	if opts.IsolatedDeps {
+		sharedTargets = append(sharedTargets, ".venv") // cloned below: a private copy
 	}
 	for _, d := range sharedStateDirs {
 		_ = os.MkdirAll(filepath.Join(m.RootDir, d), 0755)

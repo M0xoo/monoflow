@@ -68,6 +68,7 @@ func handleVerify(rootDir string, metrics *telemetry.Collector) {
 
 	recording := os.Getenv("MONOFLOW_RECORD_KEY") != ""
 	opts.KeepUntracked = recording
+	unshareVenv(rootDir)
 	// Format the agent's changed files first (each package's fix_cmd), so lint never fails on
 	// what a formatter fixes. Never in a background run: the agent may be editing those files.
 	var fixed verify.FixResult
@@ -647,10 +648,28 @@ func environmentFailure(res verify.SuiteResult) bool {
 				continue
 			}
 			m := strings.ToLower(e.Message)
-			if strings.Contains(m, "command not found") || strings.Contains(m, "not found: ") || strings.Contains(m, "no such file or directory") || strings.Contains(m, "exit status 127") || strings.Contains(m, "cannot find module") {
+			if verify.ToolMissing(m) || strings.Contains(m, "not found: ") || strings.Contains(m, "no such file or directory") || strings.Contains(m, "exit status 127") || strings.Contains(m, "cannot find module") {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+// unshareVenv removes the .venv symlink older worktrees got to the root checkout's venv: its
+// editable installs point at one checkout's sources, so `uv run` here re-pointed the root's
+// venv at this worktree (and the root, and every other agent, tested this worktree's code).
+// `uv run` creates this worktree's own venv from the uv cache.
+func unshareVenv(dir string) {
+	link := filepath.Join(dir, ".venv")
+	fi, err := os.Lstat(link)
+	if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		return
+	}
+	if gf, err := os.Stat(filepath.Join(dir, ".git")); err != nil || gf.IsDir() {
+		return // not a linked worktree: a repo's own .venv symlink is its business
+	}
+	if target, err := os.Readlink(link); err == nil && strings.HasSuffix(filepath.ToSlash(target), "/.venv") {
+		_ = os.Remove(link)
+	}
 }

@@ -772,7 +772,9 @@ func (om *OuterLoopManager) checkoutCommit(job *OuterJob) (string, func(), error
 			}
 		}
 	}
-	for _, d := range []string{".venv", "target", ".pnpm-store"} {
+	// Not .venv: its editable installs would be re-pointed at this checkout, under the root's
+	// feet; `uv run` builds the checkout its own from the uv cache.
+	for _, d := range []string{"target", ".pnpm-store"} {
 		if _, err := os.Stat(filepath.Join(om.RootDir, d)); err == nil {
 			_ = os.Symlink(filepath.Join(om.RootDir, d), filepath.Join(dir, d))
 		}

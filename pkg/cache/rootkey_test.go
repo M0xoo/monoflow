@@ -137,3 +137,29 @@ func TestSourceKeyIgnoresTestFiles(t *testing.T) {
 		t.Fatal("a source edit must change the source key")
 	}
 }
+
+// A Python member's environment is pinned by the workspace lockfile above it: a dependency
+// bump there must not reuse its cached pass.
+func TestPythonKeyCoversWorkspaceLockfile(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, s string) {
+		p := filepath.Join(root, rel)
+		_ = os.MkdirAll(filepath.Dir(p), 0755)
+		_ = os.WriteFile(p, []byte(s), 0644)
+	}
+	write("pyproject.toml", "[tool.uv.workspace]\nmembers = [\"packages/*\"]\n")
+	write("uv.lock", "version = 1\n")
+	write("packages/a/pyproject.toml", "[project]\nname = \"a\"\n")
+	write("packages/a/src/a/__init__.py", "X = 1\n")
+	m := NewManager(root, Config{Enabled: true, Dir: t.TempDir()})
+	pkg := &graph.PackageNode{Name: "a", Path: "packages/a", Language: graph.LangPython}
+	key := func() string {
+		k, _ := m.ComputePackageKey(pkg, nil, "uv run pytest -q", "test")
+		return k
+	}
+	before := key()
+	write("uv.lock", "version = 1\n# requests 2.32 -> 2.33\n")
+	if key() == before {
+		t.Fatal("key must change when the workspace uv.lock changes")
+	}
+}

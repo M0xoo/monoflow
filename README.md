@@ -300,7 +300,7 @@ Where it is not ahead yet: on trpc (Turborepo, 11 packages) the plain agents fin
 | **Go** | `go.mod` (multi-module, `go.work`) | `go build`, `go vet`, `go test` (package-scoped), gofmt |
 | **TypeScript / JS** | pnpm/npm/yarn workspaces, Nx, Turborepo | the package's own `test`/`typecheck`/`lint` scripts; vitest and jest failures parsed |
 | **Rust** | Cargo workspaces | `cargo check -p`, `cargo test -p` |
-| **Python** | `pyproject.toml`, `setup.py` | `ruff check`, `pytest` |
+| **Python** | `pyproject.toml`, `setup.py` (uv workspaces, Poetry, PDM, PEP 621 / 735) | `pytest`, `ruff check`, `mypy` when configured, run through the project's manager (`uv run --all-packages`, `poetry run`); each worktree gets its own venv; pytest and ruff failures parsed |
 | **Protobuf** | a `contracts/` directory | a package in the graph, for impact across languages (no checks of its own) |
 
 ---
